@@ -649,6 +649,7 @@ class Go2NeatEnv:
         self._init_quat = _to_device_float(row_init_qpos[:, 3:7])
         self._inv_init_quat = inv_quat(self._init_quat)
         self._write_reset(row_init_qpos)
+        self.scene.clear_errno()  # drop any flag the previous generation left behind
         dof_pos = np.ascontiguousarray(row_init_qpos[:, 7:][:, self._qpos_dof_slot])
         return run_obs(
             self.obs_executable,
@@ -732,6 +733,11 @@ class Go2NeatEnv:
                 reset_idx = np.flatnonzero(done)
                 self._write_reset(row_init_qpos[reset_idx], reset_idx)
                 last_actions[reset_idx] = 0.0
+            if state["error_mask"].any():
+                # The graph already latched the error into ``alive``/``returns``, and a row that is dead
+                # is never reset again, so the flag has to be dropped here or the next ``scene.step()``
+                # raises (see 'Scene.get_error_envs_mask').
+                self.scene.clear_errno()
             if self.stop_when_done and not alive.any():
                 break
         wall_time_s = time.perf_counter() - start
