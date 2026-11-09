@@ -96,7 +96,7 @@ Options classes do NOT import their sensor class at runtime — the `SensorT` pa
 
 # Known Issues
 - `types` tags are keyed by attribute NAME, not class identity: `types.Lidar` (alias of `Raycaster`) yields a separate, unused integer tag; always use `types.Raycaster` (the SensorManager looks up `options_cls.__name__`).
-- Docstrings reference `gs.sensors.types.<Name>`, but the live namespace is `genesis.options.sensors.types` (exposed as `gs.options.sensors.types`); there is no top-level `gs.sensors` object.
+- Docstrings reference `gs.sensors.types.<Name>`, which is correct: `genesis/__init__.py` re-exports this package as `gs.sensors` (`from .options import sensors`), so `gs.sensors.types` and `gs.options.sensors.types` are the same object.
 - `tactile.py`'s `TYPE_CHECKING` block imports all five tactile sensor classes from `.kinematic_tactile`, but `ElastomerTaxelSensor` and `ProximityTaxelSensor` are actually defined in `point_cloud_tactile.py` (harmless — never executed, only affects IDE/type-check resolution).
 
 # Constraints
