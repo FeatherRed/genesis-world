@@ -179,6 +179,7 @@ def _run_throughput(args, record: dict) -> None:
         "checks": measurement["checks"],
         "host_calls_per_step": _sum_traffic(measurement["traffic"], "calls_per_step"),
         "host_bytes_per_step": _sum_traffic(measurement["traffic"], "bytes_per_step"),
+        "sync_calls_per_step": _sync_calls_per_step(measurement["traffic"]),
     }
 
 
@@ -186,6 +187,11 @@ def _sum_traffic(traffic: dict, field: str):
     """Sum one per-step traffic field over the counters (``None`` when nothing crossed)."""
     values = [value[field] for value in traffic.values() if value.get(field) is not None]
     return _r(sum(values)) if values else None
+
+
+def _sync_calls_per_step(traffic: dict):
+    """Device synchronizations per step (0.0 when the residency never synchronizes, e.g. NumPy)."""
+    return _r(traffic.get("sync", {}).get("calls_per_step") or 0.0)
 
 
 # --- residency parity --------------------------------------------------------------
@@ -367,6 +373,7 @@ def _run_residency(args, record: dict) -> None:
                 "traffic": side["traffic"],
                 "host_calls_per_step": _sum_traffic(side["traffic"], "calls_per_step"),
                 "host_bytes_per_step": _sum_traffic(side["traffic"], "bytes_per_step"),
+                "sync_calls_per_step": _sync_calls_per_step(side["traffic"]),
                 "device_resident_intermediates": side["device_resident_intermediates"],
                 "state_read_parity": side["state_read_parity"],
                 "checks": side["checks"],
@@ -395,6 +402,10 @@ def _residency_comparison(numpy_side, device_side) -> dict:
         "host_bytes_per_step": {
             "numpy": _sum_traffic(numpy_side["traffic"], "bytes_per_step"),
             "device": _sum_traffic(device_side["traffic"], "bytes_per_step"),
+        },
+        "sync_calls_per_step": {
+            "numpy": _sync_calls_per_step(numpy_side["traffic"]),
+            "device": _sync_calls_per_step(device_side["traffic"]),
         },
         "note": (
             "one process, one genesis backend, the same master seed and perturbation; the only "
@@ -498,7 +509,8 @@ def _print_summary(record: dict, out_path: Path) -> None:
     print(
         f"[bench] device vs numpy: {comparison['steps_per_s_median']['device']} vs "
         f"{comparison['steps_per_s_median']['numpy']} steps/s (speedup {comparison['speedup']}), "
-        f"host calls/step {comparison['host_calls_per_step']}, bytes/step {comparison['host_bytes_per_step']}"
+        f"host calls/step {comparison['host_calls_per_step']}, bytes/step {comparison['host_bytes_per_step']}, "
+        f"syncs/step {comparison['sync_calls_per_step']}"
     )
 
 

@@ -16,7 +16,7 @@
   ],
   "contended": false,
   "contention_reasons": [],
-  "created_utc": "2026-11-09T21:15:41Z",
+  "created_utc": "2026-11-09T21:27:50Z",
   "error": null,
   "genesis_init": {
     "already_initialized": false,
@@ -31,22 +31,18 @@
     "branch": "evogit-agent-T1-A54",
     "dirty": true,
     "dirty_files": [
-      "M examples/neuroevolution/benchmarks/bench_envs.py",
-      " M examples/neuroevolution/benchmarks/common.py",
-      " M examples/neuroevolution/benchmarks/results/CONTEXT.md",
-      "?? examples/neuroevolution/benchmarks/bench_runtime.py",
-      "?? examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop32.json",
-      "?? examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop32_r1.json",
-      "?? examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop8.json",
-      "?? examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop8_r1.json",
-      "?? examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop32.json",
-      "?? examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop32_r1.json",
-      "?? examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop8.json",
-      "?? examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop8_r1.json",
-      "?? examples/neuroevolution/benchmarks/results/residency_go2_gpu.json",
-      "?? examples/neuroevolution/benchmarks/results/residency_hover_device_cpu.json"
+      "M examples/neuroevolution/benchmarks/bench_runtime.py",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop32.json",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop32_r1.json",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop8.json",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop8_r1.json",
+      " M examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop32.json",
+      " M examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop32_r1.json",
+      " M examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop8.json",
+      " M examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop8_r1.json",
+      " M examples/neuroevolution/benchmarks/results/residency_go2_gpu.json"
     ],
-    "head": "369f6becc385ce1cc1c7f6afd8c3ab625263aba8"
+    "head": "cdda51acf1ba470fa8eded55b832b0ddadbd6ecf"
   },
   "gpu": {
     "available": true,
@@ -59,10 +55,10 @@
     "cpu_count": 20,
     "gpu_busy": false,
     "gpu_pid_filter_note": "genesis initialises the GPU (and torch.cuda is queried by this record) before the provenance block runs, so this process' own PIDs are excluded from rocm_pids and from the contention test; they stay listed in rocm_pids_all / owned_gpu_pids",
-    "loadavg_1m": 2.51,
-    "loadavg_text": "2.51 1.65 1.72 1/687 3236910",
+    "loadavg_1m": 1.06,
+    "loadavg_text": "1.06 1.11 1.39 1/668 3248272",
     "owned_gpu_pids": [
-      3236756
+      3248112
     ],
     "platform": "linux",
     "python": "3.12.3",
@@ -76,7 +72,7 @@
     ],
     "rocm_pids": [],
     "rocm_pids_all": [
-      "3236756"
+      "3248112"
     ],
     "rocm_product": [
       "============================ ROCm System Management Interface ============================",
@@ -99,8 +95,8 @@
   "measurements": {
     "comparison": {
       "env_steps_per_s_median": {
-        "device": 3849.49349507,
-        "numpy": 2946.7279293
+        "device": 3825.77170435,
+        "numpy": 2878.17660769
       },
       "host_bytes_per_step": {
         "device": 395.68,
@@ -111,10 +107,14 @@
         "numpy": 4.085
       },
       "note": "one process, one genesis backend, the same master seed and perturbation; the only difference between the two rows is where the graph operands live",
-      "speedup": 1.30636203527,
+      "speedup": 1.32923452095,
       "steps_per_s_median": {
-        "device": 160.395562295,
-        "numpy": 122.780330387
+        "device": 159.407154348,
+        "numpy": 119.924025321
+      },
+      "sync_calls_per_step": {
+        "device": 2.005,
+        "numpy": 0.0
       }
     },
     "generation": 0,
@@ -193,7 +193,7 @@
     "sides": {
       "device": {
         "backend": "iree",
-        "build_s": 6.444635886,
+        "build_s": 6.50969869015,
         "cache": {
           "compile_once": true,
           "executables_call": "env.executables() once per generation (compile-once proof)",
@@ -267,7 +267,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 3600.47935005,
+            "env_steps_per_s": 3566.20698163,
             "fingerprint": "0606a0147b443d0bbe1f2b5f9a0a3177af0363498125933da64532b562d79326",
             "fitness": [
               -50.6597442627,
@@ -280,23 +280,23 @@
               -9.87366867065
             ],
             "generation": 0,
-            "residual_fraction": 0.1094069705,
-            "residual_s": 0.146022764966,
+            "residual_fraction": 0.110019483416,
+            "residual_s": 0.14824897144,
             "seeds": [
               1454269175,
               757617120,
               1421746521
             ],
             "steps": 200,
-            "steps_per_s": 150.019972919,
-            "steps_per_s_harness": 149.849197179,
+            "steps_per_s": 148.591957568,
+            "steps_per_s_harness": 148.425290709,
             "timings": {
               "groups": {
                 "download": {
                   "calls": 201,
-                  "per_call_s": 8.11677300997e-05,
-                  "per_step_s": 8.15735687502e-05,
-                  "seconds": 0.01631471375
+                  "per_call_s": 7.83857769004e-05,
+                  "per_step_s": 7.87777057849e-05,
+                  "seconds": 0.015755541157
                 },
                 "export": {
                   "calls": 0,
@@ -306,15 +306,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 1.33467515185,
-                  "per_step_s": 0.00667337575927,
-                  "seconds": 1.33467515185
+                  "per_call_s": 1.34747925401,
+                  "per_step_s": 0.00673739627004,
+                  "seconds": 1.34747925401
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.000432169655105,
-                  "per_step_s": 0.000432169655105,
-                  "seconds": 0.086433931021
+                  "per_call_s": 0.000431062184507,
+                  "per_step_s": 0.000431062184507,
+                  "seconds": 0.0862124369014
                 },
                 "graph_all": {
                   "calls": 0,
@@ -330,21 +330,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000570562202483,
-                  "per_step_s": 2.85281101242e-06,
-                  "seconds": 0.000570562202483
+                  "per_call_s": 0.000557123916224,
+                  "per_step_s": 2.78561958112e-06,
+                  "seconds": 0.000557123916224
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.000686926068738,
-                  "per_step_s": 3.43463034369e-06,
-                  "seconds": 0.000686926068738
+                  "per_call_s": 0.000768414931372,
+                  "per_step_s": 3.84207465686e-06,
+                  "seconds": 0.000768414931372
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00170557607315,
-                  "per_step_s": 0.00170557607315,
-                  "seconds": 0.341115214629
+                  "per_call_s": 0.00175175833283,
+                  "per_step_s": 0.00175175833283,
+                  "seconds": 0.350351666566
                 },
                 "host_query": {
                   "calls": 0,
@@ -354,39 +354,39 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 5.84681984037e-05,
-                  "per_step_s": 2.92340992019e-07,
-                  "seconds": 5.84681984037e-05
+                  "per_call_s": 6.20069913566e-05,
+                  "per_step_s": 3.10034956783e-07,
+                  "seconds": 6.20069913566e-05
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.00333219262306,
-                  "per_step_s": 0.00333219262306,
-                  "seconds": 0.666438524611
+                  "per_call_s": 0.00333408494713,
+                  "per_step_s": 0.00333408494713,
+                  "seconds": 0.666816989426
                 },
                 "rollout_total": {
                   "calls": 1,
-                  "per_call_s": 1.33395477897,
-                  "per_step_s": 0.00666977389483,
-                  "seconds": 1.33395477897
+                  "per_call_s": 1.34674717602,
+                  "per_step_s": 0.00673373588012,
+                  "seconds": 1.34674717602
                 },
                 "stage_upload": {
                   "calls": 4,
-                  "per_call_s": 0.000132330984343,
-                  "per_step_s": 2.64661968686e-06,
-                  "seconds": 0.000529323937371
+                  "per_call_s": 0.000227832002565,
+                  "per_step_s": 4.55664005131e-06,
+                  "seconds": 0.000911328010261
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.0003121843806,
-                  "per_step_s": 0.0003121843806,
-                  "seconds": 0.06243687612
+                  "per_call_s": 0.000317744096974,
+                  "per_step_s": 0.000317744096974,
+                  "seconds": 0.0635488193948
                 },
                 "sync": {
                   "calls": 401,
-                  "per_call_s": 3.50819110982e-05,
-                  "per_step_s": 7.03392317519e-05,
-                  "seconds": 0.0140678463504
+                  "per_call_s": 3.55260730013e-05,
+                  "per_step_s": 7.12297763675e-05,
+                  "seconds": 0.0142459552735
                 },
                 "write_reset": {
                   "calls": 0,
@@ -401,7 +401,7 @@
                   "seconds": 0.0
                 }
               },
-              "measured_s": 1.18865238689
+              "measured_s": 1.19923028257
             },
             "traffic": {
               "classify_endings": {
@@ -435,7 +435,7 @@
                 "nbytes": 0
               }
             },
-            "wall_time_s": 1.33315581991,
+            "wall_time_s": 1.34596786578,
             "warmup": true
           },
           {
@@ -448,7 +448,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 3849.49349507,
+            "env_steps_per_s": 3842.13263226,
             "fingerprint": "112e21039b5e3ea6db0729a46abed4b7ab142b67b7011b12d92e2586543e7841",
             "fitness": [
               -50.6597442627,
@@ -461,23 +461,23 @@
               -9.87366867065
             ],
             "generation": 1,
-            "residual_fraction": 0.0530010643761,
-            "residual_s": 0.0661330292933,
+            "residual_fraction": 0.0529377205105,
+            "residual_s": 0.0661865512375,
             "seeds": [
               1313752747,
               908599966,
               53557616
             ],
             "steps": 200,
-            "steps_per_s": 160.395562295,
-            "steps_per_s_harness": 160.286213841,
+            "steps_per_s": 160.088859677,
+            "steps_per_s_harness": 159.965187854,
             "timings": {
               "groups": {
                 "download": {
                   "calls": 201,
-                  "per_call_s": 7.48067610058e-05,
-                  "per_step_s": 7.51807948109e-05,
-                  "seconds": 0.0150361589622
+                  "per_call_s": 7.45132495997e-05,
+                  "per_step_s": 7.48858158477e-05,
+                  "seconds": 0.0149771631695
                 },
                 "export": {
                   "calls": 0,
@@ -487,15 +487,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 1.24776794715,
-                  "per_step_s": 0.00623883973574,
-                  "seconds": 1.24776794715
+                  "per_call_s": 1.25027202908,
+                  "per_step_s": 0.0062513601454,
+                  "seconds": 1.25027202908
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.000424415118759,
-                  "per_step_s": 0.000424415118759,
-                  "seconds": 0.0848830237519
+                  "per_call_s": 0.000422952942317,
+                  "per_step_s": 0.000422952942317,
+                  "seconds": 0.0845905884635
                 },
                 "graph_all": {
                   "calls": 0,
@@ -511,21 +511,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000219308072701,
-                  "per_step_s": 1.09654036351e-06,
-                  "seconds": 0.000219308072701
+                  "per_call_s": 0.000339011894539,
+                  "per_step_s": 1.69505947269e-06,
+                  "seconds": 0.000339011894539
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.000395399983972,
-                  "per_step_s": 1.97699991986e-06,
-                  "seconds": 0.000395399983972
+                  "per_call_s": 0.000546735012904,
+                  "per_step_s": 2.73367506452e-06,
+                  "seconds": 0.000546735012904
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00170041243546,
-                  "per_step_s": 0.00170041243546,
-                  "seconds": 0.340082487091
+                  "per_call_s": 0.00171487384243,
+                  "per_step_s": 0.00171487384243,
+                  "seconds": 0.342974768486
                 },
                 "host_query": {
                   "calls": 0,
@@ -535,39 +535,39 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 5.03170304e-05,
-                  "per_step_s": 2.51585152e-07,
-                  "seconds": 5.03170304e-05
+                  "per_call_s": 4.91680111736e-05,
+                  "per_step_s": 2.45840055868e-07,
+                  "seconds": 4.91680111736e-05
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.00332466019434,
-                  "per_step_s": 0.00332466019434,
-                  "seconds": 0.664932038868
+                  "per_call_s": 0.00332152245683,
+                  "per_step_s": 0.00332152245683,
+                  "seconds": 0.664304491365
                 },
                 "rollout_total": {
                   "calls": 1,
-                  "per_call_s": 1.2472415329,
-                  "per_step_s": 0.00623620766448,
-                  "seconds": 1.2472415329
+                  "per_call_s": 1.24975366518,
+                  "per_step_s": 0.0062487683259,
+                  "seconds": 1.24975366518
                 },
                 "stage_upload": {
                   "calls": 4,
-                  "per_call_s": 0.000105306215119,
-                  "per_step_s": 2.10612430237e-06,
-                  "seconds": 0.000421224860474
+                  "per_call_s": 0.000105473038275,
+                  "per_step_s": 2.1094607655e-06,
+                  "seconds": 0.000421892153099
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.000308682980249,
-                  "per_step_s": 0.000308682980249,
-                  "seconds": 0.0617365960497
+                  "per_call_s": 0.000309698503697,
+                  "per_step_s": 0.000309698503697,
+                  "seconds": 0.0619397007395
                 },
                 "sync": {
                   "calls": 401,
-                  "per_call_s": 3.46093845003e-05,
-                  "per_step_s": 6.93918159232e-05,
-                  "seconds": 0.0138783631846
+                  "per_call_s": 3.47679764255e-05,
+                  "per_step_s": 6.97097927332e-05,
+                  "seconds": 0.0139419585466
                 },
                 "write_reset": {
                   "calls": 0,
@@ -582,7 +582,7 @@
                   "seconds": 0.0
                 }
               },
-              "measured_s": 1.18163491786
+              "measured_s": 1.18408547784
             },
             "traffic": {
               "classify_endings": {
@@ -616,7 +616,7 @@
                 "nbytes": 0
               }
             },
-            "wall_time_s": 1.24691729085,
+            "wall_time_s": 1.24930616911,
             "warmup": false
           },
           {
@@ -629,7 +629,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 3826.47733603,
+            "env_steps_per_s": 3825.77170435,
             "fingerprint": "cb9e68277cae2ea09bb9aed046841863ce807578bf71e5c5bbb6423c5d89d96c",
             "fitness": [
               -50.6597442627,
@@ -642,23 +642,23 @@
               -9.87366867065
             ],
             "generation": 2,
-            "residual_fraction": 0.0533538931248,
-            "residual_s": 0.0669716682751,
+            "residual_fraction": 0.0527109365464,
+            "residual_s": 0.0661821048707,
             "seeds": [
               1683657442,
               1375977993,
               1654802006
             ],
             "steps": 200,
-            "steps_per_s": 159.436555668,
-            "steps_per_s_harness": 159.332728298,
+            "steps_per_s": 159.407154348,
+            "steps_per_s_harness": 159.29060174,
             "timings": {
               "groups": {
                 "download": {
                   "calls": 201,
-                  "per_call_s": 7.38314067973e-05,
-                  "per_step_s": 7.42005638313e-05,
-                  "seconds": 0.0148401127663
+                  "per_call_s": 7.44890630134e-05,
+                  "per_step_s": 7.48615083285e-05,
+                  "seconds": 0.0149723016657
                 },
                 "export": {
                   "calls": 0,
@@ -668,15 +668,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 1.25523489201,
-                  "per_step_s": 0.00627617446007,
-                  "seconds": 1.25523489201
+                  "per_call_s": 1.25556685589,
+                  "per_step_s": 0.00627783427946,
+                  "seconds": 1.25556685589
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.000426110143308,
-                  "per_step_s": 0.000426110143308,
-                  "seconds": 0.0852220286615
+                  "per_call_s": 0.00042197098257,
+                  "per_step_s": 0.00042197098257,
+                  "seconds": 0.084394196514
                 },
                 "graph_all": {
                   "calls": 0,
@@ -692,21 +692,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000227805925533,
-                  "per_step_s": 1.13902962767e-06,
-                  "seconds": 0.000227805925533
+                  "per_call_s": 0.000323151005432,
+                  "per_step_s": 1.61575502716e-06,
+                  "seconds": 0.000323151005432
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.000360545935109,
-                  "per_step_s": 1.80272967555e-06,
-                  "seconds": 0.000360545935109
+                  "per_call_s": 0.000510995974764,
+                  "per_step_s": 2.55497987382e-06,
+                  "seconds": 0.000510995974764
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00170189732802,
-                  "per_step_s": 0.00170189732802,
-                  "seconds": 0.340379465604
+                  "per_call_s": 0.00171039457782,
+                  "per_step_s": 0.00171039457782,
+                  "seconds": 0.342078915564
                 },
                 "host_query": {
                   "calls": 0,
@@ -716,39 +716,39 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 4.48301434517e-05,
-                  "per_step_s": 2.24150717258e-07,
-                  "seconds": 4.48301434517e-05
+                  "per_call_s": 4.47339843959e-05,
+                  "per_step_s": 2.23669921979e-07,
+                  "seconds": 4.47339843959e-05
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.00335089857108,
-                  "per_step_s": 0.00335089857108,
-                  "seconds": 0.670179714216
+                  "per_call_s": 0.00335254973499,
+                  "per_step_s": 0.00335254973499,
+                  "seconds": 0.670509946998
                 },
                 "rollout_total": {
                   "calls": 1,
-                  "per_call_s": 1.25476307003,
-                  "per_step_s": 0.00627381535014,
-                  "seconds": 1.25476307003
+                  "per_call_s": 1.25507886405,
+                  "per_step_s": 0.00627539432026,
+                  "seconds": 1.25507886405
                 },
                 "stage_upload": {
                   "calls": 4,
-                  "per_call_s": 9.26530337892e-05,
-                  "per_step_s": 1.85306067578e-06,
-                  "seconds": 0.000370612135157
+                  "per_call_s": 9.988975944e-05,
+                  "per_step_s": 1.9977951888e-06,
+                  "seconds": 0.00039955903776
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.000312596377917,
-                  "per_step_s": 0.000312596377917,
-                  "seconds": 0.0625192755833
+                  "per_call_s": 0.0003112980898,
+                  "per_step_s": 0.0003112980898,
+                  "seconds": 0.0622596179601
                 },
                 "sync": {
                   "calls": 401,
-                  "per_call_s": 3.5209059274e-05,
-                  "per_step_s": 7.05941638444e-05,
-                  "seconds": 0.0141188327689
+                  "per_call_s": 3.46417264767e-05,
+                  "per_step_s": 6.94566615857e-05,
+                  "seconds": 0.0138913323171
                 },
                 "write_reset": {
                   "calls": 0,
@@ -763,7 +763,7 @@
                   "seconds": 0.0
                 }
               },
-              "measured_s": 1.18826322374
+              "measured_s": 1.18938475102
             },
             "traffic": {
               "classify_endings": {
@@ -797,7 +797,7 @@
                 "nbytes": 0
               }
             },
-            "wall_time_s": 1.25441746507,
+            "wall_time_s": 1.25464883191,
             "warmup": false
           },
           {
@@ -810,7 +810,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 3858.42499193,
+            "env_steps_per_s": 3800.08980564,
             "fingerprint": "4dae66168c2f55ae6083413bdcaf39f4678b10c45c16615598c09cde3790531c",
             "fitness": [
               -50.6597442627,
@@ -823,23 +823,23 @@
               -9.87366867065
             ],
             "generation": 3,
-            "residual_fraction": 0.0525104584475,
-            "residual_s": 0.0653652932961,
+            "residual_fraction": 0.0532615724283,
+            "residual_s": 0.0673242837656,
             "seeds": [
               933518110,
               2011253140,
               1456274879
             ],
             "steps": 200,
-            "steps_per_s": 160.767707997,
-            "steps_per_s_harness": 160.667705443,
+            "steps_per_s": 158.337075235,
+            "steps_per_s_harness": 158.223955605,
             "timings": {
               "groups": {
                 "download": {
                   "calls": 201,
-                  "per_call_s": 7.39526154186e-05,
-                  "per_step_s": 7.43223784957e-05,
-                  "seconds": 0.0148644756991
+                  "per_call_s": 7.48499377691e-05,
+                  "per_step_s": 7.52241874579e-05,
+                  "seconds": 0.0150448374916
                 },
                 "export": {
                   "calls": 0,
@@ -849,15 +849,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 1.24480522983,
-                  "per_step_s": 0.00622402614914,
-                  "seconds": 1.24480522983
+                  "per_call_s": 1.2640310959,
+                  "per_step_s": 0.00632015547948,
+                  "seconds": 1.2640310959
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.000421971535543,
-                  "per_step_s": 0.000421971535543,
-                  "seconds": 0.0843943071086
+                  "per_call_s": 0.000426942800405,
+                  "per_step_s": 0.000426942800405,
+                  "seconds": 0.0853885600809
                 },
                 "graph_all": {
                   "calls": 0,
@@ -873,21 +873,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000208525918424,
-                  "per_step_s": 1.04262959212e-06,
-                  "seconds": 0.000208525918424
+                  "per_call_s": 0.000343356980011,
+                  "per_step_s": 1.71678490005e-06,
+                  "seconds": 0.000343356980011
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.000374750001356,
-                  "per_step_s": 1.87375000678e-06,
-                  "seconds": 0.000374750001356
+                  "per_call_s": 0.00071101798676,
+                  "per_step_s": 3.5550899338e-06,
+                  "seconds": 0.00071101798676
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00170032543247,
-                  "per_step_s": 0.00170032543247,
-                  "seconds": 0.340065086493
+                  "per_call_s": 0.00174963555881,
+                  "per_step_s": 0.00174963555881,
+                  "seconds": 0.349927111762
                 },
                 "host_query": {
                   "calls": 0,
@@ -897,39 +897,39 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 4.21230215579e-05,
-                  "per_step_s": 2.1061510779e-07,
-                  "seconds": 4.21230215579e-05
+                  "per_call_s": 4.12720255554e-05,
+                  "per_step_s": 2.06360127777e-07,
+                  "seconds": 4.12720255554e-05
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.00331721115275,
-                  "per_step_s": 0.00331721115275,
-                  "seconds": 0.663442230551
+                  "per_call_s": 0.00332798538497,
+                  "per_step_s": 0.00332798538497,
+                  "seconds": 0.665597076993
                 },
                 "rollout_total": {
                   "calls": 1,
-                  "per_call_s": 1.24434825499,
-                  "per_step_s": 0.00622174127493,
-                  "seconds": 1.24434825499
+                  "per_call_s": 1.26357912389,
+                  "per_step_s": 0.00631789561943,
+                  "seconds": 1.26357912389
                 },
                 "stage_upload": {
                   "calls": 4,
-                  "per_call_s": 0.000100673700217,
-                  "per_step_s": 2.01347400434e-06,
-                  "seconds": 0.000402694800869
+                  "per_call_s": 0.000139887502883,
+                  "per_step_s": 2.79775005765e-06,
+                  "seconds": 0.000559550011531
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.000308735147119,
-                  "per_step_s": 0.000308735147119,
-                  "seconds": 0.0617470294237
+                  "per_call_s": 0.00032429661369,
+                  "per_step_s": 0.00032429661369,
+                  "seconds": 0.0648593227379
                 },
                 "sync": {
                   "calls": 401,
-                  "per_call_s": 3.46601334519e-05,
-                  "per_step_s": 6.9493567571e-05,
-                  "seconds": 0.0138987135142
+                  "per_call_s": 3.54980201021e-05,
+                  "per_step_s": 7.11735303048e-05,
+                  "seconds": 0.014234706061
                 },
                 "write_reset": {
                   "calls": 0,
@@ -944,7 +944,7 @@
                   "seconds": 0.0
                 }
               },
-              "measured_s": 1.17943993653
+              "measured_s": 1.19670681213
             },
             "traffic": {
               "classify_endings": {
@@ -978,35 +978,35 @@
                 "nbytes": 0
               }
             },
-            "wall_time_s": 1.24403092195,
+            "wall_time_s": 1.26312804315,
             "warmup": false
           }
         ],
         "graph_build_s": {
           "advance": {
-            "build_s": 1.07639966812,
-            "build_s_per_build": 1.07639966812,
+            "build_s": 1.08742644405,
+            "build_s_per_build": 1.08742644405,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
           },
           "fitness": {
-            "build_s": 0.286106143147,
-            "build_s_per_build": 0.286106143147,
+            "build_s": 0.292890302138,
+            "build_s_per_build": 0.292890302138,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
           },
           "obs": {
-            "build_s": 0.551227642922,
-            "build_s_per_build": 0.551227642922,
+            "build_s": 0.570908895927,
+            "build_s_per_build": 0.570908895927,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
           },
           "policy": {
-            "build_s": 2.09541259101,
-            "build_s_per_build": 2.09541259101,
+            "build_s": 2.08506609313,
+            "build_s_per_build": 2.08506609313,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
@@ -1017,63 +1017,63 @@
         "per_step_means": {
           "download": {
             "calls": 603,
-            "per_generation_median_s": 0.0148644756991,
-            "per_step_s": 7.45679123793e-05,
-            "seconds": 0.0447407474276
+            "per_generation_median_s": 0.0149771631695,
+            "per_step_s": 7.4990503878e-05,
+            "seconds": 0.0449943023268
           },
           "graph_advance": {
             "calls": 600,
-            "per_generation_median_s": 0.0848830237519,
-            "per_step_s": 0.000424165599203,
-            "seconds": 0.254499359522
+            "per_generation_median_s": 0.0845905884635,
+            "per_step_s": 0.000423955575097,
+            "seconds": 0.254373345058
           },
           "graph_fitness": {
             "calls": 3,
-            "per_generation_median_s": 0.000219308072701,
-            "per_step_s": 1.09273319443e-06,
-            "seconds": 0.000655639916658
+            "per_generation_median_s": 0.000339011894539,
+            "per_step_s": 1.67586646664e-06,
+            "seconds": 0.00100551987998
           },
           "graph_obs": {
             "calls": 3,
-            "per_generation_median_s": 0.000374750001356,
-            "per_step_s": 1.88449320073e-06,
-            "seconds": 0.00113069592044
+            "per_generation_median_s": 0.000546735012904,
+            "per_step_s": 2.94791495738e-06,
+            "seconds": 0.00176874897443
           },
           "graph_policy": {
             "calls": 600,
-            "per_generation_median_s": 0.340082487091,
-            "per_step_s": 0.00170087839865,
-            "seconds": 1.02052703919
+            "per_generation_median_s": 0.342974768486,
+            "per_step_s": 0.00172496799302,
+            "seconds": 1.03498079581
           },
           "host_rng": {
             "calls": 3,
-            "per_generation_median_s": 4.48301434517e-05,
-            "per_step_s": 2.28783659016e-07,
-            "seconds": 0.00013727019541
+            "per_generation_median_s": 4.47339843959e-05,
+            "per_step_s": 2.25290035208e-07,
+            "seconds": 0.000135174021125
           },
           "physics": {
             "calls": 600,
-            "per_generation_median_s": 0.664932038868,
-            "per_step_s": 0.00333092330606,
-            "seconds": 1.99855398363
+            "per_generation_median_s": 0.665597076993,
+            "per_step_s": 0.00333401919226,
+            "seconds": 2.00041151536
           },
           "stage_upload": {
             "calls": 12,
-            "per_generation_median_s": 0.000402694800869,
-            "per_step_s": 1.9908863275e-06,
-            "seconds": 0.0011945317965
+            "per_generation_median_s": 0.000421892153099,
+            "per_step_s": 2.30166867065e-06,
+            "seconds": 0.00138100120239
           },
           "state_read": {
             "calls": 600,
-            "per_generation_median_s": 0.0617470294237,
-            "per_step_s": 0.000310004835095,
-            "seconds": 0.186002901057
+            "per_generation_median_s": 0.0622596179601,
+            "per_step_s": 0.000315097735729,
+            "seconds": 0.189058641438
           },
           "sync": {
             "calls": 1203,
-            "per_generation_median_s": 0.0138987135142,
-            "per_step_s": 6.98265157795e-05,
-            "seconds": 0.0418959094677
+            "per_generation_median_s": 0.0139419585466,
+            "per_step_s": 7.01133282078e-05,
+            "seconds": 0.0420679969247
           }
         },
         "residency": "device",
@@ -1092,35 +1092,36 @@
           },
           "note": "getter vs live solver buffer, read after the last generation; a nonzero base_quat entry means the two residencies feed the graphs a last-bit different orientation, which is the only arithmetic difference between them"
         },
+        "sync_calls_per_step": 2.005,
         "throughput": {
           "env_steps_per_s": {
-            "max": 3858.42499193,
-            "mean": 3844.7986076766665,
-            "median": 3849.49349507,
-            "min": 3826.47733603,
+            "max": 3842.13263226,
+            "mean": 3822.6647140833334,
+            "median": 3825.77170435,
+            "min": 3800.08980564,
             "n": 3,
-            "spread": 31.947655899999972,
-            "stdev": 13.458446049557137
+            "spread": 42.04282661999969,
+            "stdev": 17.30394673550344
           },
           "note": "median and spread over the timed generations of this process; the warm-up generation is excluded everywhere (it carries the first-step JIT of the compiled kernels and the empty caches)",
           "rows": 24,
           "steps_per_s": {
-            "max": 160.767707997,
-            "mean": 160.19994198666666,
-            "median": 160.395562295,
-            "min": 159.436555668,
+            "max": 160.088859677,
+            "mean": 159.27769641999998,
+            "median": 159.407154348,
+            "min": 158.337075235,
             "n": 3,
-            "spread": 1.3311523289999911,
-            "stdev": 0.5607685853807215
+            "spread": 1.7517844420000017,
+            "stdev": 0.7209977804634615
           },
           "steps_per_s_harness": {
-            "max": 160.667705443,
-            "mean": 160.095549194,
-            "median": 160.286213841,
-            "min": 159.332728298,
+            "max": 159.965187854,
+            "mean": 159.15991506633333,
+            "median": 159.29060174,
+            "min": 158.223955605,
             "n": 3,
-            "spread": 1.334977144999982,
-            "stdev": 0.5614301678925607
+            "spread": 1.7412322490000065,
+            "stdev": 0.716836425434678
           },
           "steps_total": 600,
           "timed_generations": [
@@ -1129,13 +1130,13 @@
             3
           ],
           "wall_time_s": {
-            "max": 1.25441746507,
-            "mean": 1.2484552259566666,
-            "median": 1.24691729085,
-            "min": 1.24403092195,
+            "max": 1.26312804315,
+            "mean": 1.2556943480566667,
+            "median": 1.25464883191,
+            "min": 1.24930616911,
             "n": 3,
-            "spread": 0.01038654311999987,
-            "stdev": 0.004377518535284778
+            "spread": 0.013821874040000015,
+            "stdev": 0.005690979910004496
           },
           "warmup_generation": 0
         },
@@ -1174,7 +1175,7 @@
       },
       "numpy": {
         "backend": "iree",
-        "build_s": 26.5162551899,
+        "build_s": 27.4281224292,
         "cache": {
           "compile_once": true,
           "executables_call": "env.executables() once per generation (compile-once proof)",
@@ -1233,7 +1234,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 575.226862055,
+            "env_steps_per_s": 569.583755615,
             "fingerprint": "03ce88258bcd80df4a53535d09fa3193d941088da42a2bf9b8920d85cef1e773",
             "fitness": [
               -50.6597442627,
@@ -1246,16 +1247,16 @@
               -9.87366867065
             ],
             "generation": 0,
-            "residual_fraction": 0.625987444846,
-            "residual_s": 5.22808655608,
+            "residual_fraction": 0.624492077151,
+            "residual_s": 5.26730331196,
             "seeds": [
               1454269175,
               757617120,
               1421746521
             ],
             "steps": 200,
-            "steps_per_s": 23.967785919,
-            "steps_per_s_harness": 23.9470956776,
+            "steps_per_s": 23.7326564839,
+            "steps_per_s_harness": 23.7120226486,
             "timings": {
               "groups": {
                 "download": {
@@ -1272,15 +1273,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 8.35174347204,
-                  "per_step_s": 0.0417587173602,
-                  "seconds": 8.35174347204
+                  "per_call_s": 8.43453985197,
+                  "per_step_s": 0.0421726992598,
+                  "seconds": 8.43453985197
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.00150099848863,
-                  "per_step_s": 0.00150099848863,
-                  "seconds": 0.300199697725
+                  "per_call_s": 0.00156851944397,
+                  "per_step_s": 0.00156851944397,
+                  "seconds": 0.313703888794
                 },
                 "graph_all": {
                   "calls": 0,
@@ -1296,21 +1297,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000626208027825,
-                  "per_step_s": 3.13104013912e-06,
-                  "seconds": 0.000626208027825
+                  "per_call_s": 0.000697815790772,
+                  "per_step_s": 3.48907895386e-06,
+                  "seconds": 0.000697815790772
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.0425123579334,
-                  "per_step_s": 0.000212561789667,
-                  "seconds": 0.0425123579334
+                  "per_call_s": 0.0432508969679,
+                  "per_step_s": 0.00021625448484,
+                  "seconds": 0.0432508969679
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00222161463578,
-                  "per_step_s": 0.00222161463578,
-                  "seconds": 0.444322927156
+                  "per_call_s": 0.00228910844075,
+                  "per_step_s": 0.00228910844075,
+                  "seconds": 0.457821688149
                 },
                 "host_query": {
                   "calls": 0,
@@ -1320,15 +1321,15 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 0.00614364794455,
-                  "per_step_s": 3.07182397228e-05,
-                  "seconds": 0.00614364794455
+                  "per_call_s": 0.00614985590801,
+                  "per_step_s": 3.074927954e-05,
+                  "seconds": 0.00614985590801
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.0101792429306,
-                  "per_step_s": 0.0101792429306,
-                  "seconds": 2.03584858612
+                  "per_call_s": 0.0102544946747,
+                  "per_step_s": 0.0102544946747,
+                  "seconds": 2.05089893495
                 },
                 "rollout_total": {
                   "calls": 0,
@@ -1344,9 +1345,9 @@
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.00124227995635,
-                  "per_step_s": 0.00124227995635,
-                  "seconds": 0.24845599127
+                  "per_call_s": 0.00124134697253,
+                  "per_step_s": 0.00124134697253,
+                  "seconds": 0.248269394506
                 },
                 "sync": {
                   "calls": 0,
@@ -1356,18 +1357,18 @@
                 },
                 "write_reset": {
                   "calls": 8,
-                  "per_call_s": 0.000841976172524,
-                  "per_step_s": 3.36790469009e-05,
-                  "seconds": 0.00673580938019
+                  "per_call_s": 0.000856102502439,
+                  "per_step_s": 3.42441000976e-05,
+                  "seconds": 0.00684882001951
                 },
                 "write_targets": {
                   "calls": 200,
-                  "per_call_s": 0.000194058452034,
-                  "per_step_s": 0.000194058452034,
-                  "seconds": 0.0388116904069
+                  "per_call_s": 0.00019797622459,
+                  "per_step_s": 0.00019797622459,
+                  "seconds": 0.039595244918
                 }
               },
-              "measured_s": 3.12365691597
+              "measured_s": 3.16723654
             },
             "traffic": {
               "classify_endings": {
@@ -1419,7 +1420,7 @@
                 "nbytes": 3648
               }
             },
-            "wall_time_s": 8.34453381202,
+            "wall_time_s": 8.42720662709,
             "warmup": true
           },
           {
@@ -1432,7 +1433,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 2942.50825095,
+            "env_steps_per_s": 2878.17660769,
             "fingerprint": "dc8bd32fcc3c4adab265def4203811360b24e5206b5b1bdb931ce8a6a234ee20",
             "fitness": [
               -50.6597442627,
@@ -1445,16 +1446,16 @@
               -9.87366867065
             ],
             "generation": 1,
-            "residual_fraction": 0.00990761446614,
-            "residual_s": 0.0161707997322,
+            "residual_fraction": 0.0108949885931,
+            "residual_s": 0.0181801544968,
             "seeds": [
               1313752747,
               908599966,
               53557616
             ],
             "steps": 200,
-            "steps_per_s": 122.604510456,
-            "steps_per_s_harness": 122.537099342,
+            "steps_per_s": 119.924025321,
+            "steps_per_s_harness": 119.855841654,
             "timings": {
               "groups": {
                 "download": {
@@ -1471,15 +1472,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 1.63215875905,
-                  "per_step_s": 0.00816079379525,
-                  "seconds": 1.63215875905
+                  "per_call_s": 1.66867127409,
+                  "per_step_s": 0.00834335637046,
+                  "seconds": 1.66867127409
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.00149087470374,
-                  "per_step_s": 0.00149087470374,
-                  "seconds": 0.298174940748
+                  "per_call_s": 0.00158626323449,
+                  "per_step_s": 0.00158626323449,
+                  "seconds": 0.317252646899
                 },
                 "graph_all": {
                   "calls": 0,
@@ -1495,21 +1496,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000501648057252,
-                  "per_step_s": 2.50824028626e-06,
-                  "seconds": 0.000501648057252
+                  "per_call_s": 0.00048081506975,
+                  "per_step_s": 2.40407534875e-06,
+                  "seconds": 0.00048081506975
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.000860849162564,
-                  "per_step_s": 4.30424581282e-06,
-                  "seconds": 0.000860849162564
+                  "per_call_s": 0.000895092030987,
+                  "per_step_s": 4.47546015494e-06,
+                  "seconds": 0.000895092030987
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00219200797728,
-                  "per_step_s": 0.00219200797728,
-                  "seconds": 0.438401595457
+                  "per_call_s": 0.00226377853425,
+                  "per_step_s": 0.00226377853425,
+                  "seconds": 0.45275570685
                 },
                 "host_query": {
                   "calls": 0,
@@ -1519,15 +1520,15 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 5.40800392628e-05,
-                  "per_step_s": 2.70400196314e-07,
-                  "seconds": 5.40800392628e-05
+                  "per_call_s": 5.70199918002e-05,
+                  "per_step_s": 2.85099959001e-07,
+                  "seconds": 5.70199918002e-05
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.00333429507329,
-                  "per_step_s": 0.00333429507329,
-                  "seconds": 0.666859014658
+                  "per_call_s": 0.00333563493565,
+                  "per_step_s": 0.00333563493565,
+                  "seconds": 0.667126987129
                 },
                 "rollout_total": {
                   "calls": 0,
@@ -1543,9 +1544,9 @@
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.000832599665737,
-                  "per_step_s": 0.000832599665737,
-                  "seconds": 0.166519933147
+                  "per_call_s": 0.000832718346501,
+                  "per_step_s": 0.000832718346501,
+                  "seconds": 0.1665436693
                 },
                 "sync": {
                   "calls": 0,
@@ -1555,18 +1556,18 @@
                 },
                 "write_reset": {
                   "calls": 8,
-                  "per_call_s": 0.000747296027839,
-                  "per_step_s": 2.98918411136e-05,
-                  "seconds": 0.00597836822271
+                  "per_call_s": 0.000776608387241,
+                  "per_step_s": 3.10643354896e-05,
+                  "seconds": 0.00621286709793
                 },
                 "write_targets": {
                   "calls": 200,
-                  "per_call_s": 0.000193187649129,
-                  "per_step_s": 0.000193187649129,
-                  "seconds": 0.0386375298258
+                  "per_call_s": 0.000195831576129,
+                  "per_step_s": 0.000195831576129,
+                  "seconds": 0.0391663152259
                 }
               },
-              "measured_s": 1.61598795932
+              "measured_s": 1.6504911196
             },
             "traffic": {
               "classify_endings": {
@@ -1618,7 +1619,7 @@
                 "nbytes": 3648
               }
             },
-            "wall_time_s": 1.63126135617,
+            "wall_time_s": 1.66772253904,
             "warmup": false
           },
           {
@@ -1631,7 +1632,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 2946.7279293,
+            "env_steps_per_s": 2824.69176269,
             "fingerprint": "b453b17632a238f7d072d9f54e49efb8fb3bfcaef19fcb1e068417e694987b8a",
             "fitness": [
               -50.6597442627,
@@ -1644,16 +1645,16 @@
               -9.87366867065
             ],
             "generation": 2,
-            "residual_fraction": 0.00986698971299,
-            "residual_s": 0.0160798858851,
+            "residual_fraction": 0.0103047119604,
+            "residual_s": 0.0175206665881,
             "seeds": [
               1683657442,
               1375977993,
               1654802006
             ],
             "steps": 200,
-            "steps_per_s": 122.780330387,
-            "steps_per_s_harness": 122.724623588,
+            "steps_per_s": 117.695490112,
+            "steps_per_s_harness": 117.629222708,
             "timings": {
               "groups": {
                 "download": {
@@ -1670,15 +1671,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 1.62966480688,
-                  "per_step_s": 0.00814832403441,
-                  "seconds": 1.62966480688
+                  "per_call_s": 1.70025777095,
+                  "per_step_s": 0.00850128885475,
+                  "seconds": 1.70025777095
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.00148029778502,
-                  "per_step_s": 0.00148029778502,
-                  "seconds": 0.296059557004
+                  "per_call_s": 0.00160494628828,
+                  "per_step_s": 0.00160494628828,
+                  "seconds": 0.320989257656
                 },
                 "graph_all": {
                   "calls": 0,
@@ -1694,21 +1695,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000378703000024,
-                  "per_step_s": 1.89351500012e-06,
-                  "seconds": 0.000378703000024
+                  "per_call_s": 0.000565879046917,
+                  "per_step_s": 2.82939523458e-06,
+                  "seconds": 0.000565879046917
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.000824399990961,
-                  "per_step_s": 4.1219999548e-06,
-                  "seconds": 0.000824399990961
+                  "per_call_s": 0.000860412837937,
+                  "per_step_s": 4.30206418969e-06,
+                  "seconds": 0.000860412837937
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00218286653981,
-                  "per_step_s": 0.00218286653981,
-                  "seconds": 0.436573307961
+                  "per_call_s": 0.00228950043791,
+                  "per_step_s": 0.00228950043791,
+                  "seconds": 0.457900087582
                 },
                 "host_query": {
                   "calls": 0,
@@ -1718,15 +1719,15 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 4.78872098029e-05,
-                  "per_step_s": 2.39436049014e-07,
-                  "seconds": 4.78872098029e-05
+                  "per_call_s": 6.8977009505e-05,
+                  "per_step_s": 3.44885047525e-07,
+                  "seconds": 6.8977009505e-05
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.0033500040893,
-                  "per_step_s": 0.0033500040893,
-                  "seconds": 0.67000081786
+                  "per_call_s": 0.00338505774271,
+                  "per_step_s": 0.00338505774271,
+                  "seconds": 0.677011548541
                 },
                 "rollout_total": {
                   "calls": 0,
@@ -1742,9 +1743,9 @@
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.000825427975506,
-                  "per_step_s": 0.000825427975506,
-                  "seconds": 0.165085595101
+                  "per_call_s": 0.000887247367064,
+                  "per_step_s": 0.000887247367064,
+                  "seconds": 0.177449473413
                 },
                 "sync": {
                   "calls": 0,
@@ -1754,18 +1755,18 @@
                 },
                 "write_reset": {
                   "calls": 8,
-                  "per_call_s": 0.000752431660658,
-                  "per_step_s": 3.00972664263e-05,
-                  "seconds": 0.00601945328526
+                  "per_call_s": 0.000827799085528,
+                  "per_step_s": 3.31119634211e-05,
+                  "seconds": 0.00662239268422
                 },
                 "write_targets": {
                   "calls": 200,
-                  "per_call_s": 0.000192975997925,
-                  "per_step_s": 0.000192975997925,
-                  "seconds": 0.038595199585
+                  "per_call_s": 0.000206345377956,
+                  "per_step_s": 0.000206345377956,
+                  "seconds": 0.0412690755911
                 }
               },
-              "measured_s": 1.613584921
+              "measured_s": 1.68273710436
             },
             "traffic": {
               "classify_endings": {
@@ -1817,7 +1818,7 @@
                 "nbytes": 3648
               }
             },
-            "wall_time_s": 1.62892540987,
+            "wall_time_s": 1.69930045586,
             "warmup": false
           },
           {
@@ -1830,7 +1831,7 @@
               "unfinished": 0
             },
             "env_steps": 4800,
-            "env_steps_per_s": 2950.7123176,
+            "env_steps_per_s": 2879.31850443,
             "fingerprint": "cbf96a201c088f7c3d3a9f1b764ada4310d5a060e48eaf6ff09393ac52924da4",
             "fitness": [
               -50.6597442627,
@@ -1843,16 +1844,16 @@
               -9.87366867065
             ],
             "generation": 3,
-            "residual_fraction": 0.00979616485351,
-            "residual_s": 0.0159438906703,
+            "residual_fraction": 0.00998681398384,
+            "residual_s": 0.0166562825907,
             "seeds": [
               933518110,
               2011253140,
               1456274879
             ],
             "steps": 200,
-            "steps_per_s": 122.946346567,
-            "steps_per_s_harness": 122.882990809,
+            "steps_per_s": 119.971604351,
+            "steps_per_s_harness": 119.916481117,
             "timings": {
               "groups": {
                 "download": {
@@ -1869,15 +1870,15 @@
                 },
                 "generation_total": {
                   "calls": 1,
-                  "per_call_s": 1.62756455294,
-                  "per_step_s": 0.00813782276469,
-                  "seconds": 1.62756455294
+                  "per_call_s": 1.66782745905,
+                  "per_step_s": 0.00833913729526,
+                  "seconds": 1.66782745905
                 },
                 "graph_advance": {
                   "calls": 200,
-                  "per_call_s": 0.00148172987043,
-                  "per_step_s": 0.00148172987043,
-                  "seconds": 0.296345974086
+                  "per_call_s": 0.00154936723527,
+                  "per_step_s": 0.00154936723527,
+                  "seconds": 0.309873447055
                 },
                 "graph_all": {
                   "calls": 0,
@@ -1893,21 +1894,21 @@
                 },
                 "graph_fitness": {
                   "calls": 1,
-                  "per_call_s": 0.000482281902805,
-                  "per_step_s": 2.41140951402e-06,
-                  "seconds": 0.000482281902805
+                  "per_call_s": 0.000410031992942,
+                  "per_step_s": 2.05015996471e-06,
+                  "seconds": 0.000410031992942
                 },
                 "graph_obs": {
                   "calls": 1,
-                  "per_call_s": 0.000816110987216,
-                  "per_step_s": 4.08055493608e-06,
-                  "seconds": 0.000816110987216
+                  "per_call_s": 0.000933206174523,
+                  "per_step_s": 4.66603087261e-06,
+                  "seconds": 0.000933206174523
                 },
                 "graph_policy": {
                   "calls": 200,
-                  "per_call_s": 0.00218283480383,
-                  "per_step_s": 0.00218283480383,
-                  "seconds": 0.436566960765
+                  "per_call_s": 0.00225789740216,
+                  "per_step_s": 0.00225789740216,
+                  "seconds": 0.451579480432
                 },
                 "host_query": {
                   "calls": 0,
@@ -1917,15 +1918,15 @@
                 },
                 "host_rng": {
                   "calls": 1,
-                  "per_call_s": 4.44210600108e-05,
-                  "per_step_s": 2.22105300054e-07,
-                  "seconds": 4.44210600108e-05
+                  "per_call_s": 4.48259525001e-05,
+                  "per_step_s": 2.24129762501e-07,
+                  "seconds": 4.48259525001e-05
                 },
                 "physics": {
                   "calls": 200,
-                  "per_call_s": 0.00333597501623,
-                  "per_step_s": 0.00333597501623,
-                  "seconds": 0.667195003247
+                  "per_call_s": 0.00335236942861,
+                  "per_step_s": 0.00335236942861,
+                  "seconds": 0.670473885722
                 },
                 "rollout_total": {
                   "calls": 0,
@@ -1941,9 +1942,9 @@
                 },
                 "state_read": {
                   "calls": 200,
-                  "per_call_s": 0.000827364885481,
-                  "per_step_s": 0.000827364885481,
-                  "seconds": 0.165472977096
+                  "per_call_s": 0.000856836707098,
+                  "per_step_s": 0.000856836707098,
+                  "seconds": 0.17136734142
                 },
                 "sync": {
                   "calls": 0,
@@ -1953,18 +1954,18 @@
                 },
                 "write_reset": {
                   "calls": 8,
-                  "per_call_s": 0.000756015826482,
-                  "per_step_s": 3.02406330593e-05,
-                  "seconds": 0.00604812661186
+                  "per_call_s": 0.000774706364609,
+                  "per_step_s": 3.09882545844e-05,
+                  "seconds": 0.00619765091687
                 },
                 "write_targets": {
                   "calls": 200,
-                  "per_call_s": 0.000193244032562,
-                  "per_step_s": 0.000193244032562,
-                  "seconds": 0.0386488065124
+                  "per_call_s": 0.000201456533978,
+                  "per_step_s": 0.000201456533978,
+                  "seconds": 0.0402913067956
                 }
               },
-              "measured_s": 1.61162066227
+              "measured_s": 1.65117117646
             },
             "traffic": {
               "classify_endings": {
@@ -2016,35 +2017,35 @@
                 "nbytes": 3648
               }
             },
-            "wall_time_s": 1.626725849,
+            "wall_time_s": 1.66706114402,
             "warmup": false
           }
         ],
         "graph_build_s": {
           "advance": {
-            "build_s": 1.10046022292,
-            "build_s_per_build": 1.10046022292,
+            "build_s": 1.09731681086,
+            "build_s_per_build": 1.09731681086,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
           },
           "fitness": {
-            "build_s": 0.284511271864,
-            "build_s_per_build": 0.284511271864,
+            "build_s": 0.283247062005,
+            "build_s_per_build": 0.283247062005,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
           },
           "obs": {
-            "build_s": 0.611377443885,
-            "build_s_per_build": 0.611377443885,
+            "build_s": 0.599581900053,
+            "build_s_per_build": 0.599581900053,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
           },
           "policy": {
-            "build_s": 2.08934724191,
-            "build_s_per_build": 2.08934724191,
+            "build_s": 2.10867495788,
+            "build_s_per_build": 2.10867495788,
             "builds": 1,
             "calls": 1,
             "lookup_s": 0.0
@@ -2055,57 +2056,57 @@
         "per_step_means": {
           "graph_advance": {
             "calls": 600,
-            "per_generation_median_s": 0.296345974086,
-            "per_step_s": 0.0014843007864,
-            "seconds": 0.890580471838
+            "per_generation_median_s": 0.317252646899,
+            "per_step_s": 0.00158019225268,
+            "seconds": 0.94811535161
           },
           "graph_fitness": {
             "calls": 3,
-            "per_generation_median_s": 0.000482281902805,
-            "per_step_s": 2.27105493347e-06,
-            "seconds": 0.00136263296008
+            "per_generation_median_s": 0.00048081506975,
+            "per_step_s": 2.42787684935e-06,
+            "seconds": 0.00145672610961
           },
           "graph_obs": {
             "calls": 3,
-            "per_generation_median_s": 0.000824399990961,
-            "per_step_s": 4.1689335679e-06,
-            "seconds": 0.00250136014074
+            "per_generation_median_s": 0.000895092030987,
+            "per_step_s": 4.48118507241e-06,
+            "seconds": 0.00268871104345
           },
           "graph_policy": {
             "calls": 600,
-            "per_generation_median_s": 0.436573307961,
-            "per_step_s": 0.00218590310697,
-            "seconds": 1.31154186418
+            "per_generation_median_s": 0.45275570685,
+            "per_step_s": 0.00227039212477,
+            "seconds": 1.36223527486
           },
           "host_rng": {
             "calls": 3,
-            "per_generation_median_s": 4.78872098029e-05,
-            "per_step_s": 2.43980515128e-07,
-            "seconds": 0.000146388309076
+            "per_generation_median_s": 5.70199918002e-05,
+            "per_step_s": 2.84704923009e-07,
+            "seconds": 0.000170822953805
           },
           "physics": {
             "calls": 600,
-            "per_generation_median_s": 0.667195003247,
-            "per_step_s": 0.00334009139294,
-            "seconds": 2.00405483576
+            "per_generation_median_s": 0.670473885722,
+            "per_step_s": 0.00335768736899,
+            "seconds": 2.01461242139
           },
           "state_read": {
             "calls": 600,
-            "per_generation_median_s": 0.165472977096,
-            "per_step_s": 0.000828464175573,
-            "seconds": 0.497078505344
+            "per_generation_median_s": 0.17136734142,
+            "per_step_s": 0.000858934140222,
+            "seconds": 0.515360484133
           },
           "write_reset": {
             "calls": 24,
-            "per_generation_median_s": 0.00601945328526,
-            "per_step_s": 3.00765801997e-05,
-            "seconds": 0.0180459481198
+            "per_generation_median_s": 0.00621286709793,
+            "per_step_s": 3.17215178317e-05,
+            "seconds": 0.019032910699
           },
           "write_targets": {
             "calls": 600,
-            "per_generation_median_s": 0.0386375298258,
-            "per_step_s": 0.000193135893205,
-            "seconds": 0.115881535923
+            "per_generation_median_s": 0.0402913067956,
+            "per_step_s": 0.000201211162688,
+            "seconds": 0.120726697613
           }
         },
         "residency": "numpy",
@@ -2124,35 +2125,36 @@
           },
           "note": "getter vs live solver buffer, read after the last generation; a nonzero base_quat entry means the two residencies feed the graphs a last-bit different orientation, which is the only arithmetic difference between them"
         },
+        "sync_calls_per_step": 0.0,
         "throughput": {
           "env_steps_per_s": {
-            "max": 2950.7123176,
-            "mean": 2946.6494992833336,
-            "median": 2946.7279293,
-            "min": 2942.50825095,
+            "max": 2879.31850443,
+            "mean": 2860.7289582699996,
+            "median": 2878.17660769,
+            "min": 2824.69176269,
             "n": 3,
-            "spread": 8.204066650000186,
-            "stdev": 3.349755299525334
+            "spread": 54.62674173999994,
+            "stdev": 25.48640920169784
           },
           "note": "median and spread over the timed generations of this process; the warm-up generation is excluded everywhere (it carries the first-step JIT of the compiled kernels and the empty caches)",
           "rows": 24,
           "steps_per_s": {
-            "max": 122.946346567,
-            "mean": 122.77706246999999,
-            "median": 122.780330387,
-            "min": 122.604510456,
+            "max": 119.971604351,
+            "mean": 119.197039928,
+            "median": 119.924025321,
+            "min": 117.695490112,
             "n": 3,
-            "spread": 0.3418361110000063,
-            "stdev": 0.13957313771410634
+            "spread": 2.2761142389999947,
+            "stdev": 1.0619337168490184
           },
           "steps_per_s_harness": {
-            "max": 122.882990809,
-            "mean": 122.71490457966667,
-            "median": 122.724623588,
-            "min": 122.537099342,
+            "max": 119.916481117,
+            "mean": 119.133848493,
+            "median": 119.855841654,
+            "min": 117.629222708,
             "n": 3,
-            "spread": 0.3458914670000013,
-            "stdev": 0.14137673330052283
+            "spread": 2.287258409000003,
+            "stdev": 1.064219072304002
           },
           "steps_total": 600,
           "timed_generations": [
@@ -2161,13 +2163,13 @@
             3
           ],
           "wall_time_s": {
-            "max": 1.63126135617,
-            "mean": 1.62897087168,
-            "median": 1.62892540987,
-            "min": 1.626725849,
+            "max": 1.69930045586,
+            "mean": 1.6780280463066666,
+            "median": 1.66772253904,
+            "min": 1.66706114402,
             "n": 3,
-            "spread": 0.004535507169999953,
-            "stdev": 0.0018518920782822107
+            "spread": 0.03223931183999995,
+            "stdev": 0.015044288329167346
           },
           "warmup_generation": 0
         },
@@ -2237,93 +2239,93 @@
   },
   "phases": {
     "device": {
-      "build_s": 6.444635886,
-      "close_s": 0.186018159147,
-      "first_generation_s": 1.33315581991,
-      "first_generation_total_s": 1.33467515185,
+      "build_s": 6.50969869015,
+      "close_s": 0.184514529072,
+      "first_generation_s": 1.34596786578,
+      "first_generation_total_s": 1.34747925401,
       "generation_total_scope": "generation_total is env.evaluate end to end (host seed draw + reset + steps + run_fitness) measured by the harness; measurements.generations[*].wall_time_s is the environment's own counter, which starts after the host seed draw and stops before run_fitness",
       "graph_build_note": "per-graph build time is measured inside ExecutableCache.get while the env is constructed; the env builds every executable in __init__, so this table is the compile cost and every later generation is a cache hit",
       "graph_build_s": {
         "advance": {
-          "build_s": 1.07639966812,
-          "build_s_per_build": 1.07639966812,
+          "build_s": 1.08742644405,
+          "build_s_per_build": 1.08742644405,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         },
         "fitness": {
-          "build_s": 0.286106143147,
-          "build_s_per_build": 0.286106143147,
+          "build_s": 0.292890302138,
+          "build_s_per_build": 0.292890302138,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         },
         "obs": {
-          "build_s": 0.551227642922,
-          "build_s_per_build": 0.551227642922,
+          "build_s": 0.570908895927,
+          "build_s_per_build": 0.570908895927,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         },
         "policy": {
-          "build_s": 2.09541259101,
-          "build_s_per_build": 2.09541259101,
+          "build_s": 2.08506609313,
+          "build_s_per_build": 2.08506609313,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         }
       },
-      "graph_build_total_s": 4.00914604519,
-      "steady_generation_median_s": 1.24691729085,
-      "steady_generation_total_median_s": 1.24776794715,
+      "graph_build_total_s": 4.03629173525,
+      "steady_generation_median_s": 1.25464883191,
+      "steady_generation_total_median_s": 1.25556685589,
       "sync_note": "common.sync() runs before and after every generation; it calls torch.cuda.synchronize() only when a HIP/CUDA device is available (it reported True here) and is a no-op on a CPU-resident run, where every timed region is host wall clock (time.perf_counter anyway)",
       "synchronized_before_and_after_each_generation": true,
-      "total_s": 11.7152966799
+      "total_s": 11.8137133771
     },
     "note": "one row per residency; the two environments are built one after the other in this process",
     "numpy": {
-      "build_s": 26.5162551899,
-      "close_s": 0.126641442068,
-      "first_generation_s": 8.34453381202,
-      "first_generation_total_s": 8.35174347204,
+      "build_s": 27.4281224292,
+      "close_s": 0.131434379844,
+      "first_generation_s": 8.42720662709,
+      "first_generation_total_s": 8.43453985197,
       "generation_total_scope": "generation_total is env.evaluate end to end (host seed draw + reset + steps + run_fitness) measured by the harness; measurements.generations[*].wall_time_s is the environment's own counter, which starts after the host seed draw and stops before run_fitness",
       "graph_build_note": "per-graph build time is measured inside ExecutableCache.get while the env is constructed; the env builds every executable in __init__, so this table is the compile cost and every later generation is a cache hit",
       "graph_build_s": {
         "advance": {
-          "build_s": 1.10046022292,
-          "build_s_per_build": 1.10046022292,
+          "build_s": 1.09731681086,
+          "build_s_per_build": 1.09731681086,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         },
         "fitness": {
-          "build_s": 0.284511271864,
-          "build_s_per_build": 0.284511271864,
+          "build_s": 0.283247062005,
+          "build_s_per_build": 0.283247062005,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         },
         "obs": {
-          "build_s": 0.611377443885,
-          "build_s_per_build": 0.611377443885,
+          "build_s": 0.599581900053,
+          "build_s_per_build": 0.599581900053,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         },
         "policy": {
-          "build_s": 2.08934724191,
-          "build_s_per_build": 2.08934724191,
+          "build_s": 2.10867495788,
+          "build_s_per_build": 2.10867495788,
           "builds": 1,
           "calls": 1,
           "lookup_s": 0.0
         }
       },
-      "graph_build_total_s": 4.08569618058,
-      "steady_generation_median_s": 1.62892540987,
-      "steady_generation_total_median_s": 1.62966480688,
+      "graph_build_total_s": 4.0888207308,
+      "steady_generation_median_s": 1.66772253904,
+      "steady_generation_total_median_s": 1.66867127409,
       "sync_note": "common.sync() runs before and after every generation; it calls torch.cuda.synchronize() only when a HIP/CUDA device is available (it reported True here) and is a no-op on a CPU-resident run, where every timed region is host wall clock (time.perf_counter anyway)",
       "synchronized_before_and_after_each_generation": true,
-      "total_s": 39.8858034732
+      "total_s": 41.0327529518
     }
   },
   "process_role": "warm",
@@ -2337,8 +2339,8 @@
       "groups": {
         "download": {
           "calls": 804,
-          "mean_s": 7.593962833035126e-05,
-          "seconds": 0.06105546117760241
+          "mean_s": 7.555950682063526e-05,
+          "seconds": 0.060749843483790755
         },
         "export": {
           "calls": 0,
@@ -2347,13 +2349,13 @@
         },
         "generation_total": {
           "calls": 4,
-          "mean_s": 1.2706208052113652,
-          "seconds": 5.082483220845461
+          "mean_s": 1.279337308718823,
+          "seconds": 5.117349234875292
         },
         "graph_advance": {
           "calls": 800,
-          "mean_s": 0.00042616661317879334,
-          "seconds": 0.3409332905430347
+          "mean_s": 0.000425732227449771,
+          "seconds": 0.3405857819598168
         },
         "graph_all": {
           "calls": 0,
@@ -2367,18 +2369,18 @@
         },
         "graph_fitness": {
           "calls": 4,
-          "mean_s": 0.0003065505297854543,
-          "seconds": 0.001226202119141817
+          "mean_s": 0.00039066094905138016,
+          "seconds": 0.0015626437962055206
         },
         "graph_obs": {
           "calls": 4,
-          "mean_s": 0.0004544054972939193,
-          "seconds": 0.0018176219891756773
+          "mean_s": 0.0006342909764498472,
+          "seconds": 0.002537163905799389
         },
         "graph_policy": {
           "calls": 800,
-          "mean_s": 0.001702052817272488,
-          "seconds": 1.3616422538179904
+          "mean_s": 0.0017316655779723079,
+          "seconds": 1.3853324623778462
         },
         "host_query": {
           "calls": 0,
@@ -2387,33 +2389,33 @@
         },
         "host_rng": {
           "calls": 4,
-          "mean_s": 4.8934598453342915e-05,
-          "seconds": 0.00019573839381337166
+          "mean_s": 4.929525312036276e-05,
+          "seconds": 0.00019718101248145103
         },
         "physics": {
           "calls": 800,
-          "mean_s": 0.00333124063530704,
-          "seconds": 2.664992508245632
+          "mean_s": 0.003334035630978178,
+          "seconds": 2.6672285047825426
         },
         "rollout_total": {
           "calls": 4,
-          "mean_s": 1.2700769092189148,
-          "seconds": 5.080307636875659
+          "mean_s": 1.2787897072848864,
+          "seconds": 5.115158829139546
         },
         "stage_upload": {
           "calls": 16,
-          "mean_s": 0.00010774098336696625,
-          "seconds": 0.00172385573387146
+          "mean_s": 0.00014327057579066604,
+          "seconds": 0.0022923292126506567
         },
         "state_read": {
           "calls": 800,
-          "mean_s": 0.000310549721471034,
-          "seconds": 0.2484397771768272
+          "mean_s": 0.0003157593260402791,
+          "seconds": 0.2526074608322233
         },
         "sync": {
           "calls": 1604,
-          "mean_s": 3.489012208109968e-05,
-          "seconds": 0.05596375581808388
+          "mean_s": 3.510844900140404e-05,
+          "seconds": 0.05631395219825208
         },
         "write_reset": {
           "calls": 0,
@@ -2442,13 +2444,13 @@
         },
         "generation_total": {
           "calls": 4,
-          "mean_s": 3.3102828977280296,
-          "seconds": 13.241131590912119
+          "mean_s": 3.3678240890149027,
+          "seconds": 13.47129635605961
         },
         "graph_advance": {
           "calls": 800,
-          "mean_s": 0.00148847521195421,
-          "seconds": 1.190780169563368
+          "mean_s": 0.0015772740505053662,
+          "seconds": 1.261819240404293
         },
         "graph_all": {
           "calls": 0,
@@ -2462,18 +2464,18 @@
         },
         "graph_fitness": {
           "calls": 4,
-          "mean_s": 0.000497210246976465,
-          "seconds": 0.00198884098790586
+          "mean_s": 0.0005386354750953615,
+          "seconds": 0.002154541900381446
         },
         "graph_obs": {
           "calls": 4,
-          "mean_s": 0.011253429518546909,
-          "seconds": 0.045013718074187636
+          "mean_s": 0.011484902002848685,
+          "seconds": 0.04593960801139474
         },
         "graph_policy": {
           "calls": 800,
-          "mean_s": 0.002194830989174079,
-          "seconds": 1.7558647913392633
+          "mean_s": 0.0022750712037668563,
+          "seconds": 1.820056963013485
         },
         "host_query": {
           "calls": 0,
@@ -2482,13 +2484,13 @@
         },
         "host_rng": {
           "calls": 4,
-          "mean_s": 0.0015725090634077787,
-          "seconds": 0.006290036253631115
+          "mean_s": 0.0015801697154529393,
+          "seconds": 0.006320678861811757
         },
         "physics": {
           "calls": 800,
-          "mean_s": 0.005049879277357831,
-          "seconds": 4.039903421886265
+          "mean_s": 0.005081889195425901,
+          "seconds": 4.065511356340721
         },
         "rollout_total": {
           "calls": 0,
@@ -2502,8 +2504,8 @@
         },
         "state_read": {
           "calls": 800,
-          "mean_s": 0.0009319181207683868,
-          "seconds": 0.7455344966147095
+          "mean_s": 0.0009545373482978903,
+          "seconds": 0.7636298786383122
         },
         "sync": {
           "calls": 0,
@@ -2512,13 +2514,13 @@
         },
         "write_reset": {
           "calls": 32,
-          "mean_s": 0.0007744299218757078,
-          "seconds": 0.02478175750002265
+          "mean_s": 0.0008088040849543177,
+          "seconds": 0.025881730718538165
         },
         "write_targets": {
           "calls": 800,
-          "mean_s": 0.00019336653291247786,
-          "seconds": 0.15469322632998228
+          "mean_s": 0.00020040242816321552,
+          "seconds": 0.16032194253057241
         }
       }
     }
