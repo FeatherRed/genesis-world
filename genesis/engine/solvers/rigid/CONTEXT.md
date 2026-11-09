@@ -1,6 +1,7 @@
 ## Intent
 `rigid/` is the rigid-body (articulated-body dynamics, ABD) solver of the Genesis engine.
-`rigid_solver.py` (3547 lines) defines the module-level `_sanitize_sol_params` and the `RigidSolver` class, the reference implementation for solver naming and kernel structure.
+`rigid_solver.py` (3545 lines) defines the module-level `_sanitize_sol_params` and the `RigidSolver` class, the reference implementation for solver naming and kernel structure.
+`data.py` (717 lines) declares every struct the solver allocates (`RigidData`, `RigidInfo`, `DynInfo`, `DynState` and their members) — the state layout any accessor question is answered from.
 `RigidSolver` subclasses `GravityMixin, TimeBasedMixin, KinematicSolver` (from `../base_solver.py` and `../kinematic_solver.py`).
 Three child subpackages hold the compute kernels: `abd/` (dynamics numerics), `collider/` (collision detection), `constraint/` (constraint solve).
 All kernel code is written against the Quadrants DSL (`import quadrants as qd`), not raw Taichi.
@@ -19,7 +20,7 @@ All kernel code is written against the Quadrants DSL (`import quadrants as qd`),
 - Default fused path: `kernel_substep_dynamics` (forward kinematics if needed -> forward velocity -> forward dynamics, then equality-constraint assembly) -> `collider.detection()` -> `kernel_substep_inequality` (inequality/contact assembly) -> `func_solve_body` (constraint solve, `_n_iterations`) -> `kernel_substep_post` (acceleration/contact-force write-back + optional noslip, then integrate + copy-next-to-curr + refresh cartesian/velocity unless MuJoCo-compat).
 - SAP-coupler / non-recording-grad path: `kernel_step_1` (FK + velocity + dynamics) -> `update_qvel`; post-coupling finishes with `update_qacc_from_qvel_delta` + `kernel_step_2`.
 - Recording (differentiable) path: FK -> `kernel_forward_dynamics_without_qacc` -> `kernel_compute_smooth_qacc` + `_func_constraint_force` (equality + collision + inequality + resolve) under `custom_backward(_constraint_force_grad)` -> `kernel_update_acc` -> `kernel_integrate` -> `kernel_copy_next_to_curr_clear_coupling` -> FK again (unless MuJoCo-compat).
-The fused-pipeline entry kernels (`kernel_step_1`, `kernel_step_2`, `kernel_substep_dynamics`, `kernel_substep_inequality`, `kernel_substep_post`) and their `func_step_1`/`func_step_2` bodies are defined module-level at the BOTTOM of `rigid_solver.py` (lines 3404-3547), after the class.
+The fused-pipeline entry kernels (`kernel_step_1`, `kernel_step_2`, `kernel_substep_dynamics`, `kernel_substep_inequality`, `kernel_substep_post`) and their `func_step_1`/`func_step_2` bodies are defined module-level at the BOTTOM of `rigid_solver.py` (lines 3403-3545), after the class.
 
 ## Public API Surface
 Stepping: `substep`, `substep_pre_coupling`, `substep_post_coupling`, `reset_grad` (1611, zeroes grads of `dyn_state.links/dofs/joints/geoms/entities` and `rigid_info` since backward accumulates via `atomic_add`), `update_forward_pos` (1268), `_update_forward_kinematics` (1278), `detect_collision` (1414, clears+re-detects; returns geom pair indices for `env_idx=0` only).
@@ -27,18 +28,24 @@ State: `get_state` (1640, returns a `RigidSolverState`), `set_state` (1664, `@mu
 Setters: `set_links_pos`, `set_base_links_pos`, `set_links_quat`, `set_base_links_quat`, `_set_links_info`, `set_links_mass`, `set_links_inertia`, `set_links_COM`, `set_qpos`, `set_global_sol_params`, `set_sol_params`, `_set_dofs_info`, `set_dofs_kp/kv/act_gain/act_bias/force_range/stiffness/armature/damping/frictionloss/limit/position/velocity`, `control_dofs_force/velocity/position/position_velocity`, `set_geoms_friction_ratio`, `set_geom_friction(_torsional/_rolling)`, `set_geoms_friction(_torsional/_rolling)`, `set_drone_rpm`, `add/delete_weld_constraint`, `add/delete_screw_constraint`, `clear_external_force`, `apply_links_external_wrench`.
 Getters: `get_links_pos/vel/acc/acc_ang/root_COM/COM/mass/inertia/invweight`, `get_geoms_pos/quat/friction/friction_torsional/friction_rolling/friction_ratio`, `get_dofs_control_force/actuator_force/force/acc/kp/kv/act_gain/act_bias/force_range/stiffness/invweight/armature/damping/frictionloss`, `get_sol_params`, `get_mass_mat`, `get_kinetic_energy`, `get_potential_energy`, `get_total_energy`, `get_AABB`, `get_weld_constraints`, `get_equality_constraints`, `is_links_info_batched`.
 Properties: `n_geoms`, `n_verts`, `n_free_verts`, `n_fixed_verts`, `n_faces`, `n_edges`, `max_collision_pairs`, `n_equalities`, `equalities` (built values cached after `build`).
+Inherited, not overridden here (all from `../kinematic_solver.py`): `get_links_quat` (1172), `get_links_ang` (1241), `get_qpos` (1245), `get_dofs_velocity` (1249), `get_dofs_position` (1253), `set_dofs_velocity` (1040, reached through `super()`), plus the `get_state`/`set_state` pair.
+`set_links_pos`/`set_links_quat` are removed stubs raising `DeprecationError` (1823, 1959); `set_base_links_pos`/`set_base_links_quat` are the base-pose setters.
 
 ## Scene / State Model
-`RigidData` (`genesis/utils/array_class.py`) allocates four structs per solver: `rigid_info` (`RigidInfo`), `dyn_info` (`DynInfo`), `dyn_state` (`DynState`), `kinematics_scratch`, plus the `errno` per-env int buffer.
+`RigidData` (`data.py`) allocates four structs per solver: `rigid_info` (`RigidInfo`), `dyn_info` (`DynInfo`), `dyn_state` (`DynState`), `kinematics_scratch`, plus the `errno` per-env int buffer.
 `RigidInfo` (constant model params) holds `gravity`, `meaninertia`, `n_awake_dofs`, `qpos0`/`qpos`/`qpos_next`, `geoms_init_AABB`, the mass matrix and its LDL^T factor (`mass_mat`, `mass_mat_L`, `mass_mat_D_inv`), kinematic root tables (`roots_link_idx`, `links_root_end`), tree tables (`trees_*`, `links_tree_idx`, level-sweep tables), child tables, dof mass-block tables, and runtime constants (`substep_dt`, `iterations`, `tolerance`, `ls_*`, `noslip_*`, `impratio`, `n_equalities`, `hibernation_thresh_vel`, `EPS`).
 `DynInfo` holds per-element Info structs (`entities/links/joints/dofs/geoms/verts/faces/edges/vverts/vfaces/vgeoms/equalities`); `DynState` holds the corresponding State structs plus `free_verts`/`fixed_verts`/`vverts`/`vgeoms`.
 Bodies are laid out as flat batched arrays: one slot per link/joint/dof/geom/vert across all entities, one slot per environment in the batch (batch dim LAST).
-`ColliderState` and `ConstraintState` live in the same file (lines 355 and 586) and are owned by `collider/` and `constraint/` respectively.
+`ColliderState` and `ConstraintState` live in `collider/data.py` and `constraint/data.py`, owned by those subpackages.
+Structs are `genesis.utils.data.Data` subclasses: class annotations with `field(...)`, allocated as `qd` fields/ndarrays on the current backend with `gs.qd_float`/`gs.qd_int`/`gs.qd_bool` (allocation in `genesis/utils/data.py:687-750`).
 
 ## `qd` Conventions & Memory Layout
 qd fields are field-major with the batch (env) dim LAST: e.g. `dyn_state.dofs.vel[i_d, i_b]`, `mass_mat[DOFS, DOFS, ENVS]`; torch arrays at the API boundary are batch-first (`qpos[i_b, i_q]`).
 Conversion happens only at the boundary via `qd_to_torch(..., transpose=True)`, `qd_from_torch`, `qd_to_numpy(..., transpose=...)` in `genesis/utils/misc.py`; zero-copy is used when `gs.use_zerocopy` (set_state/get_state fast path).
 `func_*` are `@qd.func` device subroutines inlined into kernels; `kernel_*` are `@qd.kernel(fastcache=True)` launched entrypoints (some `graph=True`); there are no `@gs.jit` pipelines inside `rigid/` — the composition lives in `RigidSolver.substep`.
+Getter data flow: state getters (`get_links_*`, `get_dofs_*`, `get_qpos`) return device torch tensors through `Solver._read_data(..., copy=True)` -> `qd_to_torch(..., transpose=True, copy=True)`, i.e. a contiguous DLPack view of the qd field cloned on the device (no host copy) and then masked with basic slicing where possible; `get_links_vel`/`get_links_acc` fall back to a `@qd.kernel` gather into a freshly allocated `torch.empty` when `gs.use_zerocopy` is false.
+Setter data flow splits in two: `set_qpos`/`set_base_links_pos`/`set_base_links_quat`/`set_dofs_velocity`/`control_dofs_*` write the buffer in place through cached `qd_to_torch(..., copy=False)` views under `gs.use_zerocopy`; `set_dofs_position` and every non-zero-copy branch write via a `kernel_set_*`/`kernel_control_*` launch, and `_sanitize_io_variables` only converts the input when its dtype/device/shape differs (`broadcast_tensor` -> `torch.as_tensor`).
+`gs.use_zerocopy` is a `ZeroCopyMode` object (`genesis/utils/misc.py:151`): truthy when the backend shares memory with the torch device and not inside `disabled()`, which `RolloutGraph` enters to force the kernel path while recording (`genesis/grad/bridge.py:175`).
 
 ## Known Issues / Gotchas
 `_sanitize_sol_params` (line 166) treats solver params as a 7-tuple (`timeconst, dampratio, dmin, dmax, width, mid, power`); negative `timeconst` (direct stiffness/damping parameterization) is unsupported and falls back to defaults.
@@ -57,7 +64,9 @@ Constraints with unsupported contact pairs / NaN contacts / NaN forces / NaN acc
 - `../base_solver.py` -> `Solver`, `GravityMixin`, `TimeBasedMixin` (sibling, read-only).
 - `../kinematic_solver.py` -> `KinematicSolver` and geom/vert helpers (`_fill_base_link_geom_offsets` etc.) (sibling, read-only).
 - `../../entities/` -> `RigidEntity`, `DroneEntity`, `TerrainEntity` and link/joint descriptions consumed here (sibling, read-only).
-- `../../../utils/array_class.py` -> `RigidData`, `RigidInfo`, `DynInfo`, `DynState`, `ColliderState`, `ConstraintState`, `ErrorCode` structs (read-only reference).
+- `data.py` -> this solver's struct declarations: `RigidInfo`, `RigidData`, `DynInfo`, `DynState`, the `Links*/Dofs*/Joints*/Geoms*/Verts*/VVerts*/VGeoms*/Entities*/Equalities*` members, `RigidSimStaticConfig`, `RigidErrorCode`.
+- `collider/data.py`, `constraint/data.py` -> `ColliderState` and `ConstraintState` (owned by those subpackages).
+- `../base_solver.py` -> `Solver` (`_sanitize_io_variables`, `_read_data`, `record_read`, checkpointing) and `ErrorCode`; `../../../utils/data.py` -> `Data`/`DataKind`/`field` and the struct allocation.
 - `../../../utils/data.py` + `../../../utils/misc.py` -> `qd_to_torch`/`qd_from_torch`/`qd_to_numpy` transpose + zero-copy conventions (read-only reference).
 
 ## Notes for Agents
