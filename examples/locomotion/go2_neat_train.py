@@ -61,6 +61,13 @@ Artifacts (git-ignored, never committed)
 ``<output-dir>/summary.json``   resolved config + every generation record + totals.
 ``-o`` defaults to ``out/go2_neat``; ``-e/--exp-name`` appends a subdirectory.
 
+Residency
+---------
+``--residency numpy`` (the default, the reference) stages every graph operand through host arrays.
+``--residency device`` keeps them all on the ``evoxc`` device (zero-copy DLPack bridge, see
+``go2_device_rollout.py``) and therefore needs a non-CPU ``--evoxc-device``; both residencies run the
+same graphs on the same values and are expected to agree bit-for-bit.
+
 Under ``PYTEST_VERSION`` the run shrinks to one generation of 20 steps unless the matching
 flags are given explicitly, so a smoke test cannot hang.
 """
@@ -138,6 +145,15 @@ def _parse_args(argv=None):
         action=argparse.BooleanOptionalAction,
         default=True,
         help="Stop a generation as soon as every row has ended (disable to force the full horizon).",
+    )
+    parser.add_argument(
+        "--residency",
+        choices=("numpy", "device"),
+        default="numpy",
+        help=(
+            "Where the values that cross a graph boundary live: numpy (host arrays, the reference) "
+            "or device (zero-copy, every operand stays on the evoxc device; needs a non-CPU device)."
+        ),
     )
     parser.add_argument("-e", "--exp-name", type=str, default=None, help="Experiment name, a subdirectory of -o.")
     parser.add_argument("-o", "--output-dir", type=str, default="out/go2_neat", help="Directory of the artifacts.")
@@ -233,6 +249,7 @@ def main(argv=None):
         episode_length_s=args.episode_length_s,
         stop_when_done=args.stop_when_done,
         seed_table=seed_table,
+        residency=args.residency,
     )
     trainer = NeuroevolutionTrainer(
         env,
@@ -257,7 +274,7 @@ def main(argv=None):
             f"genesis={'gpu' if args.gpu else 'cpu'} evoxc={env.backend}@{env.device_name} "
             f"tell={trainer.tell_backend}@{trainer.tell_device_name} "
             f"master_seed={args.master_seed} evolution_seed={trainer.evolution_seed} "
-            f"perturbation={'zero' if perturbation.is_zero else 'nonzero'}"
+            f"perturbation={'zero' if perturbation.is_zero else 'nonzero'} residency={env.residency}"
         )
 
     trainer.setup()
@@ -280,6 +297,7 @@ def main(argv=None):
             "evoxc_device": env.device_name,
             "show_viewer": show_viewer,
             "stop_when_done": bool(args.stop_when_done),
+            "residency": env.residency,
         }
     )
     trainer.summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")

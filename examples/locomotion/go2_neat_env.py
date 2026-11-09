@@ -45,6 +45,22 @@ Action latency
 actions of step ``t - 1`` (zero at reset), exactly like ``go2_env.step()``.  The graphs see the
 raw, unclipped action of step ``t`` and clip it themselves.
 
+Residency
+---------
+``Go2NeatEnv(residency=...)`` selects where the values that cross a graph boundary live:
+
+* ``"numpy"`` (the default, and the reference): every graph operand and result is a host array.
+  The per-step state read, the control-target write and the reset write are the only boundaries,
+  and they go through ``.cpu().numpy()`` / ``torch.as_tensor(..., device=gs.device)``.
+* ``"device"``: the same generation with every operand resident on the ``evoxc`` device.  The loop,
+  the DLPack bridge and the exhaustive list of remaining host touches live in
+  :mod:`go2_device_rollout`; this module only dispatches.  It needs a non-CPU ``evoxc`` device
+  (``backend="iree"`` on ``rocm:N`` / ``cuda:N``), because device residency is what the IREE
+  runtime provides, and it refuses to be built otherwise.
+
+Both residencies run the same graphs on the same values in the same order, so they must agree
+bit-for-bit on seeds, episode returns, fitness, steps and ``end_reasons``.
+
 Initialization
 --------------
 ``gs.init`` is called only when ``genesis`` is not initialized yet (``gs._initialized``), with
@@ -52,8 +68,8 @@ CPU/float32; a caller that inits first (e.g. ``gs.init(backend=gs.gpu)``) keeps 
 precision.  The ``backend``/``device`` arguments select the ``evoxc`` backend of the compiled
 graphs only, via ``go2_evox_kernels.resolve_backend_device``.
 
-Torch <-> host round trips
---------------------------
+Torch <-> host round trips (``residency="numpy"``)
+-------------------------------------------------
 Every conversion is confined to :meth:`Go2NeatEnv.read_state` (device -> host) and
 :meth:`Go2NeatEnv._write_targets` / :meth:`Go2NeatEnv._write_reset` (host -> device):
 
@@ -70,7 +86,8 @@ Every conversion is confined to :meth:`Go2NeatEnv.read_state` (device -> host) a
 
 Nothing else leaves the device: ``run_policy`` / ``run_obs`` / ``run_advance`` / ``run_fitness``
 are numpy-facing (the wrappers stage their own operands), so the observations, actions and returns
-stay on the host.
+stay on the host.  Under ``residency="device"`` none of the above happens: the whole boundary is
+``go2_device_rollout``'s.
 
 This module has no CLI; like the other ``*_env.py`` modules it is excluded from the example smoke
 tests.
@@ -315,6 +332,9 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         seed_table (array-like | None): ``(num_generations, EPISODES_PER_POLICY)`` int table; when
             given it replaces the table ``seeding.generation_seed_table`` would draw.
         stop_when_done (bool): Stop a generation as soon as every row has ended.
+        residency (str): ``"numpy"`` (the reference: host arrays at every graph boundary) or
+            ``"device"`` (zero-copy: every operand stays on the ``evoxc`` device, see
+            ``go2_device_rollout``).  ``"device"`` needs a non-CPU ``evoxc`` device.
 
     Attributes:
         rows (int): Number of environment rows, ``3 * pop_size`` (also ``n_envs``).
@@ -340,6 +360,7 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         show_viewer=False,
         seed_table=None,
         stop_when_done=True,
+        residency="numpy",
     ):
         _check_cfg()
         self.pop_size = int(pop_size)
@@ -352,6 +373,16 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         self.device_name = _device_name(self.device)
         self.show_viewer = bool(show_viewer)
         self.stop_when_done = bool(stop_when_done)
+        if residency not in ("numpy", "device"):
+            raise ValueError(f"residency must be 'numpy' or 'device', got {residency!r}")
+        self.residency = residency
+        if self.residency == "device" and self.device.kind == "cpu":
+            raise ValueError(
+                "residency='device' keeps every graph operand on the evoxc device, which needs a "
+                f"non-CPU device backed by IREE (e.g. backend='iree', device='rocm:0' or 'cuda:0'); "
+                f"got backend={self.backend!r} on {self.device_name} (a host array is the only "
+                "operand a cpu-kind device accepts, so use residency='numpy' there)"
+            )
 
         if seed_table is None:
             self.seed_table = None
@@ -606,12 +637,13 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         """Simulate one generation and return its fitness plus the run bookkeeping.
 
         The returned mapping is checked against ``env_base.validate_evaluation`` (the contract of
-        :class:`env_base.BatchedEpisodeEnv`) once per generation before it is handed back.
+        :class:`env_base.BatchedEpisodeEnv`) once per generation before it is handed back, for both
+        residencies.
 
         Args:
             pop_arrays (tuple): The four genome payload arrays (``node_keys``, ``node_attrs``,
                 ``conn_keys``, ``conn_attrs``) of the generation, in the shapes the policy graph
-                was built with; passed straight to ``run_policy``.
+                was built with; handed to the policy graph.
             generation (int): Generation index, selecting the row of the seed table.
 
         Returns:
@@ -631,6 +663,32 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         init_qpos = perturbed_init_qpos(self.init_qpos, seeds, self.perturbation)
         row_init_qpos = np.tile(init_qpos, (self.pop_size, 1))
 
+        if self.residency == "device":
+            # Imported here so the numpy/CPU path never imports the IREE bridge.
+            from go2_device_rollout import evaluate_device
+
+            result = evaluate_device(
+                self,
+                executables=(
+                    self.obs_executable,
+                    self.policy_executable,
+                    self.advance_executable,
+                    self.fitness_executable,
+                ),
+                pop_arrays=pop_arrays,
+                seeds=seeds,
+                init_qpos=init_qpos,
+                row_init_qpos=row_init_qpos,
+                horizon=self.horizon,
+                stop_when_done=self.stop_when_done,
+            )
+        else:
+            result = self._evaluate_numpy(pop_arrays, seeds, init_qpos, row_init_qpos)
+        validate_evaluation(result, self.pop_size, self.episodes_per_policy)
+        return result
+
+    def _evaluate_numpy(self, pop_arrays, seeds, init_qpos, row_init_qpos):
+        """The host-staged rollout of one generation (the reference implementation)."""
         start = time.perf_counter()
         obs = self._reset_generation(row_init_qpos)
         returns = np.zeros(self.rows, dtype=np.float32)
@@ -703,7 +761,6 @@ class Go2NeatEnv(BatchedEpisodeEnv):
             "end_reasons": {name: int(np.count_nonzero(ending == code)) for name, code in END_REASONS.items()},
             "init_qpos": init_qpos,
         }
-        validate_evaluation(result, self.pop_size, self.episodes_per_policy)
         return result
 
     @staticmethod
