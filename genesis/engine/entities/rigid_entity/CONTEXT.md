@@ -49,6 +49,14 @@ The `is_robot` flag selects a different convex-decomposition error threshold (`d
 `DroneEntity` and `TerrainEntity` are `RigidEntity` subclasses that only add data no link describes (propeller links/KF/KM for drones, height field/scales for terrain).
 Collision vs visual split: collision geoms (`RigidGeom`) drive contacts and are convexified/post-processed; visual geoms (`RigidVisGeom`) only render and use a lazily built low-res AABB mesh.
 
+# State accessor semantics (view vs copy)
+Every state getter here (`get_pos`/`get_quat`/`get_vel`/`get_ang`, `get_links_*`, `get_dofs_position`/`_velocity`/`_force`, link equivalents) forwards to the solver and returns a plain `torch.Tensor` on `gs.device` with dtype `gs.tc_float` — never a `qd.Tensor`, never numpy/host.
+The solver getters share one path, `Solver._read_data` → `qd_to_torch(..., copy=True)` (`genesis/utils/misc.py:885`): the cached DLPack view of the qd field is cloned contiguously and then masked, so each call returns a fresh device copy, not a live alias into solver memory.
+`get_links_vel` additionally composes `cd_vel + cd_ang × (pos − root_COM)` in torch (zero-copy/recording) or launches a gather kernel into a `torch.empty` output — a copy either way.
+`envs_idx`/`*_idx_local` selection goes through `indices_to_mask` (`range`→`slice`, int→length-1 slice), so the default "all items" selection is a basic view of that clone while a list/tensor index gathers.
+Same-device in-place writes exist only on the setter side: `set_pos`/`set_quat`/`set_qpos`/`set_dofs_velocity`/`control_dofs_*` write the cached `qd_to_torch(..., copy=False)` view under `gs.use_zerocopy`, whereas `set_dofs_position` always clones `dofs.pos` whole and launches `kernel_set_dofs_position`.
+Getters clone the whole buffer before slicing, so a caller needing a zero-copy alias must call `qd_to_torch(solver.<field>, transpose=True, copy=False)` itself.
+
 # Gotchas
 `is_fixed` on a link is not "has a fixed joint": it means every joint on the link AND on every ancestor is FIXED, i.e. the link cannot move; this decides whether its vertices are computed once and shared across the batch (fixed) or stored per environment (free).
 Fixed links keep mass/COM/inertia as `None`/unresolved in the description until an `attach` sets them moving or the build zeroes them — do not read a meaningful inertia off a world-fixed link.
