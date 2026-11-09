@@ -35,6 +35,7 @@ Previously named Genesis (academic project since Dec 2024); now developed under 
 Beyond the Python package manager: `torch` (PyTorch, manual install), optional GPU backends (CUDA/ROCm/Metal), and optional extras defined in `pyproject.toml` (`dev`, `docs`, `render`, `usd`).
 IPC demos need `pyuipc`/`libuipc`; RL examples need `rsl-rl-lib`; Nyx walkthroughs live in the separate `genesis-nyx` repo.
 `examples/locomotion/try1.py` computes its control and reward with `evoxc` (EvoX Compiler), an optional package that is not declared in `pyproject.toml`.
+The TensorNEAT Go2-walking trainer (`examples/locomotion/go2_neat_train.py`) needs `evoxc` plus TensorNEAT 0.2.0 from its `evoxc` branch; neither is declared in `pyproject.toml`, and `rsl-rl-lib` covers only the PPO path.
 
 ## Test Strategy
 pytest configured in `pyproject.toml`: `--numprocesses=auto --dist=worksteal --import-mode=importlib --timeout=1200`, default deselection of `benchmarks`/`examples` markers.

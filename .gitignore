@@ -161,3 +161,6 @@ outputs/
 
 # Local benchmark archive (not versioned)
 /benchmarks/
+
+# agent scratch area (foreign-repo checkouts registered by tooling)
+.scratch/
