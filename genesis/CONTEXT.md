@@ -37,17 +37,17 @@ Autodiff replays a recorded rollout (`grad/`) rather than in-place autograd thro
 `RBC`/`styles` give Genesis its distinctive colorized, markup-tagged console output (`~<value>~`, `~~<name>~~`, `~~~<uid>~~~`, `~~~~<title>~~~~`).
 
 ## Constraints
-Coding conventions are enforced project-wide (see `../../CLAUDE.md`, `../../CODING_GUIDELINES.md`, `../../.github/contributing/`): the rigid solver (`engine/solvers/rigid/`) is the reference implementation for naming and kernel structure.
+Coding conventions are enforced project-wide (see `../CLAUDE.md`, `../CODING_GUIDELINES.md`, `../.github/contributing/`): the rigid solver (`engine/solvers/rigid/`) is the reference implementation for naming and kernel structure.
 No `getattr`/`hasattr`, no on-the-fly attributes, no plain dicts for attribute packing, no commented-out prints, no `detach().cpu().numpy()` (use `utils.misc.tensor_to_array`), no local imports unless required to break cycles.
 All state-mutating engine methods must be tagged `@mutates` so sensors and the rollout graph see mutations.
 External code in `ext/` does not follow these conventions (vendored).
 
 ## Dependencies
-Beyond pip (see `../../pyproject.toml`): `quadrants==1.4.0` (compiler/kernels), `torch` (install separately, per-backend), `trimesh>=5.0.0`, `mujoco>=3.2.5`, `numpy`.
+Beyond pip (see `../pyproject.toml`): `quadrants==1.4.0` (compiler/kernels), `torch` (install separately, per-backend), `trimesh>=5.0.0`, `mujoco>=3.2.5`, `numpy`.
 Optional backends: `pyuipc`/`libuipc` (IPC coupler), `usd-core`/`pxr` (USD), LuisaRenderPy (ray tracer, built from `ext/LuisaRender` submodule), `gs-madrona` (Linux batch renderer), `rsl-rl-lib` (RL examples).
 
 ## Test Strategy
-Package behavior is covered by the sibling `../../tests/` tree, not inside this node (`tests/rigid/`, `tests/particles/`, `tests/deformable/`, `tests/sensors/`, `tests/grad/`, `tests/parsers/`, `tests/rendering/`, ...).
+Package behavior is covered by the sibling `../tests/` tree, not inside this node (`tests/rigid/`, `tests/particles/`, `tests/deformable/`, `tests/sensors/`, `tests/grad/`, `tests/parsers/`, `tests/rendering/`, ...).
 Run `pytest -m required` (minimal merge set); default addopts exclude `benchmarks`/`examples` markers and run `--numprocesses=auto --dist=worksteal --import-mode=importlib`.
 
 ## Notes for Agents
@@ -56,9 +56,9 @@ Run `pytest -m required` (minimal merge set); default addopts exclude `benchmark
 Each child directory's CONTEXT.md holds the detailed per-module API; drill down before re-investigating.
 
 ## See Also
-- `../../README.md`, `../../pyproject.toml`, `../../CLAUDE.md`, `../../CODING_GUIDELINES.md` — project overview and conventions.
-- `../../tests/` — test suites (sibling, read-only).
-- `../../examples/` — runnable demos (sibling, read-only).
+- `../README.md`, `../pyproject.toml`, `../CLAUDE.md`, `../CODING_GUIDELINES.md` — project overview and conventions.
+- `../tests/` — test suites (sibling, read-only).
+- `../examples/` — runnable demos (sibling, read-only).
 
 ## Status
 Complete: package root and all child subpackages (`engine/`, `utils/`, `vis/`, `ext/`, `options/`, `recorders/`, `grad/`, `logging/`, `assets/`) are documented.
