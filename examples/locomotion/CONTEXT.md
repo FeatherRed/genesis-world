@@ -66,6 +66,7 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - Control/reward math lives exclusively in `go2_evox_kernels.py`; `try1.py` must not re-derive the standing pose, `dt`, or the reward terms.
 - `go2_train.py` / `go2_eval.py` enforce `rsl-rl-lib>=5.0.0` via `importlib.metadata` at import time.
 - `go2_env.py` imports `tensordict.TensorDict` and helpers from `genesis.utils.geom` (quat transforms).
+- `go2_neat_kernels.py` is deliberately one module (~1000 lines, mostly per-graph docstrings): it is the single import surface the env/train modules build against, so do not split it.
 - `go2_reward.png` is a git-ignored run artifact next to the script, never tracked.
 
 ## Design Decisions
