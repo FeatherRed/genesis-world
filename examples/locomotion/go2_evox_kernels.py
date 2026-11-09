@@ -232,12 +232,22 @@ def build_reward(backend=None, device=None):
 
 
 def _to_device_array(executable, array: np.ndarray):
-    """Stage a host array onto the executable's device (no-op for cpu)."""
+    """Stage a host array onto the executable's device (no-op for cpu).
+
+    Re-selects the executable's own backend first, so staging stays correct when several
+    backends serve the same device kind in one process (mixed-backend staging).
+    """
     arr = np.asarray(array)
     if arr.ndim > 0:
         arr = np.ascontiguousarray(arr)
     device = getattr(executable, "device", None)
     if device is not None and device.kind != "cpu":
+        backend = getattr(executable, "backend", None)
+        if backend:
+            # IREE and XLA can both serve cuda/rocm in one process; Tensor.to
+            # resolves the transfer provider of the last looked-up backend, so
+            # re-select this executable's backend before staging its inputs.
+            evoxc.backends.get(backend)
         return evoxc.from_numpy(arr).to(device)
     return arr
 
