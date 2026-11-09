@@ -41,7 +41,9 @@ Authoring rules live in `.github/contributing/EXAMPLES.md`; read it before addin
 # Dependencies
 
 - Core package covers most examples; extras used: `usd` (`usd-core`/`pxr`, `filelock`), `render` (`imgui-bundle`, `open3d`, `pybind11`), `dev` (`tensordict`, `matplotlib`, `huggingface_hub`, etc.).
-- Not in `pyproject.toml` (install separately): `pyuipc` (IPC demos), `rsl-rl-lib>=5.0.0` + `tensorboard` (drone/locomotion/manipulation RL).
+- Not in `pyproject.toml` (install separately): `pyuipc` (IPC demos), `rsl-rl-lib>=5.0.0` + `tensorboard` (drone/manipulation RL, and the locomotion PPO path `go2_train.py`/`go2_eval.py` only).
+- Also not in `pyproject.toml`: `evoxc` (EvoX Compiler, 0.1.0) is required by the locomotion scripted-trot demo `locomotion/try1.py` and by the TensorNEAT trainer `locomotion/go2_neat_train.py`; `tensorneat` 0.2.0 from its `evoxc` branch is required by the TensorNEAT trainer only.
+- Optional `iree-base-compiler`/`iree-base-runtime` adapters are what enable non-CPU `evoxc` targets; see `locomotion/CONTEXT.md` for the stack's dependency detail.
 - Optional backends: `LuisaRenderPy` (RayTracer; lives in the `genesis/ext/LuisaRender` git submodule), `gs_madrona` (Linux x86_64 native batch renderer, a core dep on that platform).
 - `pysplashsurf` (core dep) backs SPH surface reconstruction (e.g. `coupling/water_wheel.py --recon`).
 - Network-dependent scripts download assets from Hugging Face (`Genesis-Intelligence/assets`) at runtime.
