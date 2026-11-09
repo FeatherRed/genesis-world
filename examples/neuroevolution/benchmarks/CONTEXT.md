@@ -17,7 +17,11 @@ Nothing here is imported by the trainer or by the pilot envs: the dependency arr
 - `bench_runtime.py` — the Phase-2 CLI: `throughput --task {go2,hover} --pop-size {8,32} --horizon 200 --residency {numpy,device} --backend numpy|iree --device cpu:0|rocm:0 [--gpu] [--repeat N] [--process-role cold|warm|only] [--collision-cap N] [--out PATH]` and `residency-parity --task ... --pop-size 8 --horizon 200 [--gpu]`, plus the record builders, parity comparison, workload description and summary printer; both subcommands build once, run generation 0 as an untimed warm-up, then generations 1-3 as the timed set.
 - `bench_neat.py` — the Phase-3 CLI: `train --task {go2,hover} --master-seed N --pop-size 8 --generations 3 --horizon 200 --residency {numpy,device} --backend {numpy,iree} --device cpu:0|rocm:0 [--tell-backend {numpy,xla}] [--pjrt-plugin PATH] [--gpu] [--repeat N] [--process-role cold|warm|only] [--out PATH]` and `check-determinism A.json B.json [--out PATH]`, plus the workload block, the default record name and the two summary printers.
 - `bench_neat_measure.py` — the Phase-3 measurement: `measure(args)` (build env, build trainer, `setup()`, run with `env.evaluate` and `trainer.run_tell` timed separately via `RegionProbe`, restore every patch, held-out score, close), `holdout`, `generation_entry`, `fingerprint`/`fingerprint_payload`, `perturbation_for`, `genome_of`, `PopulationCapture` and the per-task genome/budget constants.
-- `results/` — the committed records (`env_<task>_replay_seed<seed>[_r<repeat>].json`, `env_<task>_throughput_<residency>_<physics>_pop<n>[_r<repeat>].json`, `residency_<task>_<gpu|device_cpu>[_r<repeat>].json`).
+- `bench_probe.py` — the Phase-4 CLI: `unmatched` (torch baseline imports/adapters/install, PPO), `tell-backend` (one worker run per backend, NumPy/XLA expected ok, IREE/ROCm expected timeout) and `torch-cpu` (AST boundary scan + `import genesis` probe + cited committed boundary numbers).
+- `probe_sources.py` — the read-only source facts of the probe: the AST import/function scanner, the per-baseline `interface_mismatch`, `torch_scan`, and the extraction of committed `state_read`/throughput/residency boundary blocks with their source file and git head.
+- `probe_runtime.py` — the probe's process transport: hard-timeout session subprocesses (`run_capture`), baseline `import_case`, the one `install_attempt` (pip then uv, `$TMPDIR` target only), `run_tell_entry` for `_tell_worker.py`, and the `gpu_after`/`tell_worker_processes` cleanup proof.
+- `_tell_worker.py` — the tell-graph worker: smallest honest TensorNEAT pipeline (45->12, pop 4), `build_tell` + one `run_tell` on the requested backend, printing a `PHASE` marker before every step so a killed build still reports how far it got.
+- `results/` — the committed records (`env_<task>_replay_seed<seed>[_r<repeat>].json`, `env_<task>_throughput_<residency>_<physics>_pop<n>[_r<repeat>].json`, `residency_<task>_<gpu|device_cpu>[_r<repeat>].json`, `unmatched_baselines.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json`).
 
 ## Constraints
 - No module imports `genesis`, `torch`, `tensordict` or `evoxc` at module level; `common.py` imports none of them at all, the oracles import their siblings inside the functions, and `bench_runtime.py` imports genesis lazily inside its GPU path.
@@ -27,6 +31,8 @@ Nothing here is imported by the trainer or by the pilot envs: the dependency arr
 - Timings are host wall clock with `common.sync()` before and after each generation; a record states which regions were synchronized (a no-op on CPU-resident runs), what the unmeasured `residual` is, and reports median plus spread over the three timed generations rather than a single number.
 - Traffic counters stay mutually exclusive (bytes are counted only on the primitive transport functions, outer wrappers count calls only) so `residual_s` cannot go negative.
 - Files stay well under ~1000 lines, one module per concern, and never write outside this directory.
+- Every Phase-4 foreign-process measurement runs in its own session with a hard timeout and a process-group kill: `probe_runtime.run_capture` redirects the child's output to temp files (a full pipe would block before the timeout), kills the group on expiry and returns the tail, and `_tell_worker.py` prints a `PHASE` marker before every step so a timeout still records the phase it reached.
+- A timeout is recorded as `status="timeout"` with its wall time and last phase, never substituted by a CPU result; `probe_sources.py` only parses the modules it scans, and `_tell_worker.py` imports no `genesis` or `torch`.
 
 ## Routing Table
 - `common.py` -> record schema, host/git/package provenance, statistics and timing wrappers.
@@ -37,6 +43,10 @@ Nothing here is imported by the trainer or by the pilot envs: the dependency arr
 - `bench_runtime.py` -> the `throughput` and `residency-parity` measurements (timed generations, per-graph builds, host traffic, NumPy-vs-device parity) and their CLI.
 - `bench_neat.py` -> the `train` and `check-determinism` subcommands, the record blocks and the summary printers.
 - `bench_neat_measure.py` -> one training run: `measure`, the region probes, the held-out score and the determinism fingerprint.
+- `bench_probe.py` -> the Phase-4 `unmatched` / `tell-backend` / `torch-cpu` probes and their printers.
+- `probe_sources.py` -> AST source facts, `interface_mismatch` and the committed-boundary extraction.
+- `probe_runtime.py` -> hard-timeout subprocesses, the install attempt, the tell-worker runner and the GPU cleanup snapshot.
+- `_tell_worker.py` -> the phase-marked tell-graph worker subprocess.
 - `results/` -> committed raw records, one file per measurement.
 - `../../locomotion/go2_neat_env.py`, `../../drone/hover_neat_env.py` -> the instrumented pilot envs (siblings — read-only, escalate writes to parent).
 - `../trainer.py`, `../seeding.py` -> the shared layer the pilots are built on (siblings — read-only).
@@ -53,4 +63,5 @@ Nothing here is imported by the trainer or by the pilot envs: the dependency arr
 - A GPU process' generation 0 is first-touch dominated (Go2 8.0-8.5 s against a 1.3 s steady generation, hover 1.9-2.0 s against 1.25 s), which is why `phases.first_generation_s` and `phases.steady_generation_median_s` are reported separately and the record never quotes a single generation.
 - The xla tell matches the numpy tell in steady state (~6 ms) but costs an 11.8 s build and a 1.8 s first tell against 0.26-0.40 s and 0.01 s, and it changes the generation-1+ genomes: fitness drifts by 1.5e-05 and the held-out trained fitness by 7.6e-06 (fingerprints differ), so an xla-tell record is comparable in trend but not bit-identical to a numpy-tell one.
 - `--process-role cold` and `warm` produced identical build times here (26.5-27.4 s Go2, 23.9-24.0 s hover) because the quadrants/IREE disk caches were already warm; the pair still isolates process-level variance, and the Go2 CPU seed-0 pair reproduced fingerprint, fitness and held-out fitness exactly.
-- A bare `bench_envs.py` or `bench_runtime.py` prints usage and exits 0 so the `examples/**/*.py` smoke harness does not treat the CLI as a failing example; naming a subcommand parses strictly.
+- A bare `bench_envs.py`, `bench_runtime.py`, `bench_probe.py` or `_tell_worker.py` prints usage and exits 0 so the `examples/**/*.py` smoke harness does not treat the CLI as a failing example; naming a subcommand parses strictly.
+- The Phase-4 probes record what was NOT measured: both torch baselines are unmatched at import (`tensordict`/`rsl_rl`/`rsl-rl-lib` absent) and PPO is an unmatched algorithm baseline; `iree@rocm:0` tells time out inside `build_tell` while `numpy@cpu:0` and `xla@rocm:0` build, and `torch_cpu_boundary.json` cites the committed per-step boundary numbers instead of re-measuring them.
