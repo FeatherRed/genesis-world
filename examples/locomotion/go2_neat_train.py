@@ -55,7 +55,10 @@ Backends
 --------
 CPU/``numpy`` is the default. ``-g/--gpu`` runs Genesis on ``gs.gpu`` and the rollout and
 evolution graphs with IREE on ``cuda:0``. ``--tell-backend numpy`` explicitly runs
-evolution on CPU. For AMD rollout, pass ``--evoxc-device rocm:0``.
+evolution on CPU. On ROCm (``--evoxc-device rocm:0``) the rollout runs on IREE and the
+evolution defaults to XLA on ``rocm:0``, with an explicit ``--pjrt-plugin`` (or the
+``EVOXC_PJRT_PLUGIN`` environment variable) selecting the PJRT plugin, because IREE's ROCm
+compile of the ``tell`` graph does not terminate.
 
 Artifacts (git-ignored, never committed)
 ----------------------------------------
@@ -73,6 +76,7 @@ import argparse
 import json
 import logging
 import os
+import sys
 from pathlib import Path
 import time
 
@@ -245,8 +249,20 @@ def _parse_args(argv=None):
     parser.add_argument("--evoxc-device", type=str, default=None, help="Rollout device override, e.g. cuda:0 or rocm:0.")
     parser.add_argument(
         "--tell-backend",
-        choices=("numpy", "iree"),
-        help="Evolution backend override. Defaults to the rollout backend and device. NumPy uses CPU.",
+        choices=("numpy", "iree", "xla"),
+        help=(
+            "Evolution backend override. Defaults to the rollout backend and device, except on "
+            "ROCm where it defaults to xla. numpy = CPU; iree = IREE; xla = PJRT/XLA."
+        ),
+    )
+    parser.add_argument(
+        "--pjrt-plugin",
+        type=str,
+        default=None,
+        help=(
+            "Path to the XLA/PJRT plugin .so used by the xla tell backend; when omitted evoxc's "
+            "own discovery applies (EVOXC_PJRT_PLUGIN or the installed jax_plugins/*/*.so)."
+        ),
     )
     parser.add_argument("-v", "--vis", action="store_true", help="Open the Genesis viewer.")
     parser.add_argument("--quiet", action="store_true", help="Write the artifacts without per-generation lines.")
@@ -316,10 +332,17 @@ def main(argv=None):
     species_leaves = species_leaves_of(state.species)
     randkey = state.randkey
     generation_counter = state.generation
-    tell_backend = args.tell_backend or env.backend
+    if args.tell_backend:
+        tell_backend = args.tell_backend
+    elif env.backend == "numpy":
+        tell_backend = "numpy"
+    elif env.device.kind in ("rocm", "hip"):
+        tell_backend = "xla"  # IREE/ROCm tell compilation does not terminate
+    else:
+        tell_backend = env.backend
     tell_device = evoxc.Device("cpu", 0) if tell_backend == "numpy" else env.device
     tell_device_name = f"{tell_device.kind}:{tell_device.index}"
-    tell_key = ("tell", args.pop_size, tell_backend, tell_device_name)
+    tell_key = ("tell", args.pop_size, tell_backend, tell_device_name, args.pjrt_plugin)
 
     def tell_executable():
         """Look the tell executable up in the shared cache (compiled on the first call)."""
@@ -333,6 +356,7 @@ def main(argv=None):
                 args.pop_size,
                 backend=tell_backend,
                 device=tell_device,
+                plugin_path=args.pjrt_plugin,
             ),
         )
 
@@ -464,6 +488,12 @@ def main(argv=None):
             f"{wall_time_s:.1f} s total, best fitness {best:+.4f}; "
             f"wrote {history_path} and {summary_path}"
         )
+    if tell_backend == "xla" and tell_device.kind != "cpu":
+        # A live PJRT client makes the ROCm plugin abort at interpreter exit (after the work
+        # is done, so the artifacts above are already on disk); skip the destructor.
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os._exit(0)
     return 0
 
 

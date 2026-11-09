@@ -833,7 +833,7 @@ def _species_specs(species_leaves) -> list:
     return [_spec_for(leaf, f"species_{index}") for index, leaf in enumerate(leaves)]
 
 
-def build_tell(algo, config, pop_arrays, species_leaves, n_policies, *, backend="numpy", device=None):
+def build_tell(algo, config, pop_arrays, species_leaves, n_policies, *, backend="numpy", device=None, plugin_path=None):
     """Compile the TensorNEAT ``tell`` graph: payload + fitness -> next generation.
 
     The graph returns the flat list ``[randkey, generation, *pop, *species]``; the
@@ -849,6 +849,9 @@ def build_tell(algo, config, pop_arrays, species_leaves, n_policies, *, backend=
         n_policies (int): Population size, the fitness vector length.
         backend (str): ``evoxc`` backend name.
         device (str | evoxc.Device | None): ``evoxc`` device.
+        plugin_path (str | os.PathLike | None): XLA/PJRT plugin shared object; only used by
+            the ``xla`` backend.  ``None`` leaves evoxc's own discovery in charge
+            (``EVOXC_PJRT_PLUGIN`` or the installed ``jax_plugins/*/*.so``).
 
     Returns:
         evoxc.Executable: bound executable; ``run_tell`` stages its operands.
@@ -886,6 +889,8 @@ def build_tell(algo, config, pop_arrays, species_leaves, n_policies, *, backend=
     if resolved_backend == "iree" and resolved_device.kind == "cuda":
         # IREE 3.13's default CUDA reduction distribution rejects the tell graph.
         options["iree_compile_args"] = ["--iree-codegen-llvmgpu-use-reduction-vector-distribution=false"]
+    if resolved_backend == "xla" and plugin_path is not None:
+        options["plugin_path"] = str(plugin_path)
     executable = evoxc.build(kernel, *specs, backend=resolved_backend, device=resolved_device, **options)
     return _attach(
         executable,
