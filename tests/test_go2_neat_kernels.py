@@ -1,9 +1,11 @@
 """Behavioural tests for the TensorNEAT Go2 compiled-graph layer.
 
-``examples/locomotion/go2_neat_kernels.py`` owns every ``evoxc`` graph the TensorNEAT
-Go2-walking trainer asks for.  These tests drive those graphs directly -- no
-``genesis`` scene, no simulator, no training run -- and check the contracts the
-trainer relies on:
+``examples/locomotion/go2_neat_kernels.py`` owns the Go2 task graphs (observation,
+advance and reward) of the TensorNEAT Go2-walking trainer, while the generic
+policy/fitness graphs, the executable cache, the seed rules and the trace-only
+problem come from the shared ``examples/neuroevolution`` layer.  These tests
+drive those graphs directly -- no ``genesis`` scene, no simulator, no training
+run -- and check the contracts the trainer relies on:
 
 * the policy graph lays its rows out policy-major and consumes the genome payload
   policy-major;
@@ -35,18 +37,24 @@ pytest.importorskip("tensorneat")
 pytestmark = [pytest.mark.required]
 
 EXAMPLES_DIR = Path(__file__).parents[1] / "examples" / "locomotion"
-if str(EXAMPLES_DIR) not in sys.path:
-    sys.path.insert(0, str(EXAMPLES_DIR))
+NEUROEVOLUTION_DIR = Path(__file__).parents[1] / "examples" / "neuroevolution"
+for _example_dir in (EXAMPLES_DIR, NEUROEVOLUTION_DIR):
+    if str(_example_dir) not in sys.path:
+        sys.path.insert(0, str(_example_dir))
 
-from tensorneat import Pipeline, algorithm, genome, problem
+from tensorneat import Pipeline, algorithm, genome
 from tensorneat.common.tools import to_numpy
 
 import go2_legacy_reference as legacy
 import go2_neat_kernels as kernels
+from evolution_graphs import ExecutableCache, build_fitness, run_fitness
+from policy_graphs import build_policy, run_policy
+from seeding import EPISODES_PER_POLICY
+from trainer import TraceOnlyProblem
 
 #: Policies per traced generation; rows are policy-major, so rows are ``POP_SIZE * 3``.
 POP_SIZE = 3
-ROWS = POP_SIZE * kernels.EPISODES_PER_POLICY
+ROWS = POP_SIZE * EPISODES_PER_POLICY
 
 # Measured agreement (numpy evoxc backend vs the independent references):
 #   observation, 8 non-unit quaternion rows: max abs error ~3e-8
@@ -60,21 +68,6 @@ NUM_REWARD_STATES = 50
 NUM_RANDOM_QUATS = 3000
 
 
-class _TraceOnlyProblem(problem.BaseProblem):
-    """Stand-in problem for a pipeline that only supplies the genome statics.
-
-    ``build_policy`` needs a TensorNEAT ``(algo, config, pop_arrays)`` triple, and the
-    config is the tensor-free ``Pipeline._static_config`` of a ``Pipeline.setup()``.
-    Nothing is ever evaluated here: the fitness comes from the simulation.
-    """
-
-    input_shape = (kernels.NUM_OBS,)
-    output_shape = (kernels.NUM_ACTIONS,)
-
-    def evaluate(self, state, keys, act_fn, transformed):
-        raise NotImplementedError("the Go2 policy trace never evaluates the problem")
-
-
 @pytest.fixture(scope="module")
 def policy_under_test():
     """Build the policy graph once from the same statics ``Go2NeatEnv`` traces."""
@@ -85,10 +78,24 @@ def policy_under_test():
         max_conns=640,
     )
     algo = algorithm.NEAT(generator, pop_size=POP_SIZE, species_size=min(3, POP_SIZE))
-    pipeline = Pipeline(algo, _TraceOnlyProblem(), seed=0, backend="numpy", is_detailed=False)
+    pipeline = Pipeline(
+        algo,
+        TraceOnlyProblem(kernels.NUM_OBS, kernels.NUM_ACTIONS),
+        seed=0,
+        backend="numpy",
+        is_detailed=False,
+    )
     state = pipeline.setup()
     pop_arrays = tuple(np.array(to_numpy(leaf)) for leaf in state.pop)
-    executable = kernels.build_policy(algo, pipeline._static_config(state), pop_arrays, ROWS)
+    executable = build_policy(
+        algo,
+        pipeline._static_config(state),
+        pop_arrays,
+        ROWS,
+        num_inputs=kernels.NUM_OBS,
+        num_outputs=kernels.NUM_ACTIONS,
+        episodes=EPISODES_PER_POLICY,
+    )
     return executable, pop_arrays
 
 
@@ -227,30 +234,30 @@ def test_policy_rows_are_policy_major(policy_under_test):
 
     rng = np.random.default_rng(0)
     per_policy_obs = rng.normal(size=(POP_SIZE, kernels.NUM_OBS)).astype(np.float32)
-    obs = np.repeat(per_policy_obs, kernels.EPISODES_PER_POLICY, axis=0)
+    obs = np.repeat(per_policy_obs, EPISODES_PER_POLICY, axis=0)
 
-    actions = kernels.run_policy(executable, pop_arrays, obs)
+    actions = run_policy(executable, pop_arrays, obs)
     assert actions.shape == (ROWS, kernels.NUM_ACTIONS)
     assert actions.dtype == np.float32
 
     # The three episodes of one policy see identical observations -> bit-identical actions.
     for policy in range(POP_SIZE):
-        first = policy * kernels.EPISODES_PER_POLICY
+        first = policy * EPISODES_PER_POLICY
         np.testing.assert_array_equal(actions[first], actions[first + 1])
         np.testing.assert_array_equal(actions[first], actions[first + 2])
     # Distinct policies receive distinct observations and produce distinct actions.
     for left in range(POP_SIZE):
         for right in range(left + 1, POP_SIZE):
             assert not np.array_equal(
-                actions[left * kernels.EPISODES_PER_POLICY],
-                actions[right * kernels.EPISODES_PER_POLICY],
+                actions[left * EPISODES_PER_POLICY],
+                actions[right * EPISODES_PER_POLICY],
             )
 
     # Overwrite policy 1's payload with policy 0's payload: only rows 3..5 may change.
     copied = [np.array(leaf, copy=True) for leaf in pop_arrays]
     for leaf in copied:
         leaf[1] = leaf[0]
-    actions_copied = kernels.run_policy(executable, copied, obs)
+    actions_copied = run_policy(executable, copied, obs)
     changed = np.any(actions_copied != actions, axis=1)
     assert changed[3:6].all()
     assert not changed[0:3].any()
@@ -260,8 +267,8 @@ def test_policy_rows_are_policy_major(policy_under_test):
     # produce identical actions, while policy 2 (untouched) keeps its original output.
     obs_same = obs.copy()
     obs_same[3:6] = obs[0:3]
-    baseline_same = kernels.run_policy(executable, pop_arrays, obs_same)
-    copied_same = kernels.run_policy(executable, copied, obs_same)
+    baseline_same = run_policy(executable, pop_arrays, obs_same)
+    copied_same = run_policy(executable, copied, obs_same)
     assert not np.array_equal(baseline_same[0:3], baseline_same[3:6])
     np.testing.assert_array_equal(copied_same[0:3], copied_same[3:6])
     np.testing.assert_array_equal(baseline_same[6:9], copied_same[6:9])
@@ -270,7 +277,7 @@ def test_policy_rows_are_policy_major(policy_under_test):
     perturbed = obs.copy()
     row = 4
     perturbed[row] += 1.0
-    actions_perturbed = kernels.run_policy(executable, pop_arrays, perturbed)
+    actions_perturbed = run_policy(executable, pop_arrays, perturbed)
     changed_rows = np.any(actions_perturbed != actions, axis=1)
     assert changed_rows[row]
     assert changed_rows.sum() == 1
@@ -350,11 +357,11 @@ def test_first_done_truncation_error_and_timeout():
 
 def test_fitness_is_episode_mean_and_maximizes():
     n_policies = 4
-    executable = kernels.build_fitness(n_policies)
+    executable = build_fitness(n_policies)
     rng = np.random.default_rng(3)
-    returns = rng.normal(size=(n_policies, kernels.EPISODES_PER_POLICY)).astype(np.float32)
+    returns = rng.normal(size=(n_policies, EPISODES_PER_POLICY)).astype(np.float32)
 
-    fitness = kernels.run_fitness(executable, returns.ravel())
+    fitness = run_fitness(executable, returns.ravel())
     assert fitness.shape == (n_policies,)
     assert fitness.dtype == np.float32
     np.testing.assert_allclose(fitness, returns.mean(axis=1), rtol=0.0, atol=1e-6)
@@ -363,13 +370,13 @@ def test_fitness_is_episode_mean_and_maximizes():
     ordered = returns.copy()
     ordered[0] = np.abs(ordered[0]) + 10.0
     ordered[1] = -np.abs(ordered[1]) - 10.0
-    ordered_fitness = kernels.run_fitness(executable, ordered.ravel())
+    ordered_fitness = run_fitness(executable, ordered.ravel())
     assert ordered_fitness[0] > ordered_fitness[1]
 
     # A dead (zero-return) episode is still divided by all three episodes.
     with_dead_episode = returns.copy()
     with_dead_episode[3] = np.array([2.0, 4.0, 0.0], dtype=np.float32)
-    dead_fitness = kernels.run_fitness(executable, with_dead_episode.ravel())
+    dead_fitness = run_fitness(executable, with_dead_episode.ravel())
     assert abs(float(dead_fitness[3]) - (2.0 + 4.0 + 0.0) / 3.0) <= 1e-6
 
 
@@ -616,7 +623,7 @@ def test_roll_pitch_termination_matches_quat_to_xyz():
 
 
 def test_executable_cache_hits_misses_and_clear():
-    cache = kernels.ExecutableCache()
+    cache = ExecutableCache()
     built = []
     executable = object()
 

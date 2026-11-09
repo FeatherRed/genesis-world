@@ -2,9 +2,9 @@
 
 ``examples/locomotion/go2_neat_env.py`` is the batched, seeded evaluation environment of the
 TensorNEAT Go2 walking trainer.  One master seed is split into two independent random streams --
-the evolution stream (:func:`go2_neat_env.evolution_seed`, handed to the trainer's pipeline) and
-the per-generation episode-seed table (:func:`go2_neat_env.generation_seed_table`) -- and every
-episode seed is turned into a reset perturbation by :func:`go2_neat_env.perturbation_from_seed`
+the evolution stream (:func:`seeding.evolution_seed`, handed to the trainer's pipeline) and
+the per-generation episode-seed table (:func:`seeding.generation_seed_table`) -- and every
+episode seed is turned into a reset perturbation by :func:`seeding.perturbation_from_seed`
 and :func:`go2_neat_env.perturbed_init_qpos`.
 
 These tests pin the pure helper contracts (table shape / reproducibility / prefix stability, stream
@@ -18,9 +18,9 @@ a ``Go2NeatEnv`` (scene + four compiled graphs) costs 27 s on a warm compiler ca
 far past a single test's budget, so the batched reset path is left to the training example itself.
 
 The example modules are not a package (``go2_neat_env.py`` imports its siblings by bare name), so
-``examples/locomotion`` is put on ``sys.path`` before importing them.  ``evoxc`` and ``tensorneat``
-are not declared dependencies of ``genesis-world``, so the whole module is skipped where either is
-missing.
+``examples/locomotion`` and ``examples/neuroevolution`` are put on ``sys.path`` before importing
+them.  ``evoxc`` and ``tensorneat`` are not declared dependencies of ``genesis-world``, so the
+whole module is skipped where either is missing.
 """
 
 import sys
@@ -35,12 +35,21 @@ pytest.importorskip("tensorneat")
 pytestmark = [pytest.mark.required]
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples" / "locomotion"
-if str(EXAMPLES_DIR) not in sys.path:
-    sys.path.insert(0, str(EXAMPLES_DIR))
+NEUROEVOLUTION_DIR = Path(__file__).resolve().parents[1] / "examples" / "neuroevolution"
+for _example_dir in (EXAMPLES_DIR, NEUROEVOLUTION_DIR):
+    if str(_example_dir) not in sys.path:
+        sys.path.insert(0, str(_example_dir))
 
 import go2_neat_env as neat_env  # noqa: E402
 from genesis.utils.geom import quat_to_R, xyz_to_quat  # noqa: E402
-from go2_neat_kernels import EPISODES_PER_POLICY, NUM_ACTIONS, Perturbation  # noqa: E402
+from go2_neat_kernels import NUM_ACTIONS  # noqa: E402
+from seeding import (  # noqa: E402
+    EPISODES_PER_POLICY,
+    Perturbation,
+    evolution_seed,
+    generation_seed_table,
+    perturbation_from_seed as _shared_perturbation_from_seed,
+)
 
 MASTER_SEED = 20240601
 EPISODE_SEED = 1234567
@@ -72,9 +81,14 @@ INIT_QPOS = np.array(
 QPOS_SIZE = 7 + NUM_ACTIONS
 
 
+def perturbation_from_seed(seed, perturbation):
+    """Draw a Go2-shaped reset perturbation through the shared seeding rule."""
+    return _shared_perturbation_from_seed(seed, perturbation, num_dof=NUM_ACTIONS)
+
+
 def _expected_row(init_qpos, seed, perturbation) -> np.ndarray:
     """Assemble the 19-vector reset of ``seed`` from the drawn offsets, with an identity init quat."""
-    drawn = neat_env.perturbation_from_seed(int(seed), perturbation)
+    drawn = perturbation_from_seed(int(seed), perturbation)
     row = np.empty(QPOS_SIZE, dtype=np.float32)
     row[:3] = init_qpos[:3] + drawn["base_pos"]
     row[3:7] = drawn["base_quat"]
@@ -83,7 +97,7 @@ def _expected_row(init_qpos, seed, perturbation) -> np.ndarray:
 
 
 def test_generation_seed_table_shape_reproducibility_and_prefix_stability():
-    table = neat_env.generation_seed_table(MASTER_SEED, 5)
+    table = generation_seed_table(MASTER_SEED, 5)
     assert table.shape == (5, EPISODES_PER_POLICY)
     assert table.dtype == np.int64
     assert np.issubdtype(table.dtype, np.signedinteger)
@@ -93,8 +107,8 @@ def test_generation_seed_table_shape_reproducibility_and_prefix_stability():
         assert len(set(row.tolist())) == EPISODES_PER_POLICY, (generation, row)
 
     # Same master seed -> byte-identical table; a different master seed -> a different table.
-    np.testing.assert_array_equal(table, neat_env.generation_seed_table(MASTER_SEED, 5))
-    assert not np.array_equal(table, neat_env.generation_seed_table(MASTER_SEED + 1, 5))
+    np.testing.assert_array_equal(table, generation_seed_table(MASTER_SEED, 5))
+    assert not np.array_equal(table, generation_seed_table(MASTER_SEED + 1, 5))
 
     # Consecutive generations differ.
     for generation in range(4):
@@ -102,37 +116,37 @@ def test_generation_seed_table_shape_reproducibility_and_prefix_stability():
 
     # Prefix stability: rows are drawn one at a time, so asking for more generations must not
     # reshuffle the ones already materialized.
-    longer = neat_env.generation_seed_table(MASTER_SEED, 8)
+    longer = generation_seed_table(MASTER_SEED, 8)
     np.testing.assert_array_equal(longer[:5], table)
 
-    empty = neat_env.generation_seed_table(MASTER_SEED, 0)
+    empty = generation_seed_table(MASTER_SEED, 0)
     assert empty.shape == (0, EPISODES_PER_POLICY)
     assert empty.dtype == np.int64
 
 
 def test_evolution_seed_is_independent_of_the_environment_stream():
-    seed = neat_env.evolution_seed(MASTER_SEED)
+    seed = evolution_seed(MASTER_SEED)
     assert isinstance(seed, int)
     assert 0 <= seed < 2**32
-    assert seed == neat_env.evolution_seed(MASTER_SEED)  # stable
+    assert seed == evolution_seed(MASTER_SEED)  # stable
     assert seed != MASTER_SEED  # not the raw master seed
-    assert neat_env.evolution_seed(MASTER_SEED + 1) != seed
+    assert evolution_seed(MASTER_SEED + 1) != seed
 
     # The two children of `SeedSequence(master_seed).spawn(2)` never share values: the evolution
     # seed appears nowhere in the env table, however many generations are materialized.
-    table = neat_env.generation_seed_table(MASTER_SEED, 12, episodes=8)
+    table = generation_seed_table(MASTER_SEED, 12, episodes=8)
     assert seed not in set(table.ravel().tolist())
 
     # Consuming the environment stream (repeatedly) must not perturb the evolution stream.
     for num_generations in (1, 3, 16, 64):
-        neat_env.generation_seed_table(MASTER_SEED, num_generations, episodes=EPISODES_PER_POLICY)
-        assert neat_env.evolution_seed(MASTER_SEED) == seed
+        generation_seed_table(MASTER_SEED, num_generations, episodes=EPISODES_PER_POLICY)
+        assert evolution_seed(MASTER_SEED) == seed
 
 
 def test_perturbation_from_seed_determinism_and_bounds():
     perturbation = Perturbation(base_pos=0.1, base_rpy=0.2, joint_pos=0.3)
-    drawn = neat_env.perturbation_from_seed(EPISODE_SEED, perturbation)
-    repeated = neat_env.perturbation_from_seed(EPISODE_SEED, perturbation)
+    drawn = perturbation_from_seed(EPISODE_SEED, perturbation)
+    repeated = perturbation_from_seed(EPISODE_SEED, perturbation)
 
     assert set(drawn) == {"base_pos", "base_quat", "joint_pos"}
     for key, expected_shape in (("base_pos", (3,)), ("base_quat", (4,)), ("joint_pos", (NUM_ACTIONS,))):
@@ -141,7 +155,7 @@ def test_perturbation_from_seed_determinism_and_bounds():
         np.testing.assert_array_equal(drawn[key], repeated[key])  # bit-identical replay
 
     # Different seeds draw different perturbations.
-    other = neat_env.perturbation_from_seed(EPISODE_SEED + 1, perturbation)
+    other = perturbation_from_seed(EPISODE_SEED + 1, perturbation)
     for key in drawn:
         assert not np.array_equal(drawn[key], other[key]), key
 
@@ -157,16 +171,16 @@ def test_perturbation_from_seed_draw_order_is_amplitude_independent():
     for seed in (0, EPISODE_SEED, 2**31 - 1):
         for field in ("base_pos", "joint_pos"):
             for amplitude in (0.1, 0.2, 0.05):
-                wide = neat_env.perturbation_from_seed(seed, Perturbation(**{field: amplitude}))[field]
-                half = neat_env.perturbation_from_seed(seed, Perturbation(**{field: amplitude / 2}))[field]
+                wide = perturbation_from_seed(seed, Perturbation(**{field: amplitude}))[field]
+                half = perturbation_from_seed(seed, Perturbation(**{field: amplitude / 2}))[field]
                 np.testing.assert_array_equal(wide, 2.0 * half, err_msg=f"{field} seed={seed} amp={amplitude}")
 
     # Zeroing one amplitude must not shift the other fields' draws: every field is drawn from the
     # same stream in the same (base_pos, base_rpy, joint_pos) order, whatever its amplitude.
-    full = neat_env.perturbation_from_seed(EPISODE_SEED, Perturbation(0.1, 0.2, 0.3))
-    no_rpy = neat_env.perturbation_from_seed(EPISODE_SEED, Perturbation(0.1, 0.0, 0.3))
-    no_pos = neat_env.perturbation_from_seed(EPISODE_SEED, Perturbation(0.0, 0.2, 0.3))
-    no_joints = neat_env.perturbation_from_seed(EPISODE_SEED, Perturbation(0.1, 0.2, 0.0))
+    full = perturbation_from_seed(EPISODE_SEED, Perturbation(0.1, 0.2, 0.3))
+    no_rpy = perturbation_from_seed(EPISODE_SEED, Perturbation(0.1, 0.0, 0.3))
+    no_pos = perturbation_from_seed(EPISODE_SEED, Perturbation(0.0, 0.2, 0.3))
+    no_joints = perturbation_from_seed(EPISODE_SEED, Perturbation(0.1, 0.2, 0.0))
 
     np.testing.assert_array_equal(full["base_pos"], no_rpy["base_pos"])
     np.testing.assert_array_equal(full["joint_pos"], no_rpy["joint_pos"])
@@ -184,7 +198,7 @@ def test_perturbation_from_seed_draw_order_is_amplitude_independent():
 def test_perturbation_from_seed_quaternion_matches_the_drawn_rpy():
     # Rebuild the documented stream by hand: three base_pos draws, then three base_rpy draws.
     perturbation = Perturbation(base_pos=0.1, base_rpy=0.25, joint_pos=0.3)
-    drawn = neat_env.perturbation_from_seed(EPISODE_SEED, perturbation)
+    drawn = perturbation_from_seed(EPISODE_SEED, perturbation)
 
     rng = np.random.default_rng(EPISODE_SEED)
     base_pos = rng.uniform(-perturbation.base_pos, perturbation.base_pos, size=3)
@@ -203,7 +217,7 @@ def test_zero_perturbation_reproduces_the_fixed_reset():
     assert not Perturbation(base_rpy=-0.05).is_zero
     assert not Perturbation(joint_pos=0.05).is_zero
 
-    drawn = neat_env.perturbation_from_seed(EPISODE_SEED, zero)
+    drawn = perturbation_from_seed(EPISODE_SEED, zero)
     np.testing.assert_array_equal(drawn["base_pos"], np.zeros(3, dtype=np.float32))
     np.testing.assert_array_equal(drawn["base_quat"], np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32))
     np.testing.assert_array_equal(drawn["joint_pos"], np.zeros(NUM_ACTIONS, dtype=np.float32))
@@ -237,7 +251,7 @@ def test_perturbed_init_qpos_row_layout():
     assert rows.shape == (3, QPOS_SIZE)
     assert rows.dtype == np.float32
     for index, seed in enumerate(seeds):
-        drawn = neat_env.perturbation_from_seed(seed, perturbation)
+        drawn = perturbation_from_seed(seed, perturbation)
         np.testing.assert_array_equal(rows[index, :3], init_qpos[:3] + drawn["base_pos"])
         np.testing.assert_array_equal(rows[index, 7:], init_qpos[7:] + drawn["joint_pos"])
         # The base rotation is the world-axis composition q_pert * q_init (R_pert @ R_init), not
@@ -293,7 +307,7 @@ def test_perturbed_init_qpos_composes_rotation_after_init_orientation(monkeypatc
         init_qpos[3:7] = init_quat
         seed = int(rng.integers(0, 2**31 - 1))
         row = neat_env.perturbed_init_qpos(init_qpos, [seed], perturbation)[0]
-        drawn = neat_env.perturbation_from_seed(seed, perturbation)
+        drawn = perturbation_from_seed(seed, perturbation)
         np.testing.assert_allclose(
             quat_to_R(row[3:7]),
             quat_to_R(drawn["base_quat"]) @ quat_to_R(init_quat),
