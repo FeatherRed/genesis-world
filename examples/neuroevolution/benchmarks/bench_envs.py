@@ -28,10 +28,10 @@ Usage (from the repository root)::
 The sibling paths are added by the CLI itself (see :func:`common.setup_paths`), so ``PYTHONPATH``
 is only needed for the repository root import of ``common``/``oracle``.
 
-Later phases add ``throughput`` (many generations, no capture), ``residency`` (numpy vs device
-residency on the same workload) and ``batch`` (pop-size/horizon sweep) subcommands; the parser and
-the record schema below are already shaped for them -- :func:`replay` is the only implemented
-measurement, and the other subcommands are intentionally absent rather than stubbed.
+Phase 2 (``throughput``, ``residency-parity`` and the batch sweep) lives in the companion
+``bench_runtime.py`` CLI, which imports the instrumentation, the parity oracles and the record
+helpers from here and from :mod:`common` instead of copying them; this module stays the ``replay``
+measurement and the shared pilot-env plumbing.
 """
 
 from __future__ import annotations
@@ -207,25 +207,42 @@ def _load_task(task: str):
     raise ValueError(f"unknown task {task!r}; expected 'go2' or 'hover'")
 
 
-def _build_env(env_cls, pop_size: int, master_seed: int, horizon: int):
+def _build_env(
+    env_cls,
+    pop_size: int,
+    master_seed: int,
+    horizon: int,
+    *,
+    residency: str = "numpy",
+    backend: str = "numpy",
+    device=None,
+    stop_when_done: bool = False,
+    perturbation=None,
+):
     """Build one pilot environment in the reference configuration (NumPy residency, CPU).
 
     ``stop_when_done=False`` keeps every generation the same length, which is what makes the
     per-step timing means comparable between generations; the perturbation stays the default
     all-zero one, so the reset is the fixed reset of the pre-migration environment.
+
+    The keyword arguments are the residency/latency overrides ``bench_runtime.py`` needs (device
+    residency, an IREE graph target, a non-zero perturbation); every default reproduces the
+    reference configuration of ``replay`` exactly, so the replay record is unchanged.
     """
-    return env_cls(
-        int(pop_size),
-        int(master_seed),
-        horizon=int(horizon),
-        backend="numpy",
-        device=None,
-        show_viewer=False,
-        stop_when_done=False,
-    )
+    kwargs = {
+        "horizon": int(horizon),
+        "backend": backend,
+        "device": device,
+        "show_viewer": False,
+        "stop_when_done": bool(stop_when_done),
+        "residency": residency,
+    }
+    if perturbation is not None:
+        kwargs["perturbation"] = perturbation
+    return env_cls(int(pop_size), int(master_seed), **kwargs)
 
 
-def _instrument(task: str, env, timer: Timer, steps: StepCapture, resets: CallCapture) -> list:
+def _instrument(task: str, env, timer: Timer, steps, resets) -> list:
     """Monkey-patch the read-only sibling modules and ``genesis.Scene.step``; return restores.
 
     Every patch only wraps an existing callable (see :func:`common.wrap_function` /
@@ -237,8 +254,11 @@ def _instrument(task: str, env, timer: Timer, steps: StepCapture, resets: CallCa
         task (str): ``"go2"`` or ``"hover"``.
         env: The built environment (needed to reach the hover drone's actuator write).
         timer (Timer): Accumulators to fill.
-        steps (StepCapture): Capture of the advance-graph operands/outputs.
-        resets (CallCapture): Capture of hover's analytic reset-observation graph.
+        steps (StepCapture | None): Capture of the advance-graph operands/outputs; ``None`` times
+            the generation without capturing anything (the ``throughput`` measurement, whose
+            generations are long and whose record carries no per-step trace).
+        resets (CallCapture | None): Capture of hover's analytic reset-observation graph; ``None``
+            disables it for the same reason.
 
     Returns:
         list: Restore callables, to be called once the generations are done.
@@ -875,10 +895,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     replay.add_argument("--generations", type=int, default=DEFAULT_GENERATIONS, help="generations per process")
     replay.add_argument("--out", default=None, help="record path (default: results/env_<task>_replay_seed<seed>[_r<repeat>].json)")
-    # Planned, deliberately unimplemented subcommands of later phases:
-    #   throughput -- many generations, no capture, steps/s distribution
-    #   residency  -- numpy vs device residency on the same workload, bit-identical results
-    #   batch     -- pop-size / horizon sweep on one host
+    # Planned subcommand of a later phase (not implemented here):
+    #   batch -- pop-size / horizon sweep on one host
+    # ``throughput`` and ``residency-parity`` are implemented by ``bench_runtime.py``, which reuses
+    # ``_load_task`` / ``_build_env`` / ``_instrument`` / ``_generation_entry`` from this module.
     return parser
 
 

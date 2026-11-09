@@ -20,6 +20,9 @@ What it owns
   :func:`run_guarded` -- measurement mechanics: named accumulators filled by runtime
   monkey-patching of read-only sibling modules (files stay untouched; the patches are restored by
   the returned callable).
+* :class:`Counter`, :func:`wrap_traffic` -- the same mechanism for host <-> device crossings: a
+  residency measurement counts how often a rollout boundary is crossed and how many bytes the
+  harness estimates crossed it.
 
 Conventions
 -----------
@@ -460,6 +463,118 @@ class Timer:
                 "mean_s": (seconds / calls) if calls else None,
             }
         return out
+
+
+class Counter:
+    """Named call and byte counters, the host <-> device traffic twin of :class:`Timer`.
+
+    A residency measurement wraps the boundaries a rollout crosses (``read_state``, the actuator
+    write, the reset write, the graph staging and the device readbacks) and accumulates how often
+    each is crossed and how many bytes the harness estimates crossed it.  Like :class:`Timer` it
+    keeps totals only, never per-call samples, so a record stays small.
+
+    Args:
+        names (iterable of str, optional): Pre-create these counters at zero, so a record shows
+            every boundary even when a residency never crosses it.
+    """
+
+    def __init__(self, names=()):
+        self._data = {}
+        for name in names:
+            self.add(name, calls=0, nbytes=0)
+
+    def add(self, name: str, calls: int = 1, nbytes: int = 0) -> None:
+        """Add ``calls`` crossings and ``nbytes`` to the counter ``name``."""
+        entry = self._data.get(name)
+        if entry is None:
+            entry = {"calls": 0, "nbytes": 0}
+            self._data[name] = entry
+        entry["calls"] += int(calls)
+        entry["nbytes"] += int(nbytes)
+
+    def snapshot(self) -> dict:
+        """Return an immutable copy of the counters (``{name: (calls, nbytes)}``)."""
+        return {name: (entry["calls"], entry["nbytes"]) for name, entry in self._data.items()}
+
+    def delta(self, before: dict, after: dict | None = None) -> dict:
+        """Return ``{name: (calls, nbytes)}`` between two :meth:`snapshot` results."""
+        after = self.snapshot() if after is None else after
+        names = list(dict.fromkeys([*before, *after]))
+        out = {}
+        for name in names:
+            calls, nbytes = after.get(name, (0, 0))
+            calls0, nbytes0 = before.get(name, (0, 0))
+            out[name] = (calls - calls0, nbytes - nbytes0)
+        return out
+
+    def as_dict(self, snapshot: dict | None = None, steps: int | None = None) -> dict:
+        """Return ``{name: {"calls", "nbytes", "bytes_per_call", "calls_per_step", "bytes_per_step"}}``.
+
+        The two per-step fields need ``steps`` (the generation's ``scene.step()`` count) and are
+        ``None`` without it.
+        """
+        data = self.snapshot() if snapshot is None else snapshot
+        out = {}
+        for name, (calls, nbytes) in data.items():
+            out[name] = {
+                "calls": int(calls),
+                "nbytes": int(nbytes),
+                "bytes_per_call": (nbytes / calls) if calls else None,
+                "calls_per_step": (calls / steps) if steps else None,
+                "bytes_per_step": (nbytes / steps) if steps else None,
+            }
+        return out
+
+
+def wrap_traffic(container, name: str, counter: Counter, tag: str, size=None):
+    """Monkey-patch ``container.name`` to count calls (and bytes) into ``counter[tag]``.
+
+    ``container`` may be a module or a class, exactly like :func:`wrap_function` /
+    :func:`wrap_method`; a ``staticmethod`` is re-installed as a ``staticmethod``.  The elapsed
+    time is not measured here (that is :class:`Timer`'s job), only the crossings, so a wrapper can
+    be combined with a timing wrapper of the same attribute only by nesting one inside the other.
+
+    Args:
+        container: Module or class owning the attribute.
+        name (str): Attribute name to wrap.
+        counter (Counter): Counter to fill.
+        tag (str): Counter name the crossings are accumulated into.
+        size (callable, optional): ``size(args, kwargs, result) -> int``, the estimated bytes one
+            call moves; ``None`` counts the call with zero bytes, and a raising ``size`` degrades
+            to zero bytes rather than breaking the measurement.
+
+    Returns:
+        callable: Restore function putting the original attribute back.
+    """
+    was_static = isinstance(inspect.getattr_static(container, name), staticmethod)
+    original = getattr(container, name)
+
+    def wrapper(*args, **kwargs):
+        result = original(*args, **kwargs)
+        nbytes = 0
+        if size is not None:
+            try:
+                nbytes = int(size(args, kwargs, result))
+            except Exception:  # noqa: BLE001 - an unmeasurable call still counts as one crossing
+                nbytes = 0
+        counter.add(tag, calls=1, nbytes=nbytes)
+        return result
+
+    wrapper.__name__ = getattr(original, "__name__", "wrapper")
+    wrapper.__wrapped__ = original
+    wrapper.__doc__ = getattr(original, "__doc__", None)
+    if was_static:
+        setattr(container, name, staticmethod(wrapper))
+    else:
+        setattr(container, name, wrapper)
+
+    def restore():
+        if was_static:
+            setattr(container, name, staticmethod(original))
+        else:
+            setattr(container, name, original)
+
+    return restore
 
 
 def wrap_function(module, name: str, timer: Timer, tag: str, on_call=None, exclusive: bool = False):
