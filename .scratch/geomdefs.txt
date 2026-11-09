@@ -1,0 +1,60 @@
+﻿22: def qd_compare_sign(a, b):
+35: def qd_is_equal_vec(a, b, eps: float):
+43: def qd_i_cross_vec(vec):
+48: def qd_j_cross_vec(vec):
+53: def qd_k_cross_vec(vec):
+58: def qd_vec_to_skew(vec):
+71: def qd_transform_by_quat_fast(v, quat):
+92: def qd_transform_by_trans_quat_fast(pos, trans, quat):
+100: def qd_xyz_to_quat(xyz):
+123: def qd_svd(A: qd.types.matrix(3, 3)):
+159: def qd_R_to_xyz(R, eps):
+178: def qd_half_angle_terms(thetasq):
+210: def qd_rotvec_to_quat(rotvec):
+219: def qd_rotvec_to_R(rotvec):
+231: def qd_rotvec_to_quat_grad_rotvec(rotvec, out_grad):
+246: def qd_quat_to_R(quat, eps):
+274: def qd_quat_to_xyz(quat, eps):
+306: def qd_quat_to_xyz_grad_quat(quat, eps, out_grad):
+393: def qd_quat_to_rotvec(quat):
+419: def qd_trans_quat_to_T(trans, quat, eps):
+427: def qd_inv_quat(quat):
+432: def qd_quat_mul_axis(q, axis):
+444: def qd_quat_mul(u, v):
+454: def qd_quat_mul_grad_lhs(u, v, out_grad):
+468: def qd_quat_mul_grad_rhs(u, v, out_grad):
+482: def qd_transform_quat_by_quat(v, u):
+492: def qd_transform_by_quat(v, quat):
+510: def qd_transform_by_quat_grad_quat(v, quat, out_grad):
+557: def qd_inv_transform_by_quat(v, quat):
+562: def qd_transform_by_T(pos, T):
+567: def qd_inv_transform_by_T(pos, T):
+572: def qd_transform_by_trans_quat(pos, trans, quat):
+577: def qd_inv_transform_by_trans_quat(pos, trans, quat):
+582: def qd_transform_motion_by_trans_quat(m_ang, m_vel, trans, quat):
+590: def qd_inv_transform_motion_by_trans_quat(m_ang, m_vel, trans, quat):
+597: def qd_transform_pos_quat_by_trans_quat(pos, quat, t_trans, t_quat):
+604: def qd_transform_inertia_by_trans_quat(i_inertial, i_mass, trans, quat, eps):
+623: def qd_atan2_fast(y, x):
+663: def qd_acos_fast(x):
+691: def qd_normalize(v, eps):
+699: def qd_identity_quat():
+704: def qd_vec3(val):
+709: def qd_nowhere():
+715: def qd_tet_vol(p0, p1, p2, p3):
+720: def inertial_mul(pos, i, mass, vel, ang):
+727: def motion_cross_force(m_ang, m_vel, f_ang, f_vel):
+734: def motion_cross_motion(s_ang, s_vel, m_ang, m_vel):
+741: def motion_cross_motion_grad(s_ang, s_vel, m_ang, m_vel, ang_grad, vel_grad):
+755: def qd_orthogonals(a):
+775: def joint_equality_residual(pos: float, diff: float, eq_data: qd.types.vector(18)):
+793: def imp_aref(params, neg_penetration, vel, pos):
+814: def imp_aref_grad(params, neg_penetration):
+881: def _tc_geom_constants(device: torch.device, dtype: torch.dtype) -> GeomConstants:
+940: def inv_quat(quat):
+951: def inv_T(T):
+967: def normalize(x, eps: float = 1e-12):
+976: def rot6d_to_R(d6):
+1007: def R_to_rot6d(R):
+1028: def _np_xyz_to_quat(xyz: np.ndarray, rpy: bool = False, out: np.ndarray | None = None) -> np.ndarray:
+1060: def _tc_xyz_to_quat(xyz: torch.Tensor, rpy: bool = False) -> torch.Tensor:

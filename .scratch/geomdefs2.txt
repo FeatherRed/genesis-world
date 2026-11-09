@@ -1,0 +1,140 @@
+﻿22: def qd_compare_sign(a, b):
+35: def qd_is_equal_vec(a, b, eps: float):
+43: def qd_i_cross_vec(vec):
+48: def qd_j_cross_vec(vec):
+53: def qd_k_cross_vec(vec):
+58: def qd_vec_to_skew(vec):
+71: def qd_transform_by_quat_fast(v, quat):
+92: def qd_transform_by_trans_quat_fast(pos, trans, quat):
+100: def qd_xyz_to_quat(xyz):
+123: def qd_svd(A: qd.types.matrix(3, 3)):
+159: def qd_R_to_xyz(R, eps):
+178: def qd_half_angle_terms(thetasq):
+210: def qd_rotvec_to_quat(rotvec):
+219: def qd_rotvec_to_R(rotvec):
+231: def qd_rotvec_to_quat_grad_rotvec(rotvec, out_grad):
+246: def qd_quat_to_R(quat, eps):
+274: def qd_quat_to_xyz(quat, eps):
+306: def qd_quat_to_xyz_grad_quat(quat, eps, out_grad):
+393: def qd_quat_to_rotvec(quat):
+419: def qd_trans_quat_to_T(trans, quat, eps):
+427: def qd_inv_quat(quat):
+432: def qd_quat_mul_axis(q, axis):
+444: def qd_quat_mul(u, v):
+454: def qd_quat_mul_grad_lhs(u, v, out_grad):
+468: def qd_quat_mul_grad_rhs(u, v, out_grad):
+482: def qd_transform_quat_by_quat(v, u):
+492: def qd_transform_by_quat(v, quat):
+510: def qd_transform_by_quat_grad_quat(v, quat, out_grad):
+557: def qd_inv_transform_by_quat(v, quat):
+562: def qd_transform_by_T(pos, T):
+567: def qd_inv_transform_by_T(pos, T):
+572: def qd_transform_by_trans_quat(pos, trans, quat):
+577: def qd_inv_transform_by_trans_quat(pos, trans, quat):
+582: def qd_transform_motion_by_trans_quat(m_ang, m_vel, trans, quat):
+590: def qd_inv_transform_motion_by_trans_quat(m_ang, m_vel, trans, quat):
+597: def qd_transform_pos_quat_by_trans_quat(pos, quat, t_trans, t_quat):
+604: def qd_transform_inertia_by_trans_quat(i_inertial, i_mass, trans, quat, eps):
+623: def qd_atan2_fast(y, x):
+663: def qd_acos_fast(x):
+691: def qd_normalize(v, eps):
+699: def qd_identity_quat():
+704: def qd_vec3(val):
+709: def qd_nowhere():
+715: def qd_tet_vol(p0, p1, p2, p3):
+720: def inertial_mul(pos, i, mass, vel, ang):
+727: def motion_cross_force(m_ang, m_vel, f_ang, f_vel):
+734: def motion_cross_motion(s_ang, s_vel, m_ang, m_vel):
+741: def motion_cross_motion_grad(s_ang, s_vel, m_ang, m_vel, ang_grad, vel_grad):
+755: def qd_orthogonals(a):
+775: def joint_equality_residual(pos: float, diff: float, eq_data: qd.types.vector(18)):
+793: def imp_aref(params, neg_penetration, vel, pos):
+814: def imp_aref_grad(params, neg_penetration):
+881: def _tc_geom_constants(device: torch.device, dtype: torch.dtype) -> GeomConstants:
+940: def inv_quat(quat):
+951: def inv_T(T):
+967: def normalize(x, eps: float = 1e-12):
+976: def rot6d_to_R(d6):
+1007: def R_to_rot6d(R):
+1028: def _np_xyz_to_quat(xyz: np.ndarray, rpy: bool = False, out: np.ndarray | None = None) -> np.ndarray:
+1060: def _tc_xyz_to_quat(xyz: torch.Tensor, rpy: bool = False) -> torch.Tensor:
+1069: def xyz_to_quat(xyz, rpy=False, degrees=False):
+1083: def _np_quat_to_R(quat: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+1118: def _tc_quat_to_R(quat: torch.Tensor) -> torch.Tensor:
+1124: def quat_to_R(quat, *, out=None):
+1140: def _np_quat_to_xyz(quat, rpy=False, out=None):
+1195: def _tc_quat_to_xyz(quat: torch.Tensor, eps: float, rpy: bool = False) -> torch.Tensor:
+1208: def quat_to_xyz(quat, rpy=False, degrees=False):
+1223: def _np_R_to_quat(R, out=None):
+1267: def _tc_R_to_quat(R: torch.Tensor) -> torch.Tensor:
+1278: def R_to_quat(R, *, out=None):
+1290: def R_to_xyz(R, rpy=False, degrees=False):
+1294: def trans_R_to_T(trans=None, R=None, *, out=None):
+1327: def R_to_T(R, *, out=None):
+1331: def trans_to_T(trans, *, out=None):
+1335: def trans_quat_to_T(trans=None, quat=None):
+1339: def T_to_trans(T):
+1343: def T_to_quat(T):
+1347: def T_to_trans_quat(T):
+1352: def _np_quat_mul(u, v, out=None):
+1383: def _tc_quat_mul(u: torch.Tensor, v: torch.Tensor) -> torch.Tensor:
+1389: def transform_quat_by_quat(v, u):
+1408: def _np_transform_by_quat(v, quat, out=None):
+1431: def _tc_transform_by_quat(v: torch.Tensor, quat: torch.Tensor) -> torch.Tensor:
+1437: def transform_by_quat(v, quat):
+1453: def axis_angle_to_quat(angle, axis):
+1470: def transform_by_xyz(pos, xyz):
+1474: def transform_by_trans_quat(pos, trans, quat):
+1478: def inv_transform_by_quat(pos, quat):
+1482: def inv_transform_by_trans_quat(pos, trans, quat):
+1486: def transform_pos_quat_by_trans_quat(pos, quat, t_trans, t_quat):
+1492: def inv_transform_pos_quat_by_trans_quat(pos, quat, t_trans, t_quat):
+1499: def transform_by_R(pos, R):
+1536: def transform_by_trans_R(pos, trans, R):
+1543: def transform_by_T(pos, T):
+1564: def inv_transform_by_T(pos, T):
+1574: def _tc_polar(A: torch.Tensor, pure_rotation: bool, side: Literal["right", "left"], eps: float):
+1666: def _np_polar_core_single(A, pure_rotation: bool, side_int: int):
+1742: def _np_polar_core_batched(A, pure_rotation: bool, side_int: int, U_out, P_out):
+1785: def _np_polar(A: np.ndarray, pure_rotation: bool, side: Literal["right", "left"]):
+1814: def polar(A, pure_rotation: bool = True, side: Literal["right", "left"] = "right"):
+1846: def _np_slerp(q0, q1, t):
+1866: def _tc_slerp(q0: torch.Tensor, q1: torch.Tensor, t: torch.Tensor, eps: float) -> torch.Tensor:
+1884: def slerp(q0, q1, t):
+1916: def scale_to_T(scale):
+1923: def _np_z_up_to_R(z, up=None, out=None):
+1972: def _tc_z_up_to_R(z: torch.Tensor, up: torch.Tensor | None, eps: float) -> torch.Tensor:
+2007: def z_up_to_R(z, up=None, out=None):
+2017: def pos_lookat_up_to_T(pos, lookat, up):
+2040: def T_to_pos_lookat_up(T):
+2047: def euler_to_quat(euler_xyz):
+2052: def _np_euler_to_R(rpy: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+2083: def euler_to_R(euler_xyz):
+2088: def quat_to_rotvec(quat: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+2128: def rotvec_to_quat(rotvec: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+2164: def _np_unit_axis_cos_sin_to_R(x: float, y: float, z: float, c: float, s: float, R: np.ndarray) -> None:
+2173: def axis_angle_to_R(axis: np.ndarray, theta: np.ndarray) -> np.ndarray:
+2193: def rotvec_to_R(rotvec: np.ndarray) -> np.ndarray:
+2210: def R_to_rotvec(R: np.ndarray, out: np.ndarray | None = None) -> np.ndarray:
+2224: def z_to_R(v_a: np.ndarray) -> np.ndarray:
+2258: def z_to_quat(v_a: np.ndarray) -> np.ndarray:
+2299: def compute_camera_angle(camera_pos, camera_lookat):
+2313: def transform_inertia_by_T(inertia_tensor, T, mass):
+2326: def spherical_to_cartesian(theta: torch.Tensor, phi: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+2351: def random_quaternion(batch_size):
+2361: def generate_grid_points_on_plane(lo: Vec3FType, hi: Vec3FType, normal: Vec3FType, nx: int, ny: int) -> np.ndarray:
+2411: def generate_ring_points_on_sphere(
+2486: def zero_pos():
+2490: def identity_quat():
+2494: def tc_zero_pos():
+2498: def tc_identity_quat():
+2502: def nowhere():
+2507: def default_solver_params():
+2528: def default_friction():
+2532: def default_friction_torsional():
+2536: def default_friction_rolling():
+2540: def default_dofs_kp(n=6):
+2544: def default_dofs_kv(n=6):
+2670: def cubic_spline_1d(x, y, xv):
+2754: def orthogonals(a) -> tuple[np.ndarray, np.ndarray]:
+2774: def qd_hash01(k0, k1, k2, k3):
