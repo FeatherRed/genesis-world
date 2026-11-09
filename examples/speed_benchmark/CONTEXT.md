@@ -11,7 +11,7 @@ Throughput and constraint-solver timing benchmarks for very large batched rigid-
 # Constraints
 
 - These are benchmarks, not tutorials; all call `gs.init(backend=gs.gpu, performance_mode=True)` and build huge `n_envs`.
-- Under pytest (`PYTEST_VERSION` set) `n_envs` collapses to 2 and step counts to a handful, and `gs.gpu` falls back to CPU (these scripts are not in `CUDA_SCRIPT_NAMES` in `tests/test_examples.py`).
+- When `PYTEST_VERSION` is present in `os.environ`, `n_envs` collapses to 2 and step counts to a handful, and `gs.gpu` falls back to CPU (these scripts are not in `CUDA_SCRIPT_NAMES` in `tests/test_examples.py`).
 
 # Dependencies
 
