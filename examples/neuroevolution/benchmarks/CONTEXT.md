@@ -30,6 +30,6 @@ Nothing here is imported by the trainer or by the pilot envs: the dependency arr
 ## Gotchas
 - `go2_neat_kernels.run_advance` returns only the aggregate reward, so a Go2 per-term deviation cannot be measured; the record sets `reward.per_term_available = false` with the reason and compares the total instead.
 - `hover_legacy_reference` reports reward terms pre-scale while `hover_kernels` reports them `dt`-scaled, so `oracle.hover_graph_terms` applies the one documented rescale (`total` agrees on both sides).
-- `Go2NeatEnv.evaluate` draws the per-generation seed perturbation outside its own `wall_time_s`, so `generation_total` and the env's counter differ; `phases.generation_total_scope` says so, and the first Go2 generation pays a multi-second one-off cost there.
+- `Go2NeatEnv.evaluate` draws the per-generation seed perturbation outside its own `wall_time_s`, so `generation_total` and the env's counter differ; `phases.generation_total_scope` says so, and that draw has been observed to cost seconds once (torch geometry warm-up) before settling at ~10 ms, so compare `host_rng` across records instead of assuming it is free.
 - The pilot builds dominate a run (`build_s` 5-40 s, quadrants disk-cache dependent), which is why every record reports `phases.build_s` separately from the generations.
 - A bare `bench_envs.py` prints usage and exits 0 so the `examples/**/*.py` smoke harness does not treat the CLI as a failing example; naming a subcommand parses strictly.
