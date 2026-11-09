@@ -6,7 +6,7 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 ## API Surface
 
 ### Scripted trot on EvoX Compiler graphs
-- `try1.py` → the demo. Default = viewer until the window is closed; `--max-steps N` bounds the viewer run; `--headless` runs 250 steps (5 s), keeps per-step rewards, writes `go2_reward.png` next to the script and prints cumulative total + final pose.
+- `try1.py` → the demo. Default = viewer until the window is closed (under pytest: no viewer, 5 steps); `--max-steps N` bounds the viewer run; `--headless` runs 250 steps (5 s), keeps per-step rewards, writes `go2_reward.png` next to the script and prints cumulative total + final pose.
   `--evox-backend` / `--evox-device` select the compiled-graph backend/device (default `numpy` / `cpu:0`); the resolved backend, device and compile time are printed.
 - `go2_evox_kernels.py` → the two `evoxc` graphs (pure evoxc ops, no torch, no genesis) plus build/run helpers; both graphs are compiled ONCE before the step loop and reused every step.
   `GAIT` runtime inputs: `step` (0-d int32), `previous_action` (float32, 12) → outputs `targets`, `action`, `action_change` (float32, 12 each).
@@ -71,6 +71,8 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - `torch` and `genesis` (project core).
 
 ## Gotchas
+- Under pytest (`PYTEST_VERSION` in the environment) `try1.py` creates no viewer and runs 5 steps, mirroring the shortened `go2_backflip.py` playback, so the example smoke test cannot hang on the viewer loop; explicit `--headless` (250 steps) and `--max-steps N` still win over that cap.
+- `scene.viewer` is `None` whenever the viewer is not shown, so `try1.py` only touches `scene.viewer` (follow / `is_alive`) when it actually created one.
 - The gait `step` input must be a 0-d `int32` ndarray; `np.ascontiguousarray` promotes 0-d to shape `(1,)` and the executable rejects it.
 - Static ndarray leaves specialize the graph but must still be passed to `evoxc.run` on every call (validated with `array_equal`).
 - Graph-time constants need `evoxc.constant(evoxc.from_numpy(arr))`; `evoxc.zeros` is a concrete creator, not a graph op.
@@ -80,7 +82,7 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - `go2_train.py` expects a GPU for the 4096-env throughput; `go2_eval.py`/`go2_backflip.py`/`try1.py` run on CPU or GPU.
 
 ## Test Strategy
-- `tests/test_examples.py` executes every `examples/**/*.py` as a subprocess, so `try1.py`, `go2_evox_kernels.py` and `go2_legacy_reference.py` all must import cleanly there (the last two exit immediately with no side effects).
+- `tests/test_examples.py` executes every `examples/**/*.py` as a subprocess, so `try1.py` must run there too: it detects `PYTEST_VERSION` and does 5 viewerless steps, while `go2_evox_kernels.py` and `go2_legacy_reference.py` just import cleanly (they exit immediately with no side effects).
 - That harness still ignores `*_train.py`, `*_eval.py`, `*_env.py`, `behavior_cloning.py`, `quadcopter_controller.py`; `go2_backflip.py` is the other smoke test here and shortens playback to 5 steps when `PYTEST_VERSION` is set.
 - Numeric parity is asserted against `go2_legacy_reference.py` with an ad-hoc script (not committed); no permanent unit test exists for it.
 
