@@ -8,7 +8,7 @@ It provides the canonical tensor/array conversion helpers, geometry math in thre
 # Routing Table
 
 - `usd/` → USD stage parser (Pixar `pxr` binding): `parse_usd_stage` / `parse_usd_rigid_entity`, `UsdContext`, material baking, collision filtering. Own CONTEXT.md.
-- `../engine/` → consumer of most kernels/structs here (solvers, BVH, FK) — sibling, read-only.
+- `../engine/` → consumer of `data.py` (the declarative struct layer) and owner of the concrete solver structs (`solvers/rigid/data.py`, `solvers/rigid/collider/data.py`, `solvers/rigid/constraint/data.py`) — sibling, read-only.
 - `../options/` → `morphs` (Mesh/Terrain/USD, etc.) and `Options` consumed by parsers — sibling, read-only.
 - `../typing.py`, `../constants.py`, `../repr_base.py` → shared types/constants/repr base imported throughout — siblings, read-only.
 - `../ext/` → vendored `urdfpy`, IsaacGym terrain utils, etc. — sibling, read-only.
@@ -30,8 +30,8 @@ Math & geometry:
 - `simt.py` — `@qd.func` SIMT block/segment primitives (`qd_block_sum/scan/min/max/shuffle/ballot/all/any`, lane-slot ops, `qd_segmented_sum/min`, `qd_segment_add/min`).
 
 Declarative solver data:
-- `data.py` — the declarative struct layer: `Data`, `StaticConfig`, `DataKind`, `field`, `requires`, `opt_in`/`is_opted_in`, `Size`/`SizeExpr`/`_SizeArithmetic`, `FieldRef`, `Namespace`/`namespace`, `V` (qd.tensor allocator honoring `gs.use_ndarray`), `eoa` (env-major axis order), `ENVS`/`WORKERS`, `iter_data`/`iter_state_arrays`/`check_data`/`fill_data`, `ArrayItem`/`ScalarItem`/`ConfigItem`.
-- `array_class.py` — the concrete solver struct dataclasses built on `data.py`: `RigidInfo`, `RigidData`, `Island*`, `IK*`, `ConstraintState`, `ContactData`/`DiffContactInput`/`SortBuffer`/`ContactCache`, `NarrowphaseWorkQueue`, `ColliderState`/`ColliderInfo`/`ColliderStaticConfig`, MPR/GJK/EPA states+scratch, `SDFInfo`/`SDFGeomInfo`, `DofsInfo`/`LinksInfo`/`JointsInfo`/`GeomsInfo`/`VertsInfo`/`FacesInfo`/`EdgesInfo` (+`State` counterparts, visual `V*` variants, `Entities*`/`EqualitiesInfo`), `DynInfo`/`DynState`, `RigidSimStaticConfig`, `RaycastResult`, `BVH*` structs/enums, `SAPContactQueriesState`, `ErrorCode` (IntEnum), and tile-size helpers `cholesky_tile_size_for`/`cholesky_packed_tile_shape`/`island_tile_caps`.
+- `data.py` — the declarative struct layer: `Data`, `StaticConfig`, `DataKind`/`CHECKPOINT_KINDS`, `field`, `opt_in`/`is_opted_in`, `Size`/`SizeExpr`/`_SizeArithmetic`, `FieldRef`, `Namespace`/`namespace`, `V` (qd.tensor allocator honoring `gs.use_ndarray`), `eoa` (env-major axis order), `ENVS`/`WORKERS`, `iter_data`/`iter_state_arrays`/`check_data`/`fill_data`, `ArrayItem`/`ScalarItem`/`ConfigItem`/`DataItem`.
+- There is no `array_class.py`: the concrete solver structs (`RigidInfo`/`RigidData`, `DynInfo`/`DynState`, `DofsInfo`/`DofsState`, `LinksInfo`/`LinksState`, `ErrorCode` subclasses, collider/constraint structs) live with their components under `../engine/solvers/rigid/`.
 - `ring_buffer.py` — `TensorRingBuffer` (preallocated circular buffer of tensors, view-returning `at`, `set`/`rotate`/`get`/`__getitem__`, host-resident index for perf).
 
 Caching:
@@ -70,13 +70,14 @@ Other:
 - Never use `tensor.detach().cpu().numpy()` in Genesis code — use `misc.tensor_to_array`/`tensor_to_cpu`/`data_to_array`.
 - Torch/Quadrants conversions go through `misc.qd_to_torch`/`qd_to_numpy` (zero-copy) and `qd_from_torch`; `qd_destroy_data` pairs with them.
 - Flat modules here are one level: only `usd/` is a child subdirectory; do not add subpackages to this node without routing them here.
-- `array_class.py` structs are consumed by `genesis/engine` kernels; their field layout/size ordering is load-bearing (do not reorder without a solver/kernel audit).
+- Solver struct field order is load-bearing: `Data` allocates arrays in declaration order and kernels consume the structs by name, so do not reorder `genesis/engine/solvers/rigid/**/data.py` fields without a solver/kernel audit.
 - The Quadrants monkey-patches in `misc.py` are load-bearing for autodiff/fast-cache/dispatcher behaviour — do not remove without understanding the `quadrants` internals they patch.
 
 # Design Decisions
 
 - One geometry API, three backends: `geom.py` keeps numpy (`_np_*`), torch (`_tc_*`), and Quadrants (`qd_*`) implementations in sync behind a single public name, so host-side parsing and device-side simulation share the same conventions.
-- Solvers are data-driven: `data.py` + `array_class.py` declare structs/fields once; kernels take those structs and are cached/compiled on equality of `StaticConfig`.
+- Solvers are data-driven: `data.py` provides the declarative layer and each component declares its structs/fields once under `../engine/solvers/rigid/`; kernels take those structs and are cached/compiled on equality of `StaticConfig`.
+- `Data` allocates every leaf array through `V()` on the current Quadrants device, resolves `float`/`int`/`bool` to `gs.qd_float`/`gs.qd_int`/`gs.qd_bool` (set in `genesis/__init__.py` at `gs.init`), turns an element shape such as `(float, 3)` into `qd.types.vector(3, gs.qd_float)`, and derives `needs_grad` from the field's `grad=True` and the constructor's `requires_grad`; the `ENVS` dim is declared last but stored env-first in memory on CPU by default.
 - Caches are two-tier: content-addressed on-disk caches (hash-keyed, version-bumped on algorithm change) plus owner/byte-bounded in-memory caches released on teardown via `register_cache_clear`.
 - Parsers converge on a common rigid-entity output tuple rather than a shared IR, keeping each format's quirks local.
 - `misc.py` re-exported via `__init__.py` makes conversion helpers available everywhere as `gs.utils.*`.
@@ -84,7 +85,7 @@ Other:
 # Known Issues
 
 - `raycast_qd.py` carries duplicated collision vs visual BVH traversal kernels (`bvh_ray_cast` vs `bvh_ray_cast_visual`, etc.); a FIXME documents that Quadrants cannot accept either of two dataclass shapes for one `qd.func` arg, forcing parallel copies.
-- `data.py` has FIXMEs referencing upstream Quadrants limitations (kernel reads `_qd_layout` privately; struct-for over a field ignores `serialize` on GPU; `qd.ndarray` takes no memory layout).
+- `data.py` works around upstream Quadrants limitations documented in FIXMEs: a kernel reads an ndarray's layout through private `_qd_layout`; a struct-for over a field ignores `serialize` on GPU; `qd.ndarray` takes no memory layout (so `V()` allocates ndarrays through `qd.tensor`); a kernel cannot take `None` for a struct argument (unused arrays become 0-d placeholders); Metal silently mis-addresses tensors above 2 GiB.
 - `mjcf.py` importing `mujoco` with `MUJOCO_GL=EGL` forcibly defines `PYOPENGL_PLATFORM=egl` (documented side effect).
 - Heavy optional dependencies are imported lazily inside functions (e.g. `pygel3d` in `hybrid.py`, `moviepy` in `tools.animate`), so module import stays cheap but the deps are still required at call time.
 
