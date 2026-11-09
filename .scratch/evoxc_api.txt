@@ -1,0 +1,12 @@
+﻿reduce_sum -> (x, axes=None, keepdims=False) -> "'core.SymbolicTensor'"
+exp -> (x) -> "'core.SymbolicTensor'"
+reshape -> (x, shape) -> "'core.SymbolicTensor'"
+stack -> (tensors, axis=0) -> "'core.SymbolicTensor'"
+concatenate -> (tensors, axis=0) -> "'core.SymbolicTensor'"
+where -> None
+select -> (pred, on_true, on_false) -> "'core.SymbolicTensor'"
+cast -> (x, dtype) -> "'core.SymbolicTensor'"
+minimum -> (x, y) -> "'core.SymbolicTensor'"
+maximum -> (x, y) -> "'core.SymbolicTensor'"
+abs -> (x) -> "'core.SymbolicTensor'"
+sum -> (x, axes=None, keepdims=False) -> "'core.SymbolicTensor'"

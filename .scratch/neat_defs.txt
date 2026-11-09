@@ -1,0 +1,29 @@
+﻿61:def _finite_bound(dtype: Any) -> Any:
+93:def _sanitize_fitness(fitness: Any, pop_size: int) -> Any:
+136:class NEAT(BaseAlgorithm):
+193:def __init__(
+269:def setup(self, state: Optional[State] = None) -> State:
+328:def _init_kernel(randkey):
+353:def _seed_species(self, cfg: State, first: GenomeTensors) -> SpeciesState:
+373:def _static_state(self, state: State) -> State:
+398:def _build_options(self, state: State) -> dict:
+428:def ask(self, state: State) -> GenomeTensors:
+443:def transform(self, state: State, pop: Any = None) -> Any:
+459:def forward(
+489:def prepare_forward(
+516:def forward_prepared(
+522:def tell(self, state: State, fitness: Any) -> State:
+593:def _create_next_generation(
+640:def _mutate(key: Any, *fields: Any) -> tuple:
+674:def _new_gene_keys(self, state: State, node_keys: Any) -> tuple[Any, Any]:
+766:def _batched(self, kernel: Callable, key: Any, *args: Any) -> Any:
+820:def body(carry, step):
+842:def show_details(self, state: State, fitness: Any) -> None:
+885:def _gene_counts(self, state: State, payload: GenomeTensors) -> tuple[Any, Any]:
+909:def _gene_count_executable(self, state: State, payload: GenomeTensors) -> Any:
+944:def _count_kernel(node_key_rows, conn_key_rows):
+964:def num_inputs(self) -> int:
+974:def num_outputs(self) -> int:
+984:def pop_size(self) -> int:
+990:class declares it read-only and the pipeline reads it).
+995:def _distance_rows(self, digest: Any, population: Any) -> Callable:

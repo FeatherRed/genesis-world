@@ -1,0 +1,22 @@
+﻿C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python.exe : C:\04_Study\github\EvoxC-Robotic\.venv\Lib\site-packages\ev
+oxc\numpy\creation.py:80: UserWarning: Embedding a tensor of 4147216 bytes as a graph constant (threshold 1048576 bytes
+, set via EVOXC_LARGE_CONSTANT_BYTES); prefer passing it as an explicit input instead.
+At line:1 char:159
++ ... ker_T1_A2"; C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python.exe ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\04_Study\git... input instead.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  return ops.constant(core.tensor(np.full(s, fill_value, dtype=dtype)))
+pop leaves: [(8, 80), (8, 80, 4), (8, 640, 2), (8, 640, 1)] species leaves: 10
+policy build 46.8 ms
+policy cold run 3.73 ms -> (24, 12) float32
+policy warm run 1.709 ms/call, identical=True
+same obs on a policy's 3 rows -> same action: True
+only row 7 changed its action: True [7]
+perturbed policy 0 changed: True | other policies unchanged: False
+tell build 196.7 ms
+tell outs: 16 | gen -> 1.0 | species leaves: 10
+new pop shapes: [(8, 80), (8, 80, 4), (8, 640, 2), (8, 640, 1)] | differs: [True, True, True, True]
+gen2 policy on cached executable: (24, 12) | changed: True
+gen2 policy run 2.48 ms (no rebuild)

@@ -1,0 +1,13 @@
+﻿1389:def transform_quat_by_quat(v, u):
+1390-    """
+1391-    This method transforms quat_v by quat_u.
+1392-
+1393-    This is equivalent to quatmul(quat_u, quat_v) or R_u @ R_v
+1394-    """
+1395-    assert u.ndim >= 1
+1396-
+1397-    if all(isinstance(e, torch.Tensor) for e in (u, v)):
+1398-        quat = _tc_quat_mul(u, v)
+1399-    elif all(isinstance(e, np.ndarray) for e in (u, v)):
+1400-        quat = _np_quat_mul(u, v, out=None)
+1401-    else:

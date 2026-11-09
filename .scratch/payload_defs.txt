@@ -1,0 +1,28 @@
+﻿80:def eval_chunk_rows(device_kind: Optional[str], max_nodes: int) -> int:
+118:def _is_function_like(value: Any) -> bool:
+133:def _qualified_name(value: Any) -> str:
+151:def _public_fields(value: Any) -> dict[str, Any]:
+176:def _object_config(value: Any, depth: int = 0) -> dict[str, Any]:
+204:def _attribute_config(value: Any, depth: int) -> Any:
+240:def _jsonable(value: Any) -> Any:
+256:def _config_value(owner: Any, name: str) -> Any:
+270:def _declared_shape(owner: Any, name: str) -> Optional[tuple[int, ...]]:
+289:def _schedule_overflow(schedule: Any) -> Any:
+303:def _slice_batch(tree: Any, start: int, stop: int, pop_size: int) -> Any:
+340:    def take(leaf: Any) -> Any:
+362:def materialize_payload(payload: Any) -> GenomeTensors:
+403:def _finite_fitness(fitnesses: Any) -> np.ndarray:
+450:def _device_kind(device: Any) -> Optional[str]:
+468:def _formulation_statics(device: Any) -> tuple[str, str, str]:
+495:def _formulation_signature(state: Any) -> tuple[str, str, str]:
+518:def _substrate_signature(algorithm: Any) -> tuple[Any, ...]:
+542:    def count(name: str) -> int:
+547:    def table(name: str) -> tuple[int, ...]:
+586:    def __init__(
+609:    def __call__(self, inputs: Any) -> Any:
+620:    def prepare(self, batch_rows: int) -> Callable[[Any], Any]:
+645:def _prepared_query(
+713:    def guard(inputs: Any) -> None:
+735:        def query(inputs: Any) -> Any:
+758:    def query_chunked(inputs: Any) -> Any:
+770:def _one_individual(payload: Any) -> tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray]:
