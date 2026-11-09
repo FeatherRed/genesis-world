@@ -91,8 +91,11 @@ one (up to 2.1e-4 on a policy fitness over 21 steps), which would change measure
 :func:`_quat_mul` therefore evaluates the same coefficient form as
 ``genesis.utils.geom._tc_quat_mul`` -- the Hamilton product
 ``(u * v)_k = sum_ij H[k, i, j] * u_i * v_j`` followed by a normalization -- with NumPy, which
-reproduces the torch reference bit-for-bit.  ``inv_quat`` and ``quat_to_xyz`` keep their NumPy
-branches, and ``transform_quat_by_quat`` is still used by :func:`perturbed_init_qpos`.
+reproduces the torch reference: individual components can land 1 ulp apart (the two reductions
+associate differently), and the graphs' own float32 rounding absorbs that, so the measured
+`returns` / `fitness` / `steps` / `end_reasons` are bit-identical to the torch boundary.
+``inv_quat`` and ``quat_to_xyz`` keep their NumPy branches, and ``transform_quat_by_quat`` is still
+used by :func:`perturbed_init_qpos`.
 
 Nothing else leaves the device: ``run_policy`` / ``run_obs`` / ``run_advance`` / ``run_fitness``
 are numpy-facing (the wrappers stage their own operands), so the observations, actions and returns
