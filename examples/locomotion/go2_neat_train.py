@@ -260,8 +260,10 @@ def _parse_args(argv=None):
         type=str,
         default=None,
         help=(
-            "Path to the XLA/PJRT plugin .so used by the xla tell backend; when omitted evoxc's "
-            "own discovery applies (EVOXC_PJRT_PLUGIN or the installed jax_plugins/*/*.so)."
+            "Path to the XLA/PJRT plugin .so used by the xla tell backend; also exported as "
+            "EVOXC_PJRT_PLUGIN (when that variable is unset) so device-device staging uses it. "
+            "When omitted evoxc's own discovery applies (EVOXC_PJRT_PLUGIN or the installed "
+            "jax_plugins/*/*.so)."
         ),
     )
     parser.add_argument("-v", "--vis", action="store_true", help="Open the Genesis viewer.")
@@ -301,6 +303,11 @@ def main(argv=None):
     backend = args.evoxc_backend or ("iree" if args.gpu else "numpy")
     device = args.evoxc_device or ("cuda:0" if args.gpu and backend != "numpy" else None)
     show_viewer = bool(args.vis) and not pytest_mode
+
+    if args.pjrt_plugin:
+        # `Tensor.to` passes no options, so the option-less PJRT discovery used
+        # for device staging must see the same plugin as the xla tell build.
+        os.environ.setdefault("EVOXC_PJRT_PLUGIN", str(args.pjrt_plugin))
 
     if not gs._initialized:
         if args.gpu:
