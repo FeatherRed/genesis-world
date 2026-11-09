@@ -27,8 +27,10 @@ Tests run on multiple backends (cpu/gpu/cuda/amdgpu/metal) and both field (`GS_E
   - Skip-reason registry (`SKIP_NO_GPU`, `SKIP_NO_MADRONA`, `SKIP_NO_LUISA`, `SKIP_NO_VIEWER`, `SKIP_NO_IPC`, `SKIP_METAL_64BIT`, …) with skip-location normalization for grouped summaries.
 - `gpu_info.py` — cross-vendor GPU discovery (`NvidiaBackend`/`AmdBackend` via NVML/AMD SMI, imported lazily) and `detect_gpu_backend()`.
 - `monitor_test_mem.py` — standalone per-process VRAM monitor; parses pytest process titles, writes pipe-delimited `key=value` results.
-- `test_examples.py` — discovers and runs `examples/*.py` as subprocesses (marker `examples`; optional-dependency gates, including `evoxc` for `locomotion/try1.py`; shared helper modules are ignored).
+- `test_examples.py` — discovers and runs `examples/*.py` as subprocesses (marker `examples`; optional-dependency gates, including `evoxc` for `locomotion/try1.py`; shared helper modules — `*_env.py`, `*_train.py`, `*_eval.py` and the explicit `go2_*` kernel/oracle files — are ignored).
 - `test_go2_evox_parity.py` — `required`; loads `examples/locomotion/go2_evox_kernels.py` and `go2_legacy_reference.py` by file path, skips when `evoxc` is absent, and compares 250 chained gait steps plus 200 randomized reward states against the legacy oracle.
+- `test_go2_neat_kernels.py` — `required`; loads `examples/locomotion/go2_neat_kernels.py` by file path, skips when `evoxc` is absent, and checks the TensorNEAT graph surfaces: policy-major `3p..3p+2` row tiling, first-done truncation (including the `max_episode_length` timeout and the never-re-arming `alive` mask), `run_fitness` = per-policy episode mean, observation/reward parity against `go2_env` and `go2_legacy_reference`, roll/pitch termination parity against `quat_to_xyz(rpy=True, degrees=True)`, and `ExecutableCache` hit/miss/clear behavior.
+- `test_go2_neat_seeding.py` — `required`; covers the seed plumbing of `examples/locomotion/go2_neat_env.py`: `generation_seed_table` shape/reproducibility/distinctness, independence from `evolution_seed`, `perturbation_from_seed` determinism/bounds/draw-order, `perturbed_init_qpos` row layout and seed indexing, and the zero-perturbation fixed reset.
 - `upload_benchmarks_table_to_wandb.py` — standalone W&B uploader for benchmark result files (memory/perf).
 
 ## Markers (declared in pyproject.toml, resolved in conftest.py)
@@ -73,18 +75,20 @@ Tests run on multiple backends (cpu/gpu/cuda/amdgpu/metal) and both field (`GS_E
 - `mj_sim`/`gs_sim`/`xml_path` depend on `model_name`/`gs_solver`/`gs_integrator`, which are **parametrize arguments** defined only in directories like `rigid/` (not fixtures) — requesting these parity fixtures in a directory that does not parametrize those names fails collection.
 - Cross-sibling fixture dependency: `deformable/test_fem.py` uses the `xml_path` fixture defined only in `parsers/conftest.py`, so running `tests/deformable/` in isolation fails collection (see `deformable/CONTEXT.md`).
 - GPU management libraries (`nvidia-ml-py`, `amdsmi`) are optional; without them multi-GPU affinity degrades to single-GPU (a warning is emitted).
-- `examples/locomotion/try1.py` still starts its interactive viewer when the `examples` smoke test launches it (it has no pytest/headless path yet), so that subprocess blocks until the 600 s timeout instead of exiting; it is dependency-gated on `evoxc` but not otherwise skippable from `tests/`.
+- `examples/locomotion/go2_neat_env.py` (`perturbed_init_qpos`) composes the drawn perturbation as `R_init @ R_perturb` although its docstring promises `q_pert * q_init` (world-axis perturbation); the discrepancy is invisible for Go2's identity `base_init_quat` and is pinned by the strict `xfail` in `test_perturbed_init_qpos_composes_rotation_after_init_orientation`.
 
 ## Test Strategy
 - Fast correctness tests are the default; `slow` (>=150s) run in the default suite but are scheduled first so they overlap with the rest.
 - `-m required` is the merge gate; `benchmarks`/`examples` are opt-in CI jobs.
 - Parity is validated both statically (model constants) and dynamically (per-step qpos/qvel/forces) against MuJoCo.
 - The Go2 EvoX Compiler graphs are checked against the legacy oracle with float32 tolerances: 5e-5 on gait outputs, 1e-5 per reward term, 1e-6 on the total.
+- The TensorNEAT Go2 stack is tested at the helper/kernel level only (no rollouts, no viewer, no training run): 1e-6 on observation assembly against a numpy reimplementation of `go2_env._update_observation`, 1e-5 per reward term against `go2_legacy_reference.walking_reward_terms`, and exact agreement on the roll/pitch termination decision over randomized, near-threshold and pitch≈±90° quaternions.
 - Rendering correctness is snapshot-based (blurred std/ratio thresholds) rather than exact pixel equality.
 - Coverage runs across backend × dtype (field/ndarray) and, where supported, cpu/gpu.
 
 ## Dependencies (beyond the package manager)
 - HuggingFace network access for the `Genesis-Intelligence/assets` and `Genesis-Intelligence/snapshots` datasets.
+- `evoxc` (+ `tensorneat`) for the Go2 compiler/NEAT tests — both optional and not declared in `pyproject.toml`, so those modules `importorskip` and skip silently when absent.
 - Optional renderers/backends: `gs-madrona` (BatchRenderer), `LuisaRenderPy` (RayTracer), `imgui-bundle` (overlay), `uipc` (IPC coupler), `pxr`/usd-core + omniverse-kit (USD), NVML/AMD SMI for GPU introspection.
 - pytest plugins: `pytest-xdist`, `pytest-forked`, `pytest-timeout`, `pytest-print`, `syrupy` (see `pyproject.toml` `dev` extra).
 
