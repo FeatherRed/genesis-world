@@ -193,7 +193,7 @@ def _tilt_exceeded_rows(quat: evoxc.SymbolicTensor, tan_limit: float):
     ``go2_env`` rule) for ``|roll| <= 180deg`` and ``|pitch| <= 90deg``::
 
         pitch = atan2(sinp, cosp)          -> |sinp| > tan(limit) * cosp
-        roll  = atan2(sinrcosp, cosrcosp)  -> |sinrcosp| > tan(limit) * cosrcosp * cosp
+        roll  = atan2(sinrcosp, cosrcosp)  -> |sinrcosp| > tan(limit) * cosrcosp
                                               (with the cosrcosp*cosp <= 0 quadrant guard)
 
     The sine/cosine products are the ones ``genesis.utils.geom._np_quat_to_xyz``
@@ -215,7 +215,7 @@ def _tilt_exceeded_rows(quat: evoxc.SymbolicTensor, tan_limit: float):
     pitch_exceeded = evoxc.greater(evoxc.abs(sinp), tan_limit * cosp)
     roll_exceeded = evoxc.logical_or(
         evoxc.less_equal(cosr, 0.0),
-        evoxc.greater(evoxc.abs(sinrcosp), tan_limit * cosr),
+        evoxc.greater(evoxc.abs(sinrcosp), tan_limit * cosrcosp),
     )
     return roll_exceeded, pitch_exceeded
 
