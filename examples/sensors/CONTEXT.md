@@ -20,7 +20,7 @@ Scripts follow the shared Genesis example pattern: `import genesis as gs` -> `gs
 - CLI follows the `examples/` convention (see `.github/contributing/EXAMPLES.md`): `-v/--vis` (default off), `-g/--gpu` (default CPU), `-t/--seconds` or `-s/--steps`, `-b/--num-envs`, `-o/--output-dir`; parser named `parser` at the top of `main()`.
 - Backend is spelled out: `gs.gpu if args.gpu else gs.cpu` except `camera_as_sensor.py`, which hardcodes `gs.init(backend=gs.gpu)` because it demonstrates the CUDA-only BatchRenderer.
 - Outputs go under `out/`, resolved against the launch directory.
-- Long-running loops break after one step when `"PYTEST_VERSION" in os.environ` (set by the examples CI) so CI stays cheap.
+- Long-running loops break after one step when `"PYTEST_VERSION" in os.environ` (a `.github/contributing/EXAMPLES.md` convention; the in-repo harness does not set it at HEAD) so CI stays cheap.
 
 # Dependencies
 - Core Python: `genesis`, `numpy`, `torch` (most scripts), `tqdm` (`contact_force_go2`, `imu_franka`, `joint_torque_franka`), `trimesh` (`depth_camera_custom_vverts`, `tactile_sandbox`).
