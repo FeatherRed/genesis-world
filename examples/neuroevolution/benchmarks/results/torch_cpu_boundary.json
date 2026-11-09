@@ -7,7 +7,7 @@
   ],
   "contended": false,
   "contention_reasons": [],
-  "created_utc": "2026-11-09T22:13:36Z",
+  "created_utc": "2026-11-09T22:14:10Z",
   "error": null,
   "git": {
     "baseline": "ad2f07e5",
@@ -15,11 +15,9 @@
     "baseline_env_diff_empty": true,
     "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
     "branch": "evogit-agent-T1-A56",
-    "dirty": true,
-    "dirty_files": [
-      "?? examples/neuroevolution/benchmarks/results/torch_cpu_boundary.json"
-    ],
-    "head": "599c5e5d3d705fe187a6a8d67b1e7ab10d19ede5"
+    "dirty": false,
+    "dirty_files": [],
+    "head": "42230b382ddbe614e4e50e362c3852623e039113"
   },
   "gpu": {
     "available": true,
@@ -31,8 +29,8 @@
   "host": {
     "cpu_count": 20,
     "gpu_busy": false,
-    "loadavg_1m": 0.97,
-    "loadavg_text": "0.97 1.04 0.92 20/651 3278019",
+    "loadavg_1m": 0.76,
+    "loadavg_text": "0.76 0.98 0.91 20/651 3278164",
     "platform": "linux",
     "python": "3.12.3",
     "rocm_driver": [
@@ -676,7 +674,7 @@
         "-c",
         "\nimport json\nimport sys\nimport time\n\nreport = {\"torch_in_sys_modules_before_genesis\": \"torch\" in sys.modules}\nstarted = time.perf_counter()\nimport genesis\nreport[\"genesis_import_s\"] = round(time.perf_counter() - started, 3)\nreport[\"genesis_version\"] = getattr(genesis, \"__version__\", None)\nreport[\"genesis_initialized\"] = bool(getattr(genesis, \"_initialized\", False))\nreport[\"genesis_device\"] = repr(getattr(genesis, \"device\", None))\nreport[\"torch_in_sys_modules_after_import_genesis\"] = \"torch\" in sys.modules\nimport torch\nreport[\"torch_version\"] = torch.__version__\nreport[\"torch_hip_version\"] = getattr(torch.version, \"hip\", None)\nreport[\"torch_cuda_version\"] = getattr(torch.version, \"cuda\", None)\navailable = bool(torch.cuda.is_available())\nreport[\"torch_cuda_is_available\"] = available\nreport[\"hip_device_visible\"] = bool(available and getattr(torch.version, \"hip\", None))\nreport[\"torch_cuda_device_count\"] = torch.cuda.device_count() if available else 0\nif available:\n    try:\n        report[\"hip_device_name\"] = torch.cuda.get_device_name(0)\n    except Exception as exc:\n        report[\"hip_device_error\"] = f\"{type(exc).__name__}: {exc}\"\nimport importlib.util\nreport[\"find_spec\"] = {}\nfor name in (\"torch\", \"tensordict\", \"rsl_rl\", \"evoxc\", \"tensorneat\"):\n    try:\n        report[\"find_spec\"][name] = importlib.util.find_spec(name) is not None\n    except Exception as exc:\n        report[\"find_spec\"][name] = f\"{type(exc).__name__}: {exc}\"\nprint(\"PROBE \" + json.dumps(report))\n"
       ],
-      "elapsed_s": 12.79394,
+      "elapsed_s": 12.490622,
       "exception": null,
       "method": "fresh subprocess, import genesis + torch, no scene",
       "report": {
@@ -688,7 +686,7 @@
           "torch": true
         },
         "genesis_device": "None",
-        "genesis_import_s": 12.11,
+        "genesis_import_s": 11.769,
         "genesis_initialized": false,
         "genesis_version": "1.4.6",
         "hip_device_name": "AMD Instinct MI300X VF",
@@ -717,8 +715,8 @@
     "torch": "2.13.0+rocm7.1"
   },
   "phases": {
-    "ast_scan_s": 0.0766072671395,
-    "runtime_probe_s": 12.794160712
+    "ast_scan_s": 0.0722873739433,
+    "runtime_probe_s": 12.4908346462
   },
   "process_role": "only",
   "repeat": 0,
