@@ -1,0 +1,3 @@
+﻿[evogit-agent-T1-A5 894645e0] Fix the roll termination predicate to compare against the unprojected roll cosine.
+ 1 file changed, 2 insertions(+), 2 deletions(-)
+894645e0 Fix the roll termination predicate to compare against the unprojected roll cosine.
