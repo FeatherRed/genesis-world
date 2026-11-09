@@ -166,7 +166,9 @@ class _DeviceRollout:
         }
         self._zeros["base_quat"][:, 0] = 1.0
         self._slot = torch.as_tensor(env._qpos_dof_slot, dtype=torch.int64, device=gs.device)
+        self._actions_dof_idx = torch.as_tensor(env.actions_dof_idx, dtype=torch.int64, device=gs.device)
         self._default_dof_pos = torch.as_tensor(env.default_dof_pos, dtype=gs.tc_float, device=gs.device)
+        self._inv_init_quat = None
         self._views = {}
         self._hal = None
 
@@ -238,7 +240,7 @@ class _DeviceRollout:
         dofs_vel = self._view(solver.dyn_state.dofs.vel)[:, self.env._control_dof_slice]
         return {
             "base_pos": qpos[:, :3].contiguous(),
-            "base_quat": transform_quat_by_quat(self.env._inv_init_quat, qpos[:, 3:7].contiguous()),
+            "base_quat": transform_quat_by_quat(self._inv_init_quat, qpos[:, 3:7].contiguous()),
             "base_lin_vel_world": self.env.robot.get_vel().contiguous(),
             "base_ang_vel_world": self.env.robot.get_ang().contiguous(),
             "dof_pos": dofs_pos.index_select(1, self._slot),
@@ -341,10 +343,9 @@ class _DeviceRollout:
 
         pop_operands = self._stage_pop(pop_arrays)
         row_init_qpos = torch.as_tensor(np.ascontiguousarray(row_init_qpos), dtype=gs.tc_float, device=gs.device)
-        # The per-row init orientation the graphs' relative quaternion is measured from, kept on the
-        # device as a view of the tile (as ``_reset_generation`` does, but without another copy).
-        env._init_quat = row_init_qpos[:, 3:7].contiguous()
-        env._inv_init_quat = inv_quat(env._init_quat)
+        # The per-row init orientation the graphs' relative quaternion is measured from, owned by this
+        # rollout: the env keeps its own host copy for the numpy path, which this bridge does not touch.
+        self._inv_init_quat = inv_quat(row_init_qpos[:, 3:7].contiguous())
         env.robot.set_qpos(row_init_qpos, envs_idx=None, zero_velocity=True, skip_forward=True)
         env.scene.clear_errno()  # drop any flag the previous generation left behind
         self._sync()  # the reset landed in torch's stream; the first graph reads it next
@@ -362,7 +363,7 @@ class _DeviceRollout:
             actions = self._run_policy(pop_operands, obs)
             self._sync()  # IREE wrote the action buffer; torch reads it next
             targets = last_actions * env.action_scale + self._default_dof_pos
-            env.robot.control_dofs_position(targets[:, env.actions_dof_idx], env._control_dof_slice)
+            env.robot.control_dofs_position(targets[:, self._actions_dof_idx], env._control_dof_slice)
             env.scene.step()
             steps += 1
 

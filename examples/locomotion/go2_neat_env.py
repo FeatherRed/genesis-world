@@ -51,7 +51,8 @@ Residency
 
 * ``"numpy"`` (the default, and the reference): every graph operand and result is a host array.
   The per-step state read, the control-target write and the reset write are the only boundaries,
-  and they go through ``.cpu().numpy()`` / ``torch.as_tensor(..., device=gs.device)``.
+  and they are torch-free: reads go through ``genesis.utils.misc.tensor_to_array`` and writes
+  hand NumPy arrays to the Genesis setters, which take ``array_like``.
 * ``"device"``: the same generation with every operand resident on the ``evoxc`` device.  The loop,
   the DLPack bridge and the exhaustive list of remaining host touches live in
   :mod:`go2_device_rollout`; this module only dispatches.  It needs a non-CPU ``evoxc`` device
@@ -68,26 +69,43 @@ CPU/float32; a caller that inits first (e.g. ``gs.init(backend=gs.gpu)``) keeps 
 precision.  The ``backend``/``device`` arguments select the ``evoxc`` backend of the compiled
 graphs only, via ``go2_evox_kernels.resolve_backend_device``.
 
-Torch <-> host round trips (``residency="numpy"``)
--------------------------------------------------
+Host boundary (``residency="numpy"``)
+------------------------------------
 Every conversion is confined to :meth:`Go2NeatEnv.read_state` (device -> host) and
-:meth:`Go2NeatEnv._write_targets` / :meth:`Go2NeatEnv._write_reset` (host -> device):
+:meth:`Go2NeatEnv._write_targets` / :meth:`Go2NeatEnv._write_reset` (host -> device), and none of
+them needs torch:
 
-* read with ``.detach().cpu().numpy().astype(np.float32)``: ``robot.get_pos()``, ``get_quat()``,
-  ``get_vel()``, ``get_ang()``, ``get_dofs_position(motors_dof_idx)``,
+* read with ``genesis.utils.misc.tensor_to_array(...).astype(np.float32)``: ``robot.get_pos()``,
+  ``get_quat()``, ``get_vel()``, ``get_ang()``, ``get_dofs_position(motors_dof_idx)``,
   ``get_dofs_velocity(motors_dof_idx)``, the base quaternion relative to the per-row init pose,
-  and its roll/pitch/yaw (the relative quaternion and its ``quat_to_xyz`` are evaluated on the
-  device, in torch);
-* read with ``.detach().cpu().numpy().astype(bool)``: ``scene.get_error_envs_mask()``;
-* write with ``torch.as_tensor(..., dtype=gs.tc_float, device=gs.device)``: the PD targets and
-  the per-row reset qpos;
-* ``motors_dof_idx`` / ``actions_dof_idx`` are built once in ``__init__`` (they are static) and
-  only their ``numpy`` copies index host arrays.
+  and its roll/pitch/yaw (both computed on the host);
+* read with ``tensor_to_array(...).astype(bool)``: ``scene.get_error_envs_mask()``;
+* write with a plain NumPy array: the PD targets and the per-row reset qpos, because
+  ``control_dofs_position`` and ``set_qpos`` take ``array_like`` and convert internally;
+* ``motors_dof_idx`` / ``actions_dof_idx`` are NumPy index arrays built once in ``__init__`` and
+  only their values ever reach a setter.
+
+The relative base quaternion is the one place where this path cannot reuse
+``genesis.utils.geom.transform_quat_by_quat``: its numba Hamilton product drifts from the torch
+one (up to 2.1e-4 on a policy fitness over 21 steps), which would change measured numbers.
+:func:`_quat_mul` therefore evaluates the same coefficient form as
+``genesis.utils.geom._tc_quat_mul`` -- the Hamilton product
+``(u * v)_k = sum_ij H[k, i, j] * u_i * v_j`` followed by a normalization -- with NumPy, which
+reproduces the torch reference: individual components can land 1 ulp apart (the two reductions
+associate differently), and the graphs' own float32 rounding absorbs that, so the measured
+`returns` / `fitness` / `steps` / `end_reasons` are bit-identical to the torch boundary.
+``inv_quat`` and ``quat_to_xyz`` keep their NumPy branches, and ``transform_quat_by_quat`` is still
+used by :func:`perturbed_init_qpos`.
 
 Nothing else leaves the device: ``run_policy`` / ``run_obs`` / ``run_advance`` / ``run_fitness``
 are numpy-facing (the wrappers stage their own operands), so the observations, actions and returns
 stay on the host.  Under ``residency="device"`` none of the above happens: the whole boundary is
-``go2_device_rollout``'s.
+``go2_device_rollout``'s, which keeps its torch usage and owns its own device-side init quaternion.
+
+The torch this module still pulls in is Genesis's own: ``gs.init`` imports it, every
+``robot.get_*`` accessor returns a ``torch`` tensor on ``gs.device``, and ``tensor_to_array`` is
+the single call that turns those tensors into host arrays.  No torch import, tensor op or device
+transfer is written here, and the compiled graphs run on their own (``evoxc``) backend.
 
 This module has no CLI; like the other ``*_env.py`` modules it is excluded from the example smoke
 tests.
@@ -100,12 +118,12 @@ import math
 import time
 
 import numpy as np
-import torch
 from tensorneat import Pipeline, algorithm, genome
 
 import genesis as gs
 
 from genesis.utils.geom import inv_quat, quat_to_xyz, transform_quat_by_quat
+from genesis.utils.misc import tensor_to_array
 
 from go2_evox_kernels import resolve_backend_device
 
@@ -294,17 +312,37 @@ def perturbed_init_qpos(init_qpos, seeds, perturbation):
 
 def _to_host_float(value):
     """Move one device tensor to the host as float32 (read side of the boundary)."""
-    return value.detach().cpu().numpy().astype(np.float32)
+    return tensor_to_array(value).astype(np.float32)
 
 
 def _to_host_bool(value):
     """Move one device tensor to the host as bool (read side of the boundary)."""
-    return value.detach().cpu().numpy().astype(bool)
+    return tensor_to_array(value).astype(bool)
 
 
-def _to_device_float(array):
-    """Move one host array to ``gs.device`` as float32 (write side of the boundary)."""
-    return torch.as_tensor(np.ascontiguousarray(array), dtype=gs.tc_float, device=gs.device)
+#: Hamilton-product coefficients ``H[k, i, j]`` of ``(u * v)_k = sum_ij H[k, i, j] * u_i * v_j``,
+#: transcribed from ``genesis.utils.geom._tc_geom_constants`` (``H[0]`` is the conjugate sign
+#: diagonal, ``H[k, 0, k] = H[k, k, 0] = 1`` the scalar-vector blocks, the rest the epsilon terms).
+_QUAT_MUL_COEFFICIENTS = np.zeros((4, 4, 4), dtype=np.float32)
+_QUAT_MUL_COEFFICIENTS[0] = np.diag(np.array((1.0, -1.0, -1.0, -1.0), dtype=np.float32))
+_QUAT_MUL_COEFFICIENTS[1, 0, 1] = _QUAT_MUL_COEFFICIENTS[1, 1, 0] = 1.0
+_QUAT_MUL_COEFFICIENTS[2, 0, 2] = _QUAT_MUL_COEFFICIENTS[2, 2, 0] = 1.0
+_QUAT_MUL_COEFFICIENTS[3, 0, 3] = _QUAT_MUL_COEFFICIENTS[3, 3, 0] = 1.0
+_QUAT_MUL_COEFFICIENTS[(3, 1, 2, 3, 1, 2), (1, 2, 3, 2, 3, 1), (2, 3, 1, 1, 2, 3)] = (1.0, 1.0, 1.0, -1.0, -1.0, -1.0)
+
+
+def _quat_mul(u, v):
+    """Hamilton product of w-first quaternions, normalized, in the torch coefficient form.
+
+    Args:
+        u (np.ndarray): ``(..., 4)`` w-first quaternions.
+        v (np.ndarray): ``(..., 4)`` w-first quaternions, broadcast against ``u``.
+
+    Returns:
+        np.ndarray: ``(..., 4)``, ``quatmul(u, v)`` up to the consumed normalization.
+    """
+    quat = (u[..., None, :, None] * v[..., None, None, :] * _QUAT_MUL_COEFFICIENTS).sum(axis=(-2, -1))
+    return quat / np.linalg.norm(quat, axis=-1, keepdims=True)
 
 
 class Go2NeatEnv(BatchedEpisodeEnv):
@@ -445,8 +483,8 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         # ``dof_start`` is the scene-level dof index of a joint; the robot is the only entity with
         # dofs here, so these double as the entity-local indices ``go2_env`` uses.
         motors_dof_idx = [self.robot.get_joint(name).dof_start for name in CFG["joint_names"]]
-        self.motors_dof_idx = torch.tensor(motors_dof_idx, dtype=gs.tc_int, device=gs.device)
-        self.actions_dof_idx = torch.argsort(self.motors_dof_idx)
+        self.motors_dof_idx = np.asarray(motors_dof_idx, dtype=np.int32)
+        self.actions_dof_idx = np.argsort(self.motors_dof_idx)
         self.robot.set_dofs_kp([CFG["kp"]] * NUM_ACTIONS, self.motors_dof_idx)
         self.robot.set_dofs_kv([CFG["kd"]] * NUM_ACTIONS, self.motors_dof_idx)
 
@@ -587,28 +625,33 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         """
         if self._inv_init_quat is None:
             raise RuntimeError("read_state() needs the per-row init pose; call evaluate() first")
-        base_quat_rel = transform_quat_by_quat(self._inv_init_quat, self.robot.get_quat())
+        base_quat = _to_host_float(self.robot.get_quat())
+        base_quat_rel = _quat_mul(base_quat, self._inv_init_quat)
         return {
             "base_pos": _to_host_float(self.robot.get_pos()),
-            "base_quat": _to_host_float(base_quat_rel),
+            "base_quat": base_quat_rel,
             "base_lin_vel_world": _to_host_float(self.robot.get_vel()),
             "base_ang_vel_world": _to_host_float(self.robot.get_ang()),
             "dof_pos": _to_host_float(self.robot.get_dofs_position(self.motors_dof_idx)),
             "dof_vel": _to_host_float(self.robot.get_dofs_velocity(self.motors_dof_idx)),
-            "base_rpy_deg": _to_host_float(quat_to_xyz(base_quat_rel, rpy=True, degrees=True)),
+            "base_rpy_deg": quat_to_xyz(base_quat_rel, rpy=True, degrees=True),
             "error_mask": _to_host_bool(self.scene.get_error_envs_mask()),
         }
 
     def _write_targets(self, targets):
         """Feed the PD controllers with joint-order host targets, ``(rows, 12)`` float32."""
-        target = _to_device_float(targets)
-        self.robot.control_dofs_position(target[:, self.actions_dof_idx], self._control_dof_slice)
+        self.robot.control_dofs_position(
+            np.ascontiguousarray(targets, dtype=np.float32)[:, self.actions_dof_idx], self._control_dof_slice
+        )
 
     def _write_reset(self, qpos, envs_idx=None):
         """Teleport rows ``envs_idx`` (all when ``None``) to ``qpos`` and kill their velocities."""
-        if envs_idx is not None:
-            envs_idx = torch.as_tensor(np.asarray(envs_idx), dtype=gs.tc_int, device=gs.device)
-        self.robot.set_qpos(_to_device_float(qpos), envs_idx=envs_idx, zero_velocity=True, skip_forward=True)
+        self.robot.set_qpos(
+            np.ascontiguousarray(qpos, dtype=np.float32),
+            envs_idx=None if envs_idx is None else np.asarray(envs_idx, dtype=np.int32),
+            zero_velocity=True,
+            skip_forward=True,
+        )
 
     def _reset_generation(self, row_init_qpos):
         """Apply one generation's init qpos to every row and return the initial observation.
@@ -618,7 +661,7 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         velocities and zero actions), exactly like ``go2_env.reset()`` -- no simulation step is
         needed to produce it.
         """
-        self._init_quat = _to_device_float(row_init_qpos[:, 3:7])
+        self._init_quat = np.ascontiguousarray(row_init_qpos[:, 3:7], dtype=np.float32)
         self._inv_init_quat = inv_quat(self._init_quat)
         self._write_reset(row_init_qpos)
         self.scene.clear_errno()  # drop any flag the previous generation left behind
