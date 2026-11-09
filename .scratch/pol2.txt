@@ -1,0 +1,4 @@
+﻿specs [TensorSpec(shape=(), dtype=object, name='node_keys'), TensorSpec(shape=(), dtype=object, name='node_attrs'), TensorSpec(shape=(), dtype=object, name='conn_keys'), TensorSpec(shape=(), dtype=object, name='conn_attrs')]
+patched transform: GenomeTensors [(), (), (), ()]
+  node_keys shape () conn ()
+ERR TensorNEATError transform expects node_keys of shape (P, max_nodes) with the population on axis 0, got shape ().

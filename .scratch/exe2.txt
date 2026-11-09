@@ -1,0 +1,3 @@
+﻿['backend', 'functions', 'device']
+mro (<class 'evoxc.pipeline.Executable'>, <class 'object'>)
+slots? None

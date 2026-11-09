@@ -1,0 +1,54 @@
+﻿build sig: (fn, *specs, backend=None, device=None, **options)
+defn sig: (fn: 'Optional[Callable[..., Any]]' = None, **options: 'Any') -> 'Any'
+def build(fn, *specs, backend=None, device=None, **options):
+    """``build(f, *specs) -> Executable``.
+
+    Documented shorthand for ``load(compile(lower(trace(fn, *specs),
+    backend), **options), backend, device, **options)`` �� no other behavior
+    (docstring must stay in sync with the expansion)::
+
+        graph = evoxc.trace(fn, *specs)
+        lowered = lower(graph, backend=backend, **options)
+        artifact = compile(lowered, **options)
+        return load(artifact, backend=backend, device=device, **options)
+
+    ``options`` are forwarded to ``lower``, ``compile`` AND ``load``
+    (stage-appropriate: each stage uses the keys it understands, validates
+    them against the backend's ``KNOWN_OPTIONS`` union �� a key valid for no
+    stage raises ``core.BackendError`` �� and ignores the rest, exactly as in
+    the explicit pipeline: e.g. the iree adapter's compile reads
+    ``target_backends``/``iree_compile_args`` while its load reads
+    ``iree_runtime_args``).
+
+    Default resolution (explicit kwargs always win; environment variables
+    are read lazily at call time): an unset ``backend`` resolves from
+    ``EVOXC_BACKEND`` (backend name; default ``"numpy"`` when unset), an unset
+    ``device`` from ``EVOXC_DEVICE`` (``"kind[:index]"``, e.g. ``"cpu"``,
+    ``"cuda:0"``, ``"rocm:0"``/``"hip:0"`` or ``"vulkan:0"``, parsed into a
+    ``core.Device``; a malformed value raises ``core.DeviceError`` naming the
+    variable and the value). When ``target_backends`` is not passed
+    explicitly, ``EVOXC_TARGET_BACKENDS`` (comma-separated list) supplies it;
+    otherwise an iree-family backend infers it from the resolved device ��
+    ``"cuda"`` -> ``["cuda"]``, ``"rocm"``/``"hip"`` -> ``["rocm"]``,
+    ``"vulkan"`` -> ``["vulkan-spirv"]``, ``"cpu"`` -> ``["llvm-cpu"]``.
+    Per-backend option env vars (``EVOXC_IREE_COMPILE_ARGS``,
+    ``EVOXC_IREE_RUNTIME_ARGS``, ``EVOXC_IREE_VULKAN_TARGET``,
+    ``EVOXC_XLA_COMPILE_OPTIONS``, ``EVOXC_TVM_TARGET``/``EVOXC_TVM_PASS_CONFIGS``
+    �� see ``evoxc.pipeline_options``) are applied per stage for option keys
+    not passed explicitly. Precedence (binding): explicit kwarg > env var >
+    evoxc default. With no environment set, the numpy defaults are unchanged.
+    """
+    backend, device, options = _resolve_backend_device(backend, device, options)
+    from evoxc.trace import trace as trace_fn
+
+    if not callable(fn) and not getattr(fn, "__evoxc_defn__", False):
+        raise TypeError(
+            f"build expects a callable or an @evoxc.defn function, got "
+            f"{type(fn).__name__} �� to stage an already-traced Graph use the "
+            f"explicit lower/compile/load pipeline"
+        )
+    graph = trace_fn(fn, *specs)
+    lowered = lower(graph, backend=backend, **options)
+    artifact = compile(lowered, **options)
+    return load(artifact, backend=backend, device=device, **options)
+
