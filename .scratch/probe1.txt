@@ -1,0 +1,36 @@
+﻿state type: <class 'tensorneat.common.state.State'>
+pop: <class 'tensorneat.genome.utils.GenomeTensors'> 4
+  pop leaf 0 (8, 80) int32
+  pop leaf 1 (8, 80, 4) float32
+  pop leaf 2 (8, 640, 2) int32
+  pop leaf 3 (8, 640, 1) float32
+species type: <class 'tensorneat.algorithm.neat.species.SpeciesState'>
+species tree: TreeSpec(<class 'tensorneat.algorithm.neat.species.SpeciesState'>, children=(TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf), TreeSpec(<class 'evoxc.core.tensor.Tensor'>, leaf)))
+n species leaves: 10
+  species leaf 0 (3,) float32
+  species leaf 1 (3,) float32
+  species leaf 2 (3,) float32
+  species leaf 3 (3,) float32
+  species leaf 4 (8,) float32
+  species leaf 5 (3, 80) int32
+  species leaf 6 (3, 80, 4) float32
+  species leaf 7 (3, 640, 2) int32
+  species leaf 8 (3, 640, 1) float32
+  species leaf 9 () float32
+randkey: Tensor(shape=(), dtype=int64, device=Device(kind='cpu', index=0)) () int64
+generation: Tensor(shape=(), dtype=float32, device=Device(kind='cpu', index=0)) <class 'evoxc.core.tensor.Tensor'>
+config type: <class 'tensorneat.common.state.State'>
+config attrs: ['load', 'register', 'registered_keys', 'remove', 'save', 'state_dict', 'tree_flatten', 'tree_unflatten', 'update']
+state attrs: ['load', 'register', 'registered_keys', 'remove', 'save', 'state_dict', 'tree_flatten', 'tree_unflatten', 'update']
+register: Return a new ``State`` with extra entries.
+
+        Args:
+            **kwargs: Entries to add.
+
+        Returns:
+            State: A new container holding the old entries plus ``kwargs``.
+
+        Raises:
+            tensorneat.common.errors.ConfigError: If any key already exists ��
+                ``register`` never overwrites; use :meth:`update` for that.
+        

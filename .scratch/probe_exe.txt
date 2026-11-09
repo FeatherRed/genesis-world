@@ -1,0 +1,11 @@
+﻿python.exe : Traceback (most recent call last):
+At line:1 char:159
++ ... ker_T1_A4"; & "C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python. ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (Traceback (most recent call last)::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  File "<string>", line 1, in <module>
+ModuleNotFoundError: No module named 'ruff'
+False
+<class 'evoxc.pipeline.BoundExecutable'>
