@@ -344,8 +344,8 @@ def _to_device_float(array):
     return torch.as_tensor(np.ascontiguousarray(array), dtype=gs.tc_float, device=gs.device)
 
 
-class _TraceOnlyProblem(problem.BaseProblem):
-    """Stand-in problem for the throw-away pipeline that only supplies the genome statics.
+class TraceOnlyProblem(problem.BaseProblem):
+    """Stand-in problem for a pipeline that only supplies the genome statics.
 
     ``build_policy`` needs a TensorNEAT ``(algo, config, pop_arrays)`` triple, and the config is
     the tensor-free ``Pipeline._static_config`` of a ``Pipeline.setup()``.  Nothing here is ever
@@ -371,6 +371,8 @@ class Go2NeatEnv:
             fixed reset of ``go2_env``.
         horizon (int | None): ``scene.step()`` calls per generation; ``None`` means
             ``max_episode_length``, which never times out.
+        episode_length_s (float | None): Episode cap in seconds, ``None`` keeps the 20 s of
+            ``go2_train.get_cfgs()``; it fixes ``max_episode_length``.
         backend (str): ``evoxc`` backend of the compiled graphs (``"numpy"`` by default).
         device (str | evoxc.Device | None): ``evoxc`` device of the compiled graphs.
         show_viewer (bool): Open the Genesis viewer.
@@ -382,6 +384,8 @@ class Go2NeatEnv:
         rows (int): Number of environment rows, ``3 * pop_size`` (also ``n_envs``).
         max_episode_length (int): ``ceil(episode_length_s / dt)``, baked into the advance graph.
         cache (ExecutableCache): The one cache the four executables are built and looked up in.
+        executables (callable): Return the four executables, compiling only the missing ones; call it
+            once per generation as the compile-once proof (every call after ``__init__`` is a hit).
     """
 
     def __init__(
@@ -391,6 +395,7 @@ class Go2NeatEnv:
         *,
         perturbation=Perturbation(),
         horizon=None,
+        episode_length_s=None,
         backend="numpy",
         device=None,
         show_viewer=False,
@@ -420,7 +425,9 @@ class Go2NeatEnv:
 
         self.dt = DT
         self.action_scale = CFG["action_scale"]
-        self.max_episode_length = math.ceil(CFG["episode_length_s"] / self.dt)
+        self.max_episode_length = math.ceil(
+            (CFG["episode_length_s"] if episode_length_s is None else float(episode_length_s)) / self.dt
+        )
         self.horizon = self.max_episode_length if horizon is None else int(horizon)
         if self.horizon < 1:
             raise ValueError(f"horizon must be positive, got {horizon}")
@@ -513,7 +520,7 @@ class Go2NeatEnv:
         self._algo, self._policy_config, self._trace_pop = self._build_policy_trace()
         self._pop_shapes = tuple(np.shape(leaf) for leaf in self._trace_pop)
         self.obs_executable, self.policy_executable, self.advance_executable, self.fitness_executable = (
-            self._executables()
+            self.executables()
         )
         logger.info(
             "Go2NeatEnv: pop_size=%d rows=%d horizon=%d max_episode_length=%d backend=%s device=%s",
@@ -542,12 +549,12 @@ class Go2NeatEnv:
         # Only the forward pass is traced, so the species structure is irrelevant; it still has to
         # be admissible for a small population (``species_size * min_species_size <= pop_size``).
         algo = algorithm.NEAT(gen, pop_size=self.pop_size, species_size=min(SPECIES_SIZE, self.pop_size))
-        pipeline = Pipeline(algo, _TraceOnlyProblem(), seed=TRACE_SEED, backend="numpy", is_detailed=False)
+        pipeline = Pipeline(algo, TraceOnlyProblem(), seed=TRACE_SEED, backend="numpy", is_detailed=False)
         state = pipeline.setup()
         pop_arrays = tuple(np.array(to_numpy(leaf)) for leaf in state.pop)
         return algo, pipeline._static_config(state), pop_arrays
 
-    def _executables(self):
+    def executables(self):
         """Return the four executables, compiling only the ones the cache does not hold yet."""
         cache = self.cache
         obs = cache.get(
