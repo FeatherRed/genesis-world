@@ -1,7 +1,7 @@
 # Intent
 This subpackage implements `IPCCoupler`, the Incremental Potential Contact (IPC) coupler of the Genesis World physics engine.
 It is one of three couplers the `Simulator` can select (`SAPCoupler`, `LegacyCoupler`, `IPCCoupler`); the selection is made from the `options.coupler` class in `genesis/engine/simulator.py`.
-The coupler is invoked per substep by `Simulator.substep(f)`: `preprocess(f)` before the rigid solver pre-coupling, `couple(f)` after it.
+The coupler is invoked per substep by `Simulator.substep(f)`: `preprocess(f)` before every active solver pre-couples, then `couple(f)` after all solvers pre-couple and before they post-couple.
 Unlike the other couplers, it does not use the Genesis Quadrants (`qd`) kernel; it drives the external C++ library `libuipc` (Python binding `pyuipc`, imported as `uipc`) for IPC contact and FEM/rigid simulation, and exchanges state between Genesis solvers and the IPC `World`.
 It supports rigid bodies (as AffineBody/ABD objects), volumetric FEM, and cloth in one unified contact framework, with per-entity coupling types.
 
