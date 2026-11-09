@@ -1,3 +1,4 @@
+import fnmatch
 import os
 import subprocess
 import sys
@@ -62,15 +63,22 @@ def _decode_output(output: str | bytes | None) -> str | None:
     return output
 
 
+def _is_ignored_script(path: Path) -> bool:
+    # Match against the path relative to 'EXAMPLES_DIR': 'fnmatch' lets '*' cross '/', so a whole subtree is excluded by
+    # a single pattern ('neuroevolution/*.py'), which 'Path.match' (right-anchored, '*' stops at a separator) cannot do.
+    # Bare filenames are also matched against the basename, preserving the meaning 'Path.match' gave them.
+    rel_path = path.relative_to(EXAMPLES_DIR).as_posix()
+    return any(
+        fnmatch.fnmatchcase(rel_path, pattern) or fnmatch.fnmatchcase(path.name, pattern)
+        for pattern in IGNORE_SCRIPT_PATTERNS
+    )
+
+
 def _discover_examples():
     if not EXAMPLES_DIR.exists():
         raise ValueError(f"Example directory '{EXAMPLES_DIR}' does not exist.")
 
-    return [
-        path
-        for path in sorted(EXAMPLES_DIR.rglob("*.py"))
-        if not any([path.match(pattern) for pattern in IGNORE_SCRIPT_PATTERNS])
-    ]
+    return [path for path in sorted(EXAMPLES_DIR.rglob("*.py")) if not _is_ignored_script(path)]
 
 
 @pytest.mark.examples
