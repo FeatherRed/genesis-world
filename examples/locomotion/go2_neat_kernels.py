@@ -882,7 +882,11 @@ def build_tell(algo, config, pop_arrays, species_leaves, n_policies, *, backend=
             )
         return [nxt.randkey, nxt.generation, *nxt.pop, *next_species]
 
-    executable = evoxc.build(kernel, *specs, backend=resolved_backend, device=resolved_device)
+    options = {}
+    if resolved_backend == "iree" and resolved_device.kind == "cuda":
+        # IREE 3.13's default CUDA reduction distribution rejects the tell graph.
+        options["iree_compile_args"] = ["--iree-codegen-llvmgpu-use-reduction-vector-distribution=false"]
+    executable = evoxc.build(kernel, *specs, backend=resolved_backend, device=resolved_device, **options)
     return _attach(
         executable,
         graph="tell",

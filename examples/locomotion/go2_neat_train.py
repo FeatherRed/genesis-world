@@ -53,11 +53,9 @@ hits -- that is the per-generation ``cache`` field of the log line.
 
 Backends
 --------
-CPU/``numpy`` is the default and the measured path (``genesis gs.cpu``, ``evoxc numpy``).
-``-g/--gpu`` inits Genesis on ``gs.gpu`` and runs the graphs with ``iree`` on ``cuda:0``
-(``iree-base-compiler``/``iree-base-runtime`` must be installed).  The ROCm recipe is the
-same command with ``--evoxc-device rocm:0`` (or ``EVOXC_DEVICE=rocm:0``).  Nothing falls
-back silently: an unusable backend/device raises the adapter's error.
+CPU/``numpy`` is the default. ``-g/--gpu`` runs Genesis on ``gs.gpu`` and the rollout and
+evolution graphs with IREE on ``cuda:0``. ``--tell-backend numpy`` explicitly runs
+evolution on CPU. For AMD rollout, pass ``--evoxc-device rocm:0``.
 
 Artifacts (git-ignored, never committed)
 ----------------------------------------
@@ -241,10 +239,15 @@ def _parse_args(argv=None):
         "-g",
         "--gpu",
         action="store_true",
-        help="Init Genesis on gs.gpu and run the graphs with iree on cuda:0.",
+        help="Init Genesis on gs.gpu and default the EvoX Compiler graphs to IREE on cuda:0.",
     )
-    parser.add_argument("--evoxc-backend", type=str, default=None, help="evoxc backend override (numpy, or iree).")
-    parser.add_argument("--evoxc-device", type=str, default=None, help="evoxc device override, e.g. cuda:0 or rocm:0.")
+    parser.add_argument("--evoxc-backend", type=str, default=None, help="Rollout backend override (numpy or iree).")
+    parser.add_argument("--evoxc-device", type=str, default=None, help="Rollout device override, e.g. cuda:0 or rocm:0.")
+    parser.add_argument(
+        "--tell-backend",
+        choices=("numpy", "iree"),
+        help="Evolution backend override. Defaults to the rollout backend and device. NumPy uses CPU.",
+    )
     parser.add_argument("-v", "--vis", action="store_true", help="Open the Genesis viewer.")
     parser.add_argument("--quiet", action="store_true", help="Write the artifacts without per-generation lines.")
     return parser.parse_args(argv)
@@ -280,7 +283,7 @@ def main(argv=None):
         )
     )
     backend = args.evoxc_backend or ("iree" if args.gpu else "numpy")
-    device = args.evoxc_device or ("cuda:0" if args.gpu else None)
+    device = args.evoxc_device or ("cuda:0" if args.gpu and backend != "numpy" else None)
     show_viewer = bool(args.vis) and not pytest_mode
 
     if not gs._initialized:
@@ -313,7 +316,10 @@ def main(argv=None):
     species_leaves = species_leaves_of(state.species)
     randkey = state.randkey
     generation_counter = state.generation
-    tell_key = ("tell", args.pop_size, env.backend, env.device_name)
+    tell_backend = args.tell_backend or env.backend
+    tell_device = evoxc.Device("cpu", 0) if tell_backend == "numpy" else env.device
+    tell_device_name = f"{tell_device.kind}:{tell_device.index}"
+    tell_key = ("tell", args.pop_size, tell_backend, tell_device_name)
 
     def tell_executable():
         """Look the tell executable up in the shared cache (compiled on the first call)."""
@@ -325,12 +331,15 @@ def main(argv=None):
                 pop_arrays,
                 species_leaves,
                 args.pop_size,
-                backend=env.backend,
-                device=env.device,
+                backend=tell_backend,
+                device=tell_device,
             ),
         )
 
+    logger.info("Building TensorNEAT tell on %s@%s", tell_backend, tell_device_name)
+    tell_build_start = time.perf_counter()
     tell_executable()
+    tell_build_time = time.perf_counter() - tell_build_start
     build_time = time.perf_counter() - build_start
 
     if not args.quiet:
@@ -338,11 +347,12 @@ def main(argv=None):
             f"Go2 NEAT walking: pop_size={args.pop_size} rows={env.rows} generations={generations} "
             f"horizon={env.horizon} max_episode_length={env.max_episode_length} "
             f"genesis={'gpu' if args.gpu else 'cpu'} evoxc={env.backend}@{env.device_name} "
+            f"tell={tell_backend}@{tell_device_name} "
             f"master_seed={args.master_seed} evolution_seed={evolution_seed(args.master_seed)} "
             f"perturbation={'zero' if perturbation.is_zero else 'nonzero'}"
         )
         print(
-            f"built 5 executables in {build_time:.3f} s "
+            f"built 5 executables in {build_time:.3f} s (tell {tell_build_time:.3f} s) "
             f"(cache {env.cache.hits} hits / {env.cache.misses} misses)"
         )
 
@@ -418,6 +428,8 @@ def main(argv=None):
             "genesis_backend": "gpu" if args.gpu else "cpu",
             "evoxc_backend": env.backend,
             "evoxc_device": env.device_name,
+            "tell_backend": tell_backend,
+            "tell_device": tell_device_name,
             "show_viewer": show_viewer,
             "stop_when_done": bool(args.stop_when_done),
             "genome": {
@@ -428,6 +440,7 @@ def main(argv=None):
                 "species_size": min(SPECIES_SIZE, args.pop_size),
             },
             "executable_build_time_s": build_time,
+            "tell_build_time_s": tell_build_time,
         },
         "generations": records,
         "totals": {
