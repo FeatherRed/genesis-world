@@ -34,6 +34,7 @@ Previously named Genesis (academic project since Dec 2024); now developed under 
 ## Dependencies
 Beyond the Python package manager: `torch` (PyTorch, manual install), optional GPU backends (CUDA/ROCm/Metal), and optional extras defined in `pyproject.toml` (`dev`, `docs`, `render`, `usd`).
 IPC demos need `pyuipc`/`libuipc`; RL examples need `rsl-rl-lib`; Nyx walkthroughs live in the separate `genesis-nyx` repo.
+`examples/locomotion/try1.py` computes its control and reward with `evoxc` (EvoX Compiler), an optional package that is not declared in `pyproject.toml`.
 
 ## Test Strategy
 pytest configured in `pyproject.toml`: `--numprocesses=auto --dist=worksteal --import-mode=importlib --timeout=1200`, default deselection of `benchmarks`/`examples` markers.
