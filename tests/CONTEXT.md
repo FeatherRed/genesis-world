@@ -27,7 +27,8 @@ Tests run on multiple backends (cpu/gpu/cuda/amdgpu/metal) and both field (`GS_E
   - Skip-reason registry (`SKIP_NO_GPU`, `SKIP_NO_MADRONA`, `SKIP_NO_LUISA`, `SKIP_NO_VIEWER`, `SKIP_NO_IPC`, `SKIP_METAL_64BIT`, …) with skip-location normalization for grouped summaries.
 - `gpu_info.py` — cross-vendor GPU discovery (`NvidiaBackend`/`AmdBackend` via NVML/AMD SMI, imported lazily) and `detect_gpu_backend()`.
 - `monitor_test_mem.py` — standalone per-process VRAM monitor; parses pytest process titles, writes pipe-delimited `key=value` results.
-- `test_examples.py` — discovers and runs `examples/*.py` as subprocesses (marker `examples`; optional-dependency gates).
+- `test_examples.py` — discovers and runs `examples/*.py` as subprocesses (marker `examples`; optional-dependency gates, including `evoxc` for `locomotion/try1.py`; shared helper modules are ignored).
+- `test_go2_evox_parity.py` — `required`; loads `examples/locomotion/go2_evox_kernels.py` and `go2_legacy_reference.py` by file path, skips when `evoxc` is absent, and compares 250 chained gait steps plus 200 randomized reward states against the legacy oracle.
 - `upload_benchmarks_table_to_wandb.py` — standalone W&B uploader for benchmark result files (memory/perf).
 
 ## Markers (declared in pyproject.toml, resolved in conftest.py)
@@ -72,11 +73,13 @@ Tests run on multiple backends (cpu/gpu/cuda/amdgpu/metal) and both field (`GS_E
 - `mj_sim`/`gs_sim`/`xml_path` depend on `model_name`/`gs_solver`/`gs_integrator`, which are **parametrize arguments** defined only in directories like `rigid/` (not fixtures) — requesting these parity fixtures in a directory that does not parametrize those names fails collection.
 - Cross-sibling fixture dependency: `deformable/test_fem.py` uses the `xml_path` fixture defined only in `parsers/conftest.py`, so running `tests/deformable/` in isolation fails collection (see `deformable/CONTEXT.md`).
 - GPU management libraries (`nvidia-ml-py`, `amdsmi`) are optional; without them multi-GPU affinity degrades to single-GPU (a warning is emitted).
+- `examples/locomotion/try1.py` still starts its interactive viewer when the `examples` smoke test launches it (it has no pytest/headless path yet), so that subprocess blocks until the 600 s timeout instead of exiting; it is dependency-gated on `evoxc` but not otherwise skippable from `tests/`.
 
 ## Test Strategy
 - Fast correctness tests are the default; `slow` (>=150s) run in the default suite but are scheduled first so they overlap with the rest.
 - `-m required` is the merge gate; `benchmarks`/`examples` are opt-in CI jobs.
 - Parity is validated both statically (model constants) and dynamically (per-step qpos/qvel/forces) against MuJoCo.
+- The Go2 EvoX Compiler graphs are checked against the legacy oracle with float32 tolerances: 5e-5 on gait outputs, 1e-5 per reward term, 1e-6 on the total.
 - Rendering correctness is snapshot-based (blurred std/ratio thresholds) rather than exact pixel equality.
 - Coverage runs across backend × dtype (field/ndarray) and, where supported, cpu/gpu.
 
