@@ -1,0 +1,190 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_neat.py",
+    "check-determinism",
+    "examples/neuroevolution/benchmarks/results/neat_go2_seed0.json",
+    "examples/neuroevolution/benchmarks/results/neat_go2_seed0_r1.json",
+    "--out",
+    "examples/neuroevolution/benchmarks/results/neat_determinism_go2.json"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T21:46:47Z",
+  "error": null,
+  "genesis_init": {
+    "already_initialized": false,
+    "backend": "cpu",
+    "requested": "cpu"
+  },
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A55",
+    "dirty": true,
+    "dirty_files": [
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed0.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed0_r1.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed1.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed2.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_hover_seed0.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_hover_seed1.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_hover_seed2.json"
+    ],
+    "head": "223049e1e5de14d62511adcc260b810a6186d7ea"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.96,
+    "loadavg_text": "0.96 0.86 0.98 1/690 3260853",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "neat_determinism",
+  "measurements": {
+    "checks": {
+      "fingerprint": {
+        "a": "cd6f6b8e917423a4d78f184a518aedf4fa54ebf46a866604e1d68a217638ec67",
+        "b": "cd6f6b8e917423a4d78f184a518aedf4fa54ebf46a866604e1d68a217638ec67",
+        "match": true
+      },
+      "fitness": {
+        "match": true,
+        "match_within_1e-6": true,
+        "max_abs_diff": 0.0,
+        "shape": [
+          3,
+          8
+        ]
+      },
+      "generation_seeds": {
+        "generations": 3,
+        "match": true,
+        "mismatched_generations": []
+      },
+      "holdout_initial": {
+        "match": true,
+        "match_within_1e-6": true,
+        "max_abs_diff": 0.0,
+        "shape": [
+          8
+        ]
+      },
+      "holdout_trained": {
+        "match": true,
+        "match_within_1e-6": true,
+        "max_abs_diff": 0.0,
+        "shape": [
+          8
+        ]
+      },
+      "seed": {
+        "match": true,
+        "value": 0
+      },
+      "seed_table": {
+        "match": true,
+        "match_within_1e-6": true,
+        "max_abs_diff": 0.0,
+        "shape": [
+          3,
+          3
+        ]
+      },
+      "task": {
+        "match": true,
+        "value": "go2"
+      }
+    },
+    "records": {
+      "a": {
+        "created_utc": "2026-11-09T21:43:51Z",
+        "kind": "neat_train",
+        "path": "examples/neuroevolution/benchmarks/results/neat_go2_seed0.json",
+        "process_role": "only",
+        "repeat": 0,
+        "status": "ok"
+      },
+      "b": {
+        "created_utc": "2026-11-09T21:46:21Z",
+        "kind": "neat_train",
+        "path": "examples/neuroevolution/benchmarks/results/neat_go2_seed0_r1.json",
+        "process_role": "warm",
+        "repeat": 1,
+        "status": "ok"
+      }
+    },
+    "verdict": {
+      "failures": [],
+      "ok": true,
+      "rule": "exact equality of the seed table, seeds, fitness, held-out fitness and fingerprint"
+    }
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {},
+  "process_role": "only",
+  "repeat": 1,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "go2",
+  "timings": {},
+  "workload": {
+    "process_roles": [
+      "only",
+      "warm"
+    ],
+    "record_kinds": [
+      "neat_train",
+      "neat_train"
+    ],
+    "records": [
+      "examples/neuroevolution/benchmarks/results/neat_go2_seed0.json",
+      "examples/neuroevolution/benchmarks/results/neat_go2_seed0_r1.json"
+    ],
+    "rule": "the seed table, the per-generation seeds, every fitness vector, the held-out fitness of both sides and the sha256 fingerprint must be identical, not merely close"
+  }
+}

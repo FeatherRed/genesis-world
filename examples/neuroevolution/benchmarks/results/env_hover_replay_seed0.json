@@ -1,0 +1,783 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_envs.py",
+    "replay",
+    "--task",
+    "hover",
+    "--pop-size",
+    "8",
+    "--horizon",
+    "100",
+    "--master-seed",
+    "0",
+    "--repeat",
+    "0",
+    "--process-role",
+    "only"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T20:42:09Z",
+  "error": null,
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A52",
+    "dirty": true,
+    "dirty_files": [
+      "?? examples/neuroevolution/benchmarks/bench_envs.py",
+      "?? examples/neuroevolution/benchmarks/common.py",
+      "?? examples/neuroevolution/benchmarks/oracle.py",
+      "?? examples/neuroevolution/benchmarks/results/"
+    ],
+    "head": "7c567d49519f5e155ed69413083659a0254ae456"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 1.76,
+    "loadavg_text": "1.76 1.93 2.23 2/674 3199833",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "env_replay",
+  "measurements": {
+    "fingerprint": {
+      "per_generation": [
+        "55579afde91f03cab018d5c7175b563a2e582e597140aaac7f76ebd1d22d49f8",
+        "32c332c5e37bbdb19f2d939643b3fdfe984fe754da571d9f3a9f1fa88f2187b6"
+      ],
+      "rule": "sha256 over seeds + returns + fitness rounded to 6 decimals, per generation, then over the generation digests",
+      "sha256": "b7b87d048098380edf14ad14086c64bf9b20462a5f4eff72dfc092c6e6c6e2c6",
+      "source": "1454269175.000000,757617120.000000,1421746521.000000|-0.366600,-0.824704,-0.514321,-0.927962,-0.553351,-0.311988,-0.169745,-0.200171,-0.136738,-0.287655,-0.185425,-0.244185,-0.493174,-0.628435,-0.884649,-1.176958,-0.416743,-0.197607,-0.266606,-0.251890,-0.273883,-0.296000,-0.225090,-0.164355|-0.568542,-0.597767,-0.168885,-0.239089,-0.668752,-0.597103,-0.264126,-0.228481|1313752747.000000,908599966.000000,53557616.000000|-0.459920,-1.455066,-0.515153,-0.842630,-0.975359,-0.708179,-0.209224,-0.144923,-0.127974,-0.186861,-0.125121,-0.099125,-0.571629,-0.654524,-0.658845,-0.903134,-0.196689,-0.208390,-0.273950,-0.198882,-0.126094,-0.225239,-0.354061,-0.349708|-0.810046,-0.842056,-0.160707,-0.137036,-0.628333,-0.436071,-0.199642,-0.309670"
+    },
+    "generations": [
+      {
+        "cache_hits": 5,
+        "cache_misses": 5,
+        "captured_steps": 100,
+        "captured_steps_dropped": 0,
+        "end_reasons": {
+          "crash": 20,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 4
+        },
+        "env_steps": 2400,
+        "env_steps_per_s": 5151.18085864,
+        "episode_returns": [
+          [
+            -0.366600066423,
+            -0.824703991413,
+            -0.514320731163
+          ],
+          [
+            -0.927961647511,
+            -0.553351044655,
+            -0.31198823452
+          ],
+          [
+            -0.169745117426,
+            -0.200171425939,
+            -0.136738210917
+          ],
+          [
+            -0.287655472755,
+            -0.185425400734,
+            -0.244185268879
+          ],
+          [
+            -0.49317407608,
+            -0.628434538841,
+            -0.884648919106
+          ],
+          [
+            -1.17695832253,
+            -0.416743248701,
+            -0.197607457638
+          ],
+          [
+            -0.26660567522,
+            -0.251890033484,
+            -0.273883074522
+          ],
+          [
+            -0.295999765396,
+            -0.225089609623,
+            -0.164354920387
+          ]
+        ],
+        "fingerprint": {
+          "sha256": "55579afde91f03cab018d5c7175b563a2e582e597140aaac7f76ebd1d22d49f8",
+          "source": "1454269175.000000,757617120.000000,1421746521.000000|-0.366600,-0.824704,-0.514321,-0.927962,-0.553351,-0.311988,-0.169745,-0.200171,-0.136738,-0.287655,-0.185425,-0.244185,-0.493174,-0.628435,-0.884649,-1.176958,-0.416743,-0.197607,-0.266606,-0.251890,-0.273883,-0.296000,-0.225090,-0.164355|-0.568542,-0.597767,-0.168885,-0.239089,-0.668752,-0.597103,-0.264126,-0.228481"
+        },
+        "fitness": [
+          -0.568541586399,
+          -0.59776699543,
+          -0.168884918094,
+          -0.239088714123,
+          -0.668752491474,
+          -0.597103059292,
+          -0.264126271009,
+          -0.228481426835
+        ],
+        "generation": 0,
+        "parity": {
+          "commands": {
+            "max_abs_diff": 0.0,
+            "pass": true
+          },
+          "n_steps_compared": 100,
+          "n_steps_dropped": 0,
+          "observation": {
+            "atol": 1e-06,
+            "max_abs_diff": 0.0,
+            "mismatch_count": 0,
+            "pass": true
+          },
+          "reset_observation": {
+            "atol": 1e-06,
+            "max_abs_diff": 0.0,
+            "mismatch_count": 0,
+            "n_compared": 1,
+            "pass": true
+          },
+          "returns": {
+            "accumulated_atol": 0.001,
+            "accumulated_max_abs_diff": 1.54410372488e-07,
+            "fitness_atol": 0.001,
+            "fitness_from_oracle_max_abs_diff": 2.98023223877e-08,
+            "fitness_note": "the oracle fitness is the float32 mean of the oracle-accumulated returns, so it inherits the accumulated returns drift (and only that); the env's own float32 vs float64 fitness rule is pinned by examples/neuroevolution/selfcheck.py",
+            "pass": true,
+            "step_atol": 0.0001,
+            "step_max_abs_diff": 4.09781932831e-08,
+            "step_mismatch_count": 0
+          },
+          "reward": {
+            "pass": true,
+            "term_atol": 1e-05,
+            "term_max_abs_diff": {
+              "angular": 0.0,
+              "crash": 0.0,
+              "smooth": 0.0,
+              "target": 0.0,
+              "yaw": 2.03726813197e-10
+            },
+            "term_mismatch_count": {
+              "angular": 0,
+              "crash": 0,
+              "smooth": 0,
+              "target": 0,
+              "yaw": 0
+            },
+            "total_atol": 1e-05,
+            "total_max_abs_diff": 1.49011611938e-08,
+            "total_mismatch_count": 0
+          },
+          "rows": 24,
+          "termination": {
+            "mask_mismatch_count": {
+              "alive": 0,
+              "at_target": 0,
+              "crash": 0,
+              "done": 0,
+              "timeout": 0
+            },
+            "pass": true
+          },
+          "yaw_deg": {
+            "atol": 0.001,
+            "max_abs_diff": 0.000198364257812,
+            "pass": true
+          }
+        },
+        "residual_fraction": 0.0177993276125,
+        "residual_s": 0.00830473005772,
+        "returns": [
+          -0.366600066423,
+          -0.824703991413,
+          -0.514320731163,
+          -0.927961647511,
+          -0.553351044655,
+          -0.31198823452,
+          -0.169745117426,
+          -0.200171425939,
+          -0.136738210917,
+          -0.287655472755,
+          -0.185425400734,
+          -0.244185268879,
+          -0.49317407608,
+          -0.628434538841,
+          -0.884648919106,
+          -1.17695832253,
+          -0.416743248701,
+          -0.197607457638,
+          -0.26660567522,
+          -0.251890033484,
+          -0.273883074522,
+          -0.295999765396,
+          -0.225089609623,
+          -0.164354920387
+        ],
+        "seeds": [
+          1454269175,
+          757617120,
+          1421746521
+        ],
+        "steps": 100,
+        "steps_per_s": 214.632535776,
+        "steps_per_s_harness": 214.327587878,
+        "timings": {
+          "groups": {
+            "generation_total": {
+              "calls": 1,
+              "per_call_s": 0.466575493105,
+              "per_step_s": 0.00466575493105,
+              "seconds": 0.466575493105
+            },
+            "graph_advance": {
+              "calls": 100,
+              "per_call_s": 0.00101784963626,
+              "per_step_s": 0.00101784963626,
+              "seconds": 0.101784963626
+            },
+            "graph_controls": {
+              "calls": 100,
+              "per_call_s": 5.40425325744e-05,
+              "per_step_s": 5.40425325744e-05,
+              "seconds": 0.00540425325744
+            },
+            "graph_fitness": {
+              "calls": 1,
+              "per_call_s": 0.000101375160739,
+              "per_step_s": 1.01375160739e-06,
+              "seconds": 0.000101375160739
+            },
+            "graph_obs": {
+              "calls": 1,
+              "per_call_s": 0.000188277801499,
+              "per_step_s": 1.88277801499e-06,
+              "seconds": 0.000188277801499
+            },
+            "graph_policy": {
+              "calls": 100,
+              "per_call_s": 0.00168327000691,
+              "per_step_s": 0.00168327000691,
+              "seconds": 0.168327000691
+            },
+            "host_rng": {
+              "calls": 2424,
+              "per_call_s": 4.93370708103e-06,
+              "per_step_s": 0.000119593059644,
+              "seconds": 0.0119593059644
+            },
+            "physics": {
+              "calls": 100,
+              "per_call_s": 0.000645327672828,
+              "per_step_s": 0.000645327672828,
+              "seconds": 0.0645327672828
+            },
+            "state_read": {
+              "calls": 100,
+              "per_call_s": 0.000204436127096,
+              "per_step_s": 0.000204436127096,
+              "seconds": 0.0204436127096
+            },
+            "write_reset": {
+              "calls": 1,
+              "per_call_s": 0.0334831031505,
+              "per_step_s": 0.000334831031505,
+              "seconds": 0.0334831031505
+            },
+            "write_targets": {
+              "calls": 100,
+              "per_call_s": 0.00052046103403,
+              "per_step_s": 0.00052046103403,
+              "seconds": 0.052046103403
+            }
+          },
+          "measured_s": 0.458270763047
+        },
+        "wall_time_s": 0.465912587009
+      },
+      {
+        "cache_hits": 10,
+        "cache_misses": 5,
+        "captured_steps": 100,
+        "captured_steps_dropped": 0,
+        "end_reasons": {
+          "crash": 22,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 2
+        },
+        "env_steps": 2400,
+        "env_steps_per_s": 5698.67233043,
+        "episode_returns": [
+          [
+            -0.459920495749,
+            -1.45506620407,
+            -0.515152573586
+          ],
+          [
+            -0.842630267143,
+            -0.975358724594,
+            -0.708178639412
+          ],
+          [
+            -0.209224134684,
+            -0.144923239946,
+            -0.127974122763
+          ],
+          [
+            -0.186861455441,
+            -0.125121355057,
+            -0.0991248786449
+          ],
+          [
+            -0.571628987789,
+            -0.654523611069,
+            -0.658845424652
+          ],
+          [
+            -0.903133928776,
+            -0.196688890457,
+            -0.208390474319
+          ],
+          [
+            -0.273950368166,
+            -0.198881685734,
+            -0.126093685627
+          ],
+          [
+            -0.225239425898,
+            -0.354061067104,
+            -0.349708169699
+          ]
+        ],
+        "fingerprint": {
+          "sha256": "32c332c5e37bbdb19f2d939643b3fdfe984fe754da571d9f3a9f1fa88f2187b6",
+          "source": "1313752747.000000,908599966.000000,53557616.000000|-0.459920,-1.455066,-0.515153,-0.842630,-0.975359,-0.708179,-0.209224,-0.144923,-0.127974,-0.186861,-0.125121,-0.099125,-0.571629,-0.654524,-0.658845,-0.903134,-0.196689,-0.208390,-0.273950,-0.198882,-0.126094,-0.225239,-0.354061,-0.349708|-0.810046,-0.842056,-0.160707,-0.137036,-0.628333,-0.436071,-0.199642,-0.309670"
+        },
+        "fitness": [
+          -0.810046434402,
+          -0.842055857182,
+          -0.16070716083,
+          -0.137035891414,
+          -0.628332674503,
+          -0.436071068048,
+          -0.199641898274,
+          -0.309669584036
+        ],
+        "generation": 1,
+        "parity": {
+          "commands": {
+            "max_abs_diff": 0.0,
+            "pass": true
+          },
+          "n_steps_compared": 100,
+          "n_steps_dropped": 0,
+          "observation": {
+            "atol": 1e-06,
+            "max_abs_diff": 0.0,
+            "mismatch_count": 0,
+            "pass": true
+          },
+          "reset_observation": {
+            "atol": 1e-06,
+            "max_abs_diff": 0.0,
+            "mismatch_count": 0,
+            "n_compared": 1,
+            "pass": true
+          },
+          "returns": {
+            "accumulated_atol": 0.001,
+            "accumulated_max_abs_diff": 1.09215761768e-07,
+            "fitness_atol": 0.001,
+            "fitness_from_oracle_max_abs_diff": 5.96046447754e-08,
+            "fitness_note": "the oracle fitness is the float32 mean of the oracle-accumulated returns, so it inherits the accumulated returns drift (and only that); the env's own float32 vs float64 fitness rule is pinned by examples/neuroevolution/selfcheck.py",
+            "pass": true,
+            "step_atol": 0.0001,
+            "step_max_abs_diff": 4.842877388e-08,
+            "step_mismatch_count": 0
+          },
+          "reward": {
+            "pass": true,
+            "term_atol": 1e-05,
+            "term_max_abs_diff": {
+              "angular": 0.0,
+              "crash": 0.0,
+              "smooth": 0.0,
+              "target": 0.0,
+              "yaw": 3.05590219796e-10
+            },
+            "term_mismatch_count": {
+              "angular": 0,
+              "crash": 0,
+              "smooth": 0,
+              "target": 0,
+              "yaw": 0
+            },
+            "total_atol": 1e-05,
+            "total_max_abs_diff": 2.98023223877e-08,
+            "total_mismatch_count": 0
+          },
+          "rows": 24,
+          "termination": {
+            "mask_mismatch_count": {
+              "alive": 0,
+              "at_target": 0,
+              "crash": 0,
+              "done": 0,
+              "timeout": 0
+            },
+            "pass": true
+          },
+          "yaw_deg": {
+            "atol": 0.001,
+            "max_abs_diff": 0.000175476074219,
+            "pass": true
+          }
+        },
+        "residual_fraction": 0.0190655357155,
+        "residual_s": 0.008040323155,
+        "returns": [
+          -0.459920495749,
+          -1.45506620407,
+          -0.515152573586,
+          -0.842630267143,
+          -0.975358724594,
+          -0.708178639412,
+          -0.209224134684,
+          -0.144923239946,
+          -0.127974122763,
+          -0.186861455441,
+          -0.125121355057,
+          -0.0991248786449,
+          -0.571628987789,
+          -0.654523611069,
+          -0.658845424652,
+          -0.903133928776,
+          -0.196688890457,
+          -0.208390474319,
+          -0.273950368166,
+          -0.198881685734,
+          -0.126093685627,
+          -0.225239425898,
+          -0.354061067104,
+          -0.349708169699
+        ],
+        "seeds": [
+          1313752747,
+          908599966,
+          53557616
+        ],
+        "steps": 100,
+        "steps_per_s": 237.444680434,
+        "steps_per_s_harness": 237.123997978,
+        "timings": {
+          "groups": {
+            "generation_total": {
+              "calls": 1,
+              "per_call_s": 0.421720284969,
+              "per_step_s": 0.00421720284969,
+              "seconds": 0.421720284969
+            },
+            "graph_advance": {
+              "calls": 100,
+              "per_call_s": 0.00100039296551,
+              "per_step_s": 0.00100039296551,
+              "seconds": 0.100039296551
+            },
+            "graph_controls": {
+              "calls": 100,
+              "per_call_s": 5.48931746744e-05,
+              "per_step_s": 5.48931746744e-05,
+              "seconds": 0.00548931746744
+            },
+            "graph_fitness": {
+              "calls": 1,
+              "per_call_s": 5.9125944972e-05,
+              "per_step_s": 5.9125944972e-07,
+              "seconds": 5.9125944972e-05
+            },
+            "graph_obs": {
+              "calls": 1,
+              "per_call_s": 9.70200635493e-05,
+              "per_step_s": 9.70200635493e-07,
+              "seconds": 9.70200635493e-05
+            },
+            "graph_policy": {
+              "calls": 100,
+              "per_call_s": 0.00167299240129,
+              "per_step_s": 0.00167299240129,
+              "seconds": 0.167299240129
+            },
+            "host_rng": {
+              "calls": 2424,
+              "per_call_s": 4.93448702526e-06,
+              "per_step_s": 0.000119611965492,
+              "seconds": 0.0119611965492
+            },
+            "physics": {
+              "calls": 100,
+              "per_call_s": 0.00064385230653,
+              "per_step_s": 0.00064385230653,
+              "seconds": 0.064385230653
+            },
+            "state_read": {
+              "calls": 100,
+              "per_call_s": 0.000201520752162,
+              "per_step_s": 0.000201520752162,
+              "seconds": 0.0201520752162
+            },
+            "write_reset": {
+              "calls": 1,
+              "per_call_s": 0.00123060471378,
+              "per_step_s": 1.23060471378e-05,
+              "seconds": 0.00123060471378
+            },
+            "write_targets": {
+              "calls": 100,
+              "per_call_s": 0.000429668545257,
+              "per_step_s": 0.000429668545257,
+              "seconds": 0.0429668545257
+            }
+          },
+          "measured_s": 0.413679961814
+        },
+        "wall_time_s": 0.421150727896
+      }
+    ],
+    "parity": {
+      "commands": {
+        "max_abs_diff": 0.0,
+        "pass": true
+      },
+      "n_steps_compared": 100,
+      "n_steps_dropped": 0,
+      "observation": {
+        "atol": 1e-06,
+        "max_abs_diff": 0.0,
+        "mismatch_count": 0,
+        "pass": true
+      },
+      "reset_observation": {
+        "atol": 1e-06,
+        "max_abs_diff": 0.0,
+        "mismatch_count": 0,
+        "n_compared": 1,
+        "pass": true
+      },
+      "returns": {
+        "accumulated_atol": 0.001,
+        "accumulated_max_abs_diff": 1.54410372488e-07,
+        "fitness_atol": 0.001,
+        "fitness_from_oracle_max_abs_diff": 5.96046447754e-08,
+        "fitness_note": "the oracle fitness is the float32 mean of the oracle-accumulated returns, so it inherits the accumulated returns drift (and only that); the env's own float32 vs float64 fitness rule is pinned by examples/neuroevolution/selfcheck.py",
+        "pass": true,
+        "step_atol": 0.0001,
+        "step_max_abs_diff": 4.842877388e-08,
+        "step_mismatch_count": 0
+      },
+      "reward": {
+        "pass": true,
+        "term_atol": 1e-05,
+        "term_max_abs_diff": {
+          "angular": 0.0,
+          "crash": 0.0,
+          "smooth": 0.0,
+          "target": 0.0,
+          "yaw": 3.05590219796e-10
+        },
+        "term_mismatch_count": {
+          "angular": 0,
+          "crash": 0,
+          "smooth": 0,
+          "target": 0,
+          "yaw": 0
+        },
+        "total_atol": 1e-05,
+        "total_max_abs_diff": 2.98023223877e-08,
+        "total_mismatch_count": 0
+      },
+      "rows": 24,
+      "termination": {
+        "mask_mismatch_count": {
+          "alive": 0,
+          "at_target": 0,
+          "crash": 0,
+          "done": 0,
+          "timeout": 0
+        },
+        "pass": true
+      },
+      "yaw_deg": {
+        "atol": 0.001,
+        "max_abs_diff": 0.000198364257812,
+        "pass": true
+      }
+    },
+    "task": "hover"
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "build_s": 5.44056007895,
+    "close_s": 0.112579743844,
+    "generation_total_scope": "generation_total is env.evaluate end to end (host seed draw + reset + steps + run_fitness); measurements.generations[*].wall_time_s is the environment's own counter, which starts after the host seed draw and stops before run_fitness",
+    "generations_s": [
+      0.465912587009,
+      0.421150727896
+    ],
+    "sync_note": "common.sync() calls torch.cuda.synchronize() whenever a HIP/CUDA device is available (it reported True here) and is a no-op otherwise; this benchmark runs entirely on the CPU, so every timed region is host wall clock (time.perf_counter) and the synchronisation only proves no accelerator work was pending around each generation",
+    "synchronized_before_and_after_each_generation": true,
+    "total_s": 11.2867547479
+  },
+  "process_role": "only",
+  "repeat": 0,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "hover",
+  "timings": {
+    "groups": {
+      "generation_total": {
+        "calls": 2,
+        "mean_s": 0.44414788903668523,
+        "seconds": 0.8882957780733705
+      },
+      "graph_advance": {
+        "calls": 200,
+        "mean_s": 0.001009121300885454,
+        "seconds": 0.20182426017709076
+      },
+      "graph_controls": {
+        "calls": 200,
+        "mean_s": 5.446785362437367e-05,
+        "seconds": 0.010893570724874735
+      },
+      "graph_fitness": {
+        "calls": 2,
+        "mean_s": 8.025055285543203e-05,
+        "seconds": 0.00016050110571086407
+      },
+      "graph_obs": {
+        "calls": 2,
+        "mean_s": 0.00014264893252402544,
+        "seconds": 0.0002852978650480509
+      },
+      "graph_policy": {
+        "calls": 200,
+        "mean_s": 0.001678131204098463,
+        "seconds": 0.3356262408196926
+      },
+      "host_rng": {
+        "calls": 4848,
+        "mean_s": 4.934097053145025e-06,
+        "seconds": 0.02392050251364708
+      },
+      "physics": {
+        "calls": 200,
+        "mean_s": 0.0006445899896789342,
+        "seconds": 0.12891799793578684
+      },
+      "state_read": {
+        "calls": 200,
+        "mean_s": 0.0002029784396290779,
+        "seconds": 0.04059568792581558
+      },
+      "write_reset": {
+        "calls": 2,
+        "mean_s": 0.017356853932142258,
+        "seconds": 0.034713707864284515
+      },
+      "write_targets": {
+        "calls": 200,
+        "mean_s": 0.0004750647896435112,
+        "seconds": 0.09501295792870224
+      }
+    },
+    "note": "per-generation and per-step breakdowns live in measurements.generations[*].timings"
+  },
+  "workload": {
+    "backend": "numpy",
+    "capture_limit": 512,
+    "device": "cpu:0",
+    "episodes_per_policy": 3,
+    "generations": 2,
+    "horizon": 100,
+    "max_episode_length": 1500,
+    "payload": "env._trace_pop (go2) / env.initial_pop_arrays() (hover)",
+    "perturbation": "zero (default seeding.Perturbation)",
+    "pop_size": 8,
+    "residency": "numpy",
+    "rows": 24,
+    "stop_when_done": false,
+    "task": "hover",
+    "timer_groups": {
+      "generation_total": "env.evaluate, wall clock, synchronised before and after",
+      "graph_advance": "run_advance: clip -> observation -> reward -> termination -> bookkeeping",
+      "graph_controls": "run_controls (hover only): action -> clipped action + propeller RPM",
+      "graph_fitness": "run_fitness: episode returns -> policy fitness",
+      "graph_obs": "run_obs (Go2) / run_obs + run_reset_obs (hover): observation graph",
+      "graph_policy": "run_policy: genome payload x observation -> action",
+      "host_rng": "host draws: perturbed_init_qpos (Go2) / _draw_commands (hover)",
+      "physics": "genesis.Scene.step (class-level patch): rigid solver + state/material update",
+      "state_read": "env.read_state: the device -> host boundary (torch reads, rpy, error mask)",
+      "write_reset": "env._write_reset (Go2) / exclusive share of reset_generation (hover)",
+      "write_targets": "actuator write: env._write_targets (Go2) / drone.set_propellers_rpm (hover)"
+    },
+    "tolerances": {
+      "hover_yaw_deg": 0.001,
+      "masks": "exact (0 mismatches)",
+      "observation": 1e-06,
+      "returns_accumulated": 0.001,
+      "returns_step": 0.0001,
+      "reward_term": 1e-05,
+      "reward_total": 1e-05
+    }
+  }
+}

@@ -1,0 +1,851 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_probe.py",
+    "startup"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T22:43:54Z",
+  "error": null,
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A60",
+    "dirty": true,
+    "dirty_files": [
+      "M examples/neuroevolution/benchmarks/bench_probe.py",
+      " M examples/neuroevolution/benchmarks/probe_runtime.py",
+      "?? examples/neuroevolution/benchmarks/_startup_worker.py"
+    ],
+    "head": "d4f30d3805257c875eafb1a8f8620657a0c72951"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.18,
+    "loadavg_text": "0.18 0.30 0.34 20/624 3282251",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "host_after": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 1.29,
+    "loadavg_text": "1.29 0.84 0.54 1/629 3283126",
+    "owned_gpu_pids": [
+      3282231
+    ],
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_pids_all": [
+      "3282231"
+    ],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "host_before": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.24,
+    "loadavg_text": "0.24 0.31 0.34 1/626 3282268",
+    "owned_gpu_pids": [
+      3282231
+    ],
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_pids_all": [
+      "3282231"
+    ],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "probe_startup",
+  "measurements": {
+    "derived": {
+      "definition": "reexec_cost_s = median(wall_s[repair]) - median(wall_s[no_repair]); wall is spawn->exit of the whole python process, so it contains the process start that the repair performs twice; reexec_cost_module_s is the same difference on the re-executed child's module->init (import genesis + gs.init) and isolates whether the repaired child itself starts slower",
+      "gpu_premium_s": -0.253777,
+      "reexec_cost_module_s": -5.670806,
+      "reexec_cost_s": 6.669899,
+      "scope": "everything here happens before the record's own phases.build_s: it is process start only, no scene, no compiled graph, no generation"
+    },
+    "evidence": {
+      "cpu": {
+        "all_match": true,
+        "expects_opt_out": null,
+        "expects_reexec": null,
+        "ld_preload": [
+          "None"
+        ],
+        "n_runs": 3,
+        "opt_out": [
+          null
+        ],
+        "payload_lines": [
+          1
+        ],
+        "reexec_done": [
+          null
+        ]
+      },
+      "no_repair": {
+        "all_match": true,
+        "expects_opt_out": "0",
+        "expects_reexec": null,
+        "ld_preload": [
+          "None"
+        ],
+        "n_runs": 3,
+        "opt_out": [
+          "0"
+        ],
+        "payload_lines": [
+          1
+        ],
+        "reexec_done": [
+          null
+        ]
+      },
+      "repair": {
+        "all_match": true,
+        "expects_opt_out": null,
+        "expects_reexec": "1",
+        "ld_preload": [
+          "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100"
+        ],
+        "n_runs": 3,
+        "opt_out": [
+          null
+        ],
+        "payload_lines": [
+          1
+        ],
+        "reexec_done": [
+          "1"
+        ]
+      }
+    },
+    "gpu_after": {
+      "foreign_pids": [],
+      "gpu_free": true,
+      "note": "this probe process holds a HIP context because common.gpu_info() queried torch.cuda, so its own PIDs are excluded; an empty foreign list means no compile or rollout is left running",
+      "own_tree_pids": [
+        "3282231"
+      ],
+      "rocm_pids": [
+        "3282231"
+      ]
+    },
+    "hsa_status": {
+      "cpu": {
+        "applicable": true,
+        "blocked_reason": null,
+        "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+        "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+        "bundled_version": "1.18.70101",
+        "needs_reexec": true,
+        "preload": null,
+        "preload_names_system": false,
+        "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+        "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+        "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+        "system_version": "1.18.70100"
+      },
+      "no_repair": {
+        "applicable": true,
+        "blocked_reason": "The re-exec is disabled by GS_HSA_REEXEC=0.",
+        "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+        "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+        "bundled_version": "1.18.70101",
+        "needs_reexec": true,
+        "preload": null,
+        "preload_names_system": false,
+        "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+        "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+        "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+        "system_version": "1.18.70100"
+      },
+      "repair": {
+        "applicable": true,
+        "blocked_reason": null,
+        "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+        "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+        "bundled_version": "1.18.70101",
+        "needs_reexec": false,
+        "preload": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+        "preload_names_system": true,
+        "reason": "The system HSA runtime /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 is already preloaded, so no re-exec is required.",
+        "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+        "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+        "system_version": "1.18.70100"
+      }
+    },
+    "import_s": {
+      "cpu": {
+        "max": 12.674323,
+        "mean": 12.367861333333332,
+        "median": 12.234719,
+        "min": 12.194542,
+        "n": 3,
+        "spread": 0.4797809999999991,
+        "stdev": 0.21732098024862223
+      },
+      "no_repair": {
+        "max": 12.485941,
+        "mean": 12.396645666666666,
+        "median": 12.370189,
+        "min": 12.333807,
+        "n": 3,
+        "spread": 0.1521340000000002,
+        "stdev": 0.06486475621030453
+      },
+      "repair": {
+        "max": 6.704728,
+        "mean": 6.58082,
+        "median": 6.698764,
+        "min": 6.338968,
+        "n": 3,
+        "spread": 0.36575999999999986,
+        "stdev": 0.17103252079063777
+      }
+    },
+    "init_s": {
+      "cpu": {
+        "max": 1.214918,
+        "mean": 1.212385,
+        "median": 1.212877,
+        "min": 1.20936,
+        "n": 3,
+        "spread": 0.005557999999999952,
+        "stdev": 0.0022955593363419256
+      },
+      "no_repair": {
+        "max": 0.795877,
+        "mean": 0.7750119999999999,
+        "median": 0.771368,
+        "min": 0.757791,
+        "n": 3,
+        "spread": 0.03808599999999995,
+        "stdev": 0.015760602801500514
+      },
+      "repair": {
+        "max": 0.799951,
+        "mean": 0.7954223333333333,
+        "median": 0.796496,
+        "min": 0.78982,
+        "n": 3,
+        "spread": 0.010131000000000001,
+        "stdev": 0.004205065226076234
+      }
+    },
+    "module_to_init_s": {
+      "cpu": {
+        "max": 13.887199,
+        "mean": 13.580246333333333,
+        "median": 13.44408,
+        "min": 13.40946,
+        "n": 3,
+        "spread": 0.47773900000000147,
+        "stdev": 0.21750799338619525
+      },
+      "no_repair": {
+        "max": 13.243732,
+        "mean": 13.171657666666666,
+        "median": 13.166066,
+        "min": 13.105175,
+        "n": 3,
+        "spread": 0.13855700000000049,
+        "stdev": 0.056703677801552166
+      },
+      "repair": {
+        "max": 7.504679,
+        "mean": 7.376242333333334,
+        "median": 7.49526,
+        "min": 7.128788,
+        "n": 3,
+        "spread": 0.3758910000000002,
+        "stdev": 0.17501888413222413
+      }
+    },
+    "runs": [
+      {
+        "backend": "gpu",
+        "case": "repair",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "gpu"
+        ],
+        "env": {},
+        "payload_lines": 1,
+        "repeat": 0,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 20.158529,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "gpu",
+          "device": "cuda:0",
+          "hsa_check_applies": true,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": null,
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": false,
+            "preload": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "preload_names_system": true,
+            "reason": "The system HSA runtime /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 is already preloaded, so no re-exec is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 6.338968,
+          "init_s": 0.78982,
+          "ld_preload": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+          "module_to_init_s": 7.128788,
+          "opt_out": null,
+          "pid": 3282274,
+          "reexec_done": "1"
+        }
+      },
+      {
+        "backend": "gpu",
+        "case": "no_repair",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "gpu"
+        ],
+        "env": {
+          "GS_HSA_REEXEC": "0"
+        },
+        "payload_lines": 1,
+        "repeat": 0,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 13.794489,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "gpu",
+          "device": "cuda:0",
+          "hsa_check_applies": true,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": "The re-exec is disabled by GS_HSA_REEXEC=0.",
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": true,
+            "preload": null,
+            "preload_names_system": false,
+            "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 12.333807,
+          "init_s": 0.771368,
+          "ld_preload": null,
+          "module_to_init_s": 13.105175,
+          "opt_out": "0",
+          "pid": 3282406,
+          "reexec_done": null
+        }
+      },
+      {
+        "backend": "cpu",
+        "case": "cpu",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "cpu"
+        ],
+        "env": {},
+        "payload_lines": 1,
+        "repeat": 0,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 14.145935,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "cpu",
+          "device": "cpu",
+          "hsa_check_applies": false,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": null,
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": true,
+            "preload": null,
+            "preload_names_system": false,
+            "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 12.234719,
+          "init_s": 1.20936,
+          "ld_preload": null,
+          "module_to_init_s": 13.44408,
+          "opt_out": null,
+          "pid": 3282491,
+          "reexec_done": null
+        }
+      },
+      {
+        "backend": "gpu",
+        "case": "repair",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "gpu"
+        ],
+        "env": {},
+        "payload_lines": 1,
+        "repeat": 1,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 20.709415,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "gpu",
+          "device": "cuda:0",
+          "hsa_check_applies": true,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": null,
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": false,
+            "preload": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "preload_names_system": true,
+            "reason": "The system HSA runtime /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 is already preloaded, so no re-exec is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 6.698764,
+          "init_s": 0.796496,
+          "ld_preload": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+          "module_to_init_s": 7.49526,
+          "opt_out": null,
+          "pid": 3282557,
+          "reexec_done": "1"
+        }
+      },
+      {
+        "backend": "gpu",
+        "case": "no_repair",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "gpu"
+        ],
+        "env": {
+          "GS_HSA_REEXEC": "0"
+        },
+        "payload_lines": 1,
+        "repeat": 1,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 13.892158,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "gpu",
+          "device": "cuda:0",
+          "hsa_check_applies": true,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": "The re-exec is disabled by GS_HSA_REEXEC=0.",
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": true,
+            "preload": null,
+            "preload_names_system": false,
+            "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 12.370189,
+          "init_s": 0.795877,
+          "ld_preload": null,
+          "module_to_init_s": 13.166066,
+          "opt_out": "0",
+          "pid": 3282695,
+          "reexec_done": null
+        }
+      },
+      {
+        "backend": "cpu",
+        "case": "cpu",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "cpu"
+        ],
+        "env": {},
+        "payload_lines": 1,
+        "repeat": 1,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 14.542819,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "cpu",
+          "device": "cpu",
+          "hsa_check_applies": false,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": null,
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": true,
+            "preload": null,
+            "preload_names_system": false,
+            "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 12.674323,
+          "init_s": 1.212877,
+          "ld_preload": null,
+          "module_to_init_s": 13.887199,
+          "opt_out": null,
+          "pid": 3282778,
+          "reexec_done": null
+        }
+      },
+      {
+        "backend": "gpu",
+        "case": "repair",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "gpu"
+        ],
+        "env": {},
+        "payload_lines": 1,
+        "repeat": 2,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 20.562057,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "gpu",
+          "device": "cuda:0",
+          "hsa_check_applies": true,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": null,
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": false,
+            "preload": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "preload_names_system": true,
+            "reason": "The system HSA runtime /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 is already preloaded, so no re-exec is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 6.704728,
+          "init_s": 0.799951,
+          "ld_preload": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+          "module_to_init_s": 7.504679,
+          "opt_out": null,
+          "pid": 3282844,
+          "reexec_done": "1"
+        }
+      },
+      {
+        "backend": "gpu",
+        "case": "no_repair",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "gpu"
+        ],
+        "env": {
+          "GS_HSA_REEXEC": "0"
+        },
+        "payload_lines": 1,
+        "repeat": 2,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 13.893323,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "gpu",
+          "device": "cuda:0",
+          "hsa_check_applies": true,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": "The re-exec is disabled by GS_HSA_REEXEC=0.",
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": true,
+            "preload": null,
+            "preload_names_system": false,
+            "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 12.485941,
+          "init_s": 0.757791,
+          "ld_preload": null,
+          "module_to_init_s": 13.243732,
+          "opt_out": "0",
+          "pid": 3282978,
+          "reexec_done": null
+        }
+      },
+      {
+        "backend": "cpu",
+        "case": "cpu",
+        "case_matches": true,
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "--backend",
+          "cpu"
+        ],
+        "env": {},
+        "payload_lines": 1,
+        "repeat": 2,
+        "returncode": 0,
+        "status": "ok",
+        "stderr_tail": [],
+        "timed_out": false,
+        "timeout_s": 120.0,
+        "wall_s": 14.039866,
+        "worker": {
+          "argv0": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A60/examples/neuroevolution/benchmarks/_startup_worker.py",
+          "backend": "cpu",
+          "device": "cpu",
+          "hsa_check_applies": false,
+          "hsa_status": {
+            "applicable": true,
+            "blocked_reason": null,
+            "bundled_path": "/root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so",
+            "bundled_sha256": "10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8",
+            "bundled_version": "1.18.70101",
+            "needs_reexec": true,
+            "preload": null,
+            "preload_names_system": false,
+            "reason": "PyTorch bundles HSA runtime /root/evox-robotics/.venv/lib/python3.12/site-packages/torch/lib/libhsa-runtime64.so (version 1.18.70101, sha256 10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8) that differs from the system one /opt/rocm/lib/libhsa-runtime64.so.1.18.70100 (version 1.18.70100, sha256 e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3), so a re-exec preloading the system runtime is required.",
+            "system_path": "/opt/rocm/lib/libhsa-runtime64.so.1.18.70100",
+            "system_sha256": "e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3",
+            "system_version": "1.18.70100"
+          },
+          "import_s": 12.194542,
+          "init_s": 1.214918,
+          "ld_preload": null,
+          "module_to_init_s": 13.40946,
+          "opt_out": null,
+          "pid": 3283060,
+          "reexec_done": null
+        }
+      }
+    ],
+    "wall_s": {
+      "cpu": {
+        "max": 14.542819,
+        "mean": 14.242873333333334,
+        "median": 14.145935,
+        "min": 14.039866,
+        "n": 3,
+        "spread": 0.5029529999999998,
+        "stdev": 0.21646895143697212
+      },
+      "no_repair": {
+        "max": 13.893323,
+        "mean": 13.859990000000002,
+        "median": 13.892158,
+        "min": 13.794489,
+        "n": 3,
+        "spread": 0.09883400000000009,
+        "stdev": 0.046318643165216576
+      },
+      "repair": {
+        "max": 20.709415,
+        "mean": 20.476667000000003,
+        "median": 20.562057,
+        "min": 20.158529,
+        "n": 3,
+        "spread": 0.5508859999999984,
+        "stdev": 0.2328625278628279
+      }
+    },
+    "worker_processes_left": []
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "case_runs_s": 145.740784678,
+    "idle_wait_s": 0.0,
+    "total_s": 145.740784678
+  },
+  "process_role": "only",
+  "repeat": 0,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "go2",
+  "timings": {
+    "note": "per-run wall/import/init seconds are in measurements.runs and their per-case medians in measurements.*_s"
+  },
+  "workload": {
+    "case_timeout_s": 120.0,
+    "cases": [
+      "repair",
+      "no_repair",
+      "cpu"
+    ],
+    "hsa_opt_out_var": "GS_HSA_REEXEC",
+    "hsa_sentinel_var": "GS_HSA_REEXEC_DONE",
+    "idle_gate": "rocm-smi --showpids and /proc/loadavg are checked before the runs and again after them, the probe waits up to 120 s for an idle GPU and aborts instead of timing a contended start",
+    "note": "one worker process per run: it marks t0 before any third-party import, t1 after `import genesis` and t2 after `gs.init` returns, so module->init is exactly the process start that precedes every build/first-generation timer. `wall` is spawn->exit of the whole `python` process and therefore includes the re-exec when one happens; the parent interpreter is replaced by os.execve, so only the child prints a payload line",
+    "probe": "startup",
+    "python": "/root/evox-robotics/.venv/bin/python",
+    "repeats": 3,
+    "worker": "examples/neuroevolution/benchmarks/_startup_worker.py"
+  }
+}

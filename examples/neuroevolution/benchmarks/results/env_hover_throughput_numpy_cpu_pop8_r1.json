@@ -1,0 +1,1307 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_runtime.py",
+    "throughput",
+    "--task",
+    "hover",
+    "--pop-size",
+    "8",
+    "--horizon",
+    "200",
+    "--residency",
+    "numpy",
+    "--backend",
+    "numpy",
+    "--device",
+    "cpu:0",
+    "--repeat",
+    "1",
+    "--process-role",
+    "warm"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T21:25:28Z",
+  "error": null,
+  "genesis_init": {
+    "already_initialized": false,
+    "backend": "cpu",
+    "requested": "cpu"
+  },
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A54",
+    "dirty": true,
+    "dirty_files": [
+      "M examples/neuroevolution/benchmarks/bench_runtime.py",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop32.json",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop32_r1.json",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop8.json",
+      " M examples/neuroevolution/benchmarks/results/env_go2_throughput_numpy_cpu_pop8_r1.json",
+      " M examples/neuroevolution/benchmarks/results/env_hover_throughput_numpy_cpu_pop8.json"
+    ],
+    "head": "cdda51acf1ba470fa8eded55b832b0ddadbd6ecf"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.97,
+    "loadavg_text": "0.97 1.16 1.45 1/653 3245684",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "env_throughput",
+  "measurements": {
+    "cache": {
+      "compile_once": true,
+      "executables_call": "env.executables() once per generation (compile-once proof)",
+      "hits": 40,
+      "misses": 5,
+      "per_generation": [
+        {
+          "generation": 0,
+          "hits": 5,
+          "misses": 0
+        },
+        {
+          "generation": 1,
+          "hits": 5,
+          "misses": 0
+        },
+        {
+          "generation": 2,
+          "hits": 5,
+          "misses": 0
+        },
+        {
+          "generation": 3,
+          "hits": 5,
+          "misses": 0
+        }
+      ]
+    },
+    "checks": {
+      "checks": [
+        {
+          "expected_calls": 600,
+          "name": "numpy residency: one state read per step",
+          "observed_calls": 600,
+          "pass": true
+        },
+        {
+          "expected_calls": 600,
+          "name": "numpy residency: one actuator write per step",
+          "observed_calls": 600,
+          "pass": true
+        }
+      ],
+      "pass": true
+    },
+    "device_name": "cpu:0",
+    "device_resident_intermediates": null,
+    "generations": [
+      {
+        "cache_hits": 10,
+        "cache_misses": 5,
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 4763.12770446,
+        "fingerprint": "5bb3e21d1e337cb65c8766e5a8c7de54c58570b37e68ff9bd7a55fb43fcb674d",
+        "fitness": [
+          -1.22400450706,
+          -0.59776699543,
+          -0.168884918094,
+          -0.239088714123,
+          -0.668752491474,
+          -0.805245637894,
+          -0.264126271009,
+          -0.228481426835
+        ],
+        "generation": 0,
+        "residual_fraction": 0.0180284944914,
+        "residual_s": 0.0181787041947,
+        "seeds": [
+          1454269175,
+          757617120,
+          1421746521
+        ],
+        "steps": 200,
+        "steps_per_s": 198.463654353,
+        "steps_per_s_harness": 198.347410226,
+        "timings": {
+          "groups": {
+            "download": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "export": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "generation_total": {
+              "calls": 1,
+              "per_call_s": 1.00833179406,
+              "per_step_s": 0.00504165897029,
+              "seconds": 1.00833179406
+            },
+            "graph_advance": {
+              "calls": 200,
+              "per_call_s": 0.00101183937746,
+              "per_step_s": 0.00101183937746,
+              "seconds": 0.202367875492
+            },
+            "graph_all": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "graph_controls": {
+              "calls": 200,
+              "per_call_s": 5.39037026465e-05,
+              "per_step_s": 5.39037026465e-05,
+              "seconds": 0.0107807405293
+            },
+            "graph_fitness": {
+              "calls": 1,
+              "per_call_s": 8.91820527613e-05,
+              "per_step_s": 4.45910263807e-07,
+              "seconds": 8.91820527613e-05
+            },
+            "graph_obs": {
+              "calls": 1,
+              "per_call_s": 0.000182508956641,
+              "per_step_s": 9.12544783205e-07,
+              "seconds": 0.000182508956641
+            },
+            "graph_policy": {
+              "calls": 200,
+              "per_call_s": 0.00166569792898,
+              "per_step_s": 0.00166569792898,
+              "seconds": 0.333139585797
+            },
+            "host_query": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "host_rng": {
+              "calls": 4824,
+              "per_call_s": 4.78615817324e-06,
+              "per_step_s": 0.000115442135138,
+              "seconds": 0.0230884270277
+            },
+            "physics": {
+              "calls": 200,
+              "per_call_s": 0.000691639960278,
+              "per_step_s": 0.000691639960278,
+              "seconds": 0.138327992056
+            },
+            "rollout_total": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "stage_upload": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "state_read": {
+              "calls": 200,
+              "per_call_s": 0.000205569025129,
+              "per_step_s": 0.000205569025129,
+              "seconds": 0.0411138050258
+            },
+            "sync": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "write_reset": {
+              "calls": 1,
+              "per_call_s": 0.14724205411,
+              "per_step_s": 0.000736210270552,
+              "seconds": 0.14724205411
+            },
+            "write_targets": {
+              "calls": 200,
+              "per_call_s": 0.000469104594085,
+              "per_step_s": 0.000469104594085,
+              "seconds": 0.0938209188171
+            }
+          },
+          "measured_s": 0.990153089864
+        },
+        "traffic": {
+          "graph_advance": {
+            "bytes_per_step": 6360.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 1272000
+          },
+          "graph_controls": {
+            "bytes_per_step": 1152.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 230400
+          },
+          "graph_fitness": {
+            "bytes_per_step": 0.64,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 128
+          },
+          "graph_policy": {
+            "bytes_per_step": 76256.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 15251200
+          },
+          "graph_reset_obs": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          },
+          "read_state": {
+            "bytes_per_step": 1272.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 254400
+          },
+          "write_actuators": {
+            "bytes_per_step": 384.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 76800
+          },
+          "write_reset": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          }
+        },
+        "wall_time_s": 1.00774119399,
+        "warmup": true
+      },
+      {
+        "cache_hits": 20,
+        "cache_misses": 5,
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 5689.56921553,
+        "fingerprint": "e7d745d16d046ce53d625d6835c4cbf82bfca8e081722aac5b1426a8f04b9ab8",
+        "fitness": [
+          -1.35763120651,
+          -0.842055857182,
+          -0.16070716083,
+          -0.137035891414,
+          -0.628332674503,
+          -0.436071068048,
+          -0.199641898274,
+          -0.309669584036
+        ],
+        "generation": 1,
+        "residual_fraction": 0.0217161640453,
+        "residual_s": 0.0183337398339,
+        "seeds": [
+          1313752747,
+          908599966,
+          53557616
+        ],
+        "steps": 200,
+        "steps_per_s": 237.065383981,
+        "steps_per_s_harness": 236.898355077,
+        "timings": {
+          "groups": {
+            "download": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "export": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "generation_total": {
+              "calls": 1,
+              "per_call_s": 0.844243937172,
+              "per_step_s": 0.00422121968586,
+              "seconds": 0.844243937172
+            },
+            "graph_advance": {
+              "calls": 200,
+              "per_call_s": 0.000992939651478,
+              "per_step_s": 0.000992939651478,
+              "seconds": 0.198587930296
+            },
+            "graph_all": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "graph_controls": {
+              "calls": 200,
+              "per_call_s": 5.41181035805e-05,
+              "per_step_s": 5.41181035805e-05,
+              "seconds": 0.0108236207161
+            },
+            "graph_fitness": {
+              "calls": 1,
+              "per_call_s": 6.99129886925e-05,
+              "per_step_s": 3.49564943463e-07,
+              "seconds": 6.99129886925e-05
+            },
+            "graph_obs": {
+              "calls": 1,
+              "per_call_s": 9.0568093583e-05,
+              "per_step_s": 4.52840467915e-07,
+              "seconds": 9.0568093583e-05
+            },
+            "graph_policy": {
+              "calls": 200,
+              "per_call_s": 0.00164606951177,
+              "per_step_s": 0.00164606951177,
+              "seconds": 0.329213902354
+            },
+            "host_query": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "host_rng": {
+              "calls": 4824,
+              "per_call_s": 4.81004223411e-06,
+              "per_step_s": 0.000116018218687,
+              "seconds": 0.0232036437374
+            },
+            "physics": {
+              "calls": 200,
+              "per_call_s": 0.000686827955069,
+              "per_step_s": 0.000686827955069,
+              "seconds": 0.137365591014
+            },
+            "rollout_total": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "stage_upload": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "state_read": {
+              "calls": 200,
+              "per_call_s": 0.000203689176124,
+              "per_step_s": 0.000203689176124,
+              "seconds": 0.0407378352247
+            },
+            "sync": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "write_reset": {
+              "calls": 1,
+              "per_call_s": 0.00105476868339,
+              "per_step_s": 5.27384341694e-06,
+              "seconds": 0.00105476868339
+            },
+            "write_targets": {
+              "calls": 200,
+              "per_call_s": 0.000423812121153,
+              "per_step_s": 0.000423812121153,
+              "seconds": 0.0847624242306
+            }
+          },
+          "measured_s": 0.825910197338
+        },
+        "traffic": {
+          "graph_advance": {
+            "bytes_per_step": 6360.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 1272000
+          },
+          "graph_controls": {
+            "bytes_per_step": 1152.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 230400
+          },
+          "graph_fitness": {
+            "bytes_per_step": 0.64,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 128
+          },
+          "graph_policy": {
+            "bytes_per_step": 76256.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 15251200
+          },
+          "graph_reset_obs": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          },
+          "read_state": {
+            "bytes_per_step": 1272.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 254400
+          },
+          "write_actuators": {
+            "bytes_per_step": 384.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 76800
+          },
+          "write_reset": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          }
+        },
+        "wall_time_s": 0.843649109127,
+        "warmup": false
+      },
+      {
+        "cache_hits": 30,
+        "cache_misses": 5,
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 5688.6853028,
+        "fingerprint": "d91cfac9333821175370331fa4b711f1474311620dd721d6541a60493d2e5666",
+        "fitness": [
+          -1.2069196701,
+          -0.936916172504,
+          -0.191877916455,
+          -0.172155812383,
+          -0.637675225735,
+          -0.854015350342,
+          -0.31283774972,
+          -0.226384997368
+        ],
+        "generation": 2,
+        "residual_fraction": 0.0215578701629,
+        "residual_s": 0.0182015621103,
+        "seeds": [
+          1683657442,
+          1375977993,
+          1654802006
+        ],
+        "steps": 200,
+        "steps_per_s": 237.028554283,
+        "steps_per_s_harness": 236.879340709,
+        "timings": {
+          "groups": {
+            "download": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "export": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "generation_total": {
+              "calls": 1,
+              "per_call_s": 0.844311704859,
+              "per_step_s": 0.0042215585243,
+              "seconds": 0.844311704859
+            },
+            "graph_advance": {
+              "calls": 200,
+              "per_call_s": 0.00099471401656,
+              "per_step_s": 0.00099471401656,
+              "seconds": 0.198942803312
+            },
+            "graph_all": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "graph_controls": {
+              "calls": 200,
+              "per_call_s": 5.35474729259e-05,
+              "per_step_s": 5.35474729259e-05,
+              "seconds": 0.0107094945852
+            },
+            "graph_fitness": {
+              "calls": 1,
+              "per_call_s": 5.57010062039e-05,
+              "per_step_s": 2.78505031019e-07,
+              "seconds": 5.57010062039e-05
+            },
+            "graph_obs": {
+              "calls": 1,
+              "per_call_s": 8.73529352248e-05,
+              "per_step_s": 4.36764676124e-07,
+              "seconds": 8.73529352248e-05
+            },
+            "graph_policy": {
+              "calls": 200,
+              "per_call_s": 0.00164742219727,
+              "per_step_s": 0.00164742219727,
+              "seconds": 0.329484439455
+            },
+            "host_query": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "host_rng": {
+              "calls": 4824,
+              "per_call_s": 4.82680782626e-06,
+              "per_step_s": 0.000116422604769,
+              "seconds": 0.0232845209539
+            },
+            "physics": {
+              "calls": 200,
+              "per_call_s": 0.000681558561046,
+              "per_step_s": 0.000681558561046,
+              "seconds": 0.136311712209
+            },
+            "rollout_total": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "stage_upload": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "state_read": {
+              "calls": 200,
+              "per_call_s": 0.000206350852968,
+              "per_step_s": 0.000206350852968,
+              "seconds": 0.0412701705936
+            },
+            "sync": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "write_reset": {
+              "calls": 1,
+              "per_call_s": 0.000985413556919,
+              "per_step_s": 4.92706778459e-06,
+              "seconds": 0.000985413556919
+            },
+            "write_targets": {
+              "calls": 200,
+              "per_call_s": 0.000424892670708,
+              "per_step_s": 0.000424892670708,
+              "seconds": 0.0849785341416
+            }
+          },
+          "measured_s": 0.826110142749
+        },
+        "traffic": {
+          "graph_advance": {
+            "bytes_per_step": 6360.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 1272000
+          },
+          "graph_controls": {
+            "bytes_per_step": 1152.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 230400
+          },
+          "graph_fitness": {
+            "bytes_per_step": 0.64,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 128
+          },
+          "graph_policy": {
+            "bytes_per_step": 76256.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 15251200
+          },
+          "graph_reset_obs": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          },
+          "read_state": {
+            "bytes_per_step": 1272.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 254400
+          },
+          "write_actuators": {
+            "bytes_per_step": 384.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 76800
+          },
+          "write_reset": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          }
+        },
+        "wall_time_s": 0.843780196039,
+        "warmup": false
+      },
+      {
+        "cache_hits": 40,
+        "cache_misses": 5,
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 5701.44809554,
+        "fingerprint": "494d6f9b394a19fc4ed215e15f79e5c4775d262cad6630799b9c336c4be7fe79",
+        "fitness": [
+          -1.31710278988,
+          -0.694658756256,
+          -0.195308610797,
+          -0.156132131815,
+          -0.971689522266,
+          -0.566713869572,
+          -0.282183527946,
+          -0.215983167291
+        ],
+        "generation": 3,
+        "residual_fraction": 0.0215166356611,
+        "residual_s": 0.0181265005376,
+        "seeds": [
+          933518110,
+          2011253140,
+          1456274879
+        ],
+        "steps": 200,
+        "steps_per_s": 237.560337314,
+        "steps_per_s_harness": 237.40529085,
+        "timings": {
+          "groups": {
+            "download": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "export": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "generation_total": {
+              "calls": 1,
+              "per_call_s": 0.842441207962,
+              "per_step_s": 0.00421220603981,
+              "seconds": 0.842441207962
+            },
+            "graph_advance": {
+              "calls": 200,
+              "per_call_s": 0.000990489912219,
+              "per_step_s": 0.000990489912219,
+              "seconds": 0.198097982444
+            },
+            "graph_all": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "graph_controls": {
+              "calls": 200,
+              "per_call_s": 5.34159434028e-05,
+              "per_step_s": 5.34159434028e-05,
+              "seconds": 0.0106831886806
+            },
+            "graph_fitness": {
+              "calls": 1,
+              "per_call_s": 5.81131316721e-05,
+              "per_step_s": 2.90565658361e-07,
+              "seconds": 5.81131316721e-05
+            },
+            "graph_obs": {
+              "calls": 1,
+              "per_call_s": 8.7704975158e-05,
+              "per_step_s": 4.3852487579e-07,
+              "seconds": 8.7704975158e-05
+            },
+            "graph_policy": {
+              "calls": 200,
+              "per_call_s": 0.00164187273709,
+              "per_step_s": 0.00164187273709,
+              "seconds": 0.328374547418
+            },
+            "host_query": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "host_rng": {
+              "calls": 4824,
+              "per_call_s": 4.80028313575e-06,
+              "per_step_s": 0.000115782829234,
+              "seconds": 0.0231565658469
+            },
+            "physics": {
+              "calls": 200,
+              "per_call_s": 0.000687878918834,
+              "per_step_s": 0.000687878918834,
+              "seconds": 0.137575783767
+            },
+            "rollout_total": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "stage_upload": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "state_read": {
+              "calls": 200,
+              "per_call_s": 0.00020401535905,
+              "per_step_s": 0.00020401535905,
+              "seconds": 0.0408030718099
+            },
+            "sync": {
+              "calls": 0,
+              "per_call_s": null,
+              "per_step_s": 0.0,
+              "seconds": 0.0
+            },
+            "write_reset": {
+              "calls": 1,
+              "per_call_s": 0.000951361842453,
+              "per_step_s": 4.75680921227e-06,
+              "seconds": 0.000951361842453
+            },
+            "write_targets": {
+              "calls": 200,
+              "per_call_s": 0.000422631937545,
+              "per_step_s": 0.000422631937545,
+              "seconds": 0.084526387509
+            }
+          },
+          "measured_s": 0.824314707424
+        },
+        "traffic": {
+          "graph_advance": {
+            "bytes_per_step": 6360.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 1272000
+          },
+          "graph_controls": {
+            "bytes_per_step": 1152.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 230400
+          },
+          "graph_fitness": {
+            "bytes_per_step": 0.64,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 128
+          },
+          "graph_policy": {
+            "bytes_per_step": 76256.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 15251200
+          },
+          "graph_reset_obs": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          },
+          "read_state": {
+            "bytes_per_step": 1272.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 254400
+          },
+          "write_actuators": {
+            "bytes_per_step": 384.0,
+            "calls": 200,
+            "calls_per_step": 1.0,
+            "nbytes": 76800
+          },
+          "write_reset": {
+            "bytes_per_step": 12.96,
+            "calls": 1,
+            "calls_per_step": 0.005,
+            "nbytes": 2592
+          }
+        },
+        "wall_time_s": 0.841891379096,
+        "warmup": false
+      }
+    ],
+    "host_bytes_per_step": 85450.56,
+    "host_calls_per_step": 5.015,
+    "per_step_means": {
+      "graph_advance": {
+        "calls": 600,
+        "per_generation_median_s": 0.198587930296,
+        "per_step_s": 0.000992714526753,
+        "seconds": 0.595628716052
+      },
+      "graph_controls": {
+        "calls": 600,
+        "per_generation_median_s": 0.0107094945852,
+        "per_step_s": 5.36938399698e-05,
+        "seconds": 0.0322163039819
+      },
+      "graph_fitness": {
+        "calls": 3,
+        "per_generation_median_s": 5.81131316721e-05,
+        "per_step_s": 3.06211877614e-07,
+        "seconds": 0.000183727126568
+      },
+      "graph_obs": {
+        "calls": 3,
+        "per_generation_median_s": 8.7704975158e-05,
+        "per_step_s": 4.4271000661e-07,
+        "seconds": 0.000265626003966
+      },
+      "graph_policy": {
+        "calls": 600,
+        "per_generation_median_s": 0.329213902354,
+        "per_step_s": 0.00164512148204,
+        "seconds": 0.987072889227
+      },
+      "host_rng": {
+        "calls": 14472,
+        "per_generation_median_s": 0.0232036437374,
+        "per_step_s": 0.000116074550897,
+        "seconds": 0.0696447305382
+      },
+      "physics": {
+        "calls": 600,
+        "per_generation_median_s": 0.137365591014,
+        "per_step_s": 0.00068542181165,
+        "seconds": 0.41125308699
+      },
+      "state_read": {
+        "calls": 600,
+        "per_generation_median_s": 0.0408030718099,
+        "per_step_s": 0.00020468512938,
+        "seconds": 0.122811077628
+      },
+      "write_reset": {
+        "calls": 3,
+        "per_generation_median_s": 0.000985413556919,
+        "per_step_s": 4.9859068046e-06,
+        "seconds": 0.00299154408276
+      },
+      "write_targets": {
+        "calls": 600,
+        "per_generation_median_s": 0.0847624242306,
+        "per_step_s": 0.000423778909802,
+        "seconds": 0.254267345881
+      }
+    },
+    "residency": "numpy",
+    "state_read_parity": null,
+    "sync_calls_per_step": 0.0,
+    "task": "hover",
+    "throughput": {
+      "env_steps_per_s": {
+        "max": 5701.44809554,
+        "mean": 5693.234204623334,
+        "median": 5689.56921553,
+        "min": 5688.6853028,
+        "n": 3,
+        "spread": 12.762792740000805,
+        "stdev": 5.819297118022785
+      },
+      "note": "median and spread over the timed generations of this process; the warm-up generation is excluded everywhere (it carries the first-step JIT of the compiled kernels and the empty caches)",
+      "rows": 24,
+      "steps_per_s": {
+        "max": 237.560337314,
+        "mean": 237.21809185933333,
+        "median": 237.065383981,
+        "min": 237.028554283,
+        "n": 3,
+        "spread": 0.5317830310000033,
+        "stdev": 0.2424707131369207
+      },
+      "steps_per_s_harness": {
+        "max": 237.40529085,
+        "mean": 237.06099554533333,
+        "median": 236.898355077,
+        "min": 236.879340709,
+        "n": 3,
+        "spread": 0.5259501410000098,
+        "stdev": 0.24357726927233003
+      },
+      "steps_total": 600,
+      "timed_generations": [
+        1,
+        2,
+        3
+      ],
+      "wall_time_s": {
+        "max": 0.843780196039,
+        "mean": 0.843106894754,
+        "median": 0.843649109127,
+        "min": 0.841891379096,
+        "n": 3,
+        "spread": 0.0018888169430000268,
+        "stdev": 0.0008611638174613152
+      },
+      "warmup_generation": 0
+    },
+    "traffic": {
+      "graph_advance": {
+        "bytes_per_step": 6360.0,
+        "calls": 600,
+        "calls_per_step": 1.0,
+        "nbytes": 3816000
+      },
+      "graph_controls": {
+        "bytes_per_step": 1152.0,
+        "calls": 600,
+        "calls_per_step": 1.0,
+        "nbytes": 691200
+      },
+      "graph_fitness": {
+        "bytes_per_step": 0.64,
+        "calls": 3,
+        "calls_per_step": 0.005,
+        "nbytes": 384
+      },
+      "graph_policy": {
+        "bytes_per_step": 76256.0,
+        "calls": 600,
+        "calls_per_step": 1.0,
+        "nbytes": 45753600
+      },
+      "graph_reset_obs": {
+        "bytes_per_step": 12.96,
+        "calls": 3,
+        "calls_per_step": 0.005,
+        "nbytes": 7776
+      },
+      "read_state": {
+        "bytes_per_step": 1272.0,
+        "calls": 600,
+        "calls_per_step": 1.0,
+        "nbytes": 763200
+      },
+      "write_actuators": {
+        "bytes_per_step": 384.0,
+        "calls": 600,
+        "calls_per_step": 1.0,
+        "nbytes": 230400
+      },
+      "write_reset": {
+        "bytes_per_step": 12.96,
+        "calls": 3,
+        "calls_per_step": 0.005,
+        "nbytes": 7776
+      }
+    }
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "build_s": 4.11237923615,
+    "close_s": 0.0941522680223,
+    "first_generation_s": 1.00774119399,
+    "first_generation_total_s": 1.00833179406,
+    "generation_total_scope": "generation_total is env.evaluate end to end (host seed draw + reset + steps + run_fitness) measured by the harness; measurements.generations[*].wall_time_s is the environment's own counter, which starts after the host seed draw and stops before run_fitness",
+    "graph_build_note": "per-graph build time is measured inside ExecutableCache.get while the env is constructed; the env builds every executable in __init__, so this table is the compile cost and every later generation is a cache hit",
+    "graph_build_s": {
+      "advance": {
+        "build_s": 0.0581446010619,
+        "build_s_per_build": 0.0581446010619,
+        "builds": 1,
+        "calls": 1,
+        "lookup_s": 0.0
+      },
+      "controls": {
+        "build_s": 0.00190319190733,
+        "build_s_per_build": 0.00190319190733,
+        "builds": 1,
+        "calls": 1,
+        "lookup_s": 0.0
+      },
+      "fitness": {
+        "build_s": 0.000731948995963,
+        "build_s_per_build": 0.000731948995963,
+        "builds": 1,
+        "calls": 1,
+        "lookup_s": 0.0
+      },
+      "policy": {
+        "build_s": 0.0544855110347,
+        "build_s_per_build": 0.0544855110347,
+        "builds": 1,
+        "calls": 1,
+        "lookup_s": 0.0
+      },
+      "reset_obs": {
+        "build_s": 0.0019565790426,
+        "build_s_per_build": 0.0019565790426,
+        "builds": 1,
+        "calls": 1,
+        "lookup_s": 0.0
+      }
+    },
+    "graph_build_total_s": 0.117221832043,
+    "steady_generation_median_s": 0.843649109127,
+    "steady_generation_total_median_s": 0.844243937172,
+    "sync_note": "common.sync() runs before and after every generation; it calls torch.cuda.synchronize() only when a HIP/CUDA device is available (it reported True here) and is a no-op on a CPU-resident run, where every timed region is host wall clock (time.perf_counter anyway)",
+    "synchronized_before_and_after_each_generation": true,
+    "total_s": 7.74700499093
+  },
+  "process_role": "warm",
+  "repeat": 1,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "hover",
+  "timings": {
+    "groups": {
+      "download": {
+        "calls": 0,
+        "mean_s": null,
+        "seconds": 0.0
+      },
+      "export": {
+        "calls": 0,
+        "mean_s": null,
+        "seconds": 0.0
+      },
+      "generation_total": {
+        "calls": 4,
+        "mean_s": 0.884832161013037,
+        "seconds": 3.539328644052148
+      },
+      "graph_advance": {
+        "calls": 800,
+        "mean_s": 0.0009974957394297235,
+        "seconds": 0.7979965915437788
+      },
+      "graph_all": {
+        "calls": 0,
+        "mean_s": null,
+        "seconds": 0.0
+      },
+      "graph_controls": {
+        "calls": 800,
+        "mean_s": 5.374630563892424e-05,
+        "seconds": 0.04299704451113939
+      },
+      "graph_fitness": {
+        "calls": 4,
+        "mean_s": 6.822729483246803e-05,
+        "seconds": 0.00027290917932987213
+      },
+      "graph_obs": {
+        "calls": 4,
+        "mean_s": 0.00011203374015167356,
+        "seconds": 0.0004481349606066942
+      },
+      "graph_policy": {
+        "calls": 800,
+        "mean_s": 0.0016502655937802046,
+        "seconds": 1.3202124750241637
+      },
+      "host_query": {
+        "calls": 0,
+        "mean_s": null,
+        "seconds": 0.0
+      },
+      "host_rng": {
+        "calls": 19296,
+        "mean_s": 4.805822842341275e-06,
+        "seconds": 0.09273315756581724
+      },
+      "physics": {
+        "calls": 800,
+        "mean_s": 0.0006869763488066383,
+        "seconds": 0.5495810790453106
+      },
+      "rollout_total": {
+        "calls": 0,
+        "mean_s": null,
+        "seconds": 0.0
+      },
+      "stage_upload": {
+        "calls": 0,
+        "mean_s": null,
+        "seconds": 0.0
+      },
+      "state_read": {
+        "calls": 800,
+        "mean_s": 0.0002049061033176258,
+        "seconds": 0.16392488265410066
+      },
+      "sync": {
+        "calls": 0,
+        "mean_s": null,
+        "seconds": 0.0
+      },
+      "write_reset": {
+        "calls": 4,
+        "mean_s": 0.037558399548288435,
+        "seconds": 0.15023359819315374
+      },
+      "write_targets": {
+        "calls": 800,
+        "mean_s": 0.00043511033087270337,
+        "seconds": 0.3480882646981627
+      }
+    },
+    "note": "per-generation breakdowns live in measurements.generations[*].timings"
+  },
+  "workload": {
+    "backend": "numpy",
+    "byte_estimate": "tensor numel * element_size, numpy .nbytes; a graph call counts its operands and its result, so the figure is an estimate of the host <-> graph traffic, not a PCIe counter",
+    "device": "cpu:0",
+    "episodes_per_policy": 3,
+    "generations": 4,
+    "horizon": 200,
+    "max_episode_length": 1500,
+    "payload": "env._trace_pop (go2) / env.initial_pop_arrays() (hover)",
+    "perturbation": "zero (default seeding.Perturbation)",
+    "physics_backend": "cpu",
+    "pop_size": 8,
+    "residency": "numpy",
+    "resolved_backend": "numpy",
+    "resolved_device": "cpu:0",
+    "rigid_options_override": null,
+    "rows": 24,
+    "stop_when_done": false,
+    "sync": "common.sync() before and after every generation",
+    "task": "hover",
+    "timed_generations": 3,
+    "timer_groups": {
+      "download": "device -> host readback of one graph output",
+      "export": "hover device _export: graph output -> genesis, including the single GPUSync",
+      "generation_total": "env.evaluate, wall clock, synchronised before and after",
+      "graph_advance": "run_advance: clip -> observation -> reward -> termination -> bookkeeping",
+      "graph_all": "evoxc.run inside the hover device rollout (policy + controls + advance inline)",
+      "graph_controls": "run_controls (hover only): action -> clipped action + propeller RPM",
+      "graph_fitness": "run_fitness: episode returns -> policy fitness",
+      "graph_obs": "run_obs (Go2) / run_obs + run_reset_obs (hover): observation graph",
+      "graph_policy": "run_policy: genome payload x observation -> action",
+      "host_query": "hover device _error_mask: scene.get_error_envs_mask as a host array",
+      "host_rng": "host draws: perturbed_init_qpos (Go2) / _draw_commands (hover)",
+      "physics": "genesis.Scene.step (class-level patch): rigid solver + state/material update",
+      "rollout_total": "go2_device_rollout._DeviceRollout.run / hover_device_rollout.DeviceRollout.evaluate",
+      "stage_upload": "host -> device staging of one operand",
+      "state_read": "env.read_state: the device -> host boundary (torch reads, rpy, error mask)",
+      "sync": "go2 device _sync: torch.cuda.synchronize() fencing torch against IREE's queue",
+      "write_reset": "env._write_reset (Go2) / exclusive share of reset_generation (hover)",
+      "write_targets": "actuator write: env._write_targets (Go2) / drone.set_propellers_rpm (hover)"
+    },
+    "variant": "baseline",
+    "warmup_generation": 0
+  }
+}

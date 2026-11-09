@@ -1,0 +1,615 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_probe.py",
+    "tell-backend",
+    "--all",
+    "--out",
+    "examples/neuroevolution/benchmarks/results/tell_backend_rocm.json"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T22:14:35Z",
+  "error": null,
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A56",
+    "dirty": false,
+    "dirty_files": [],
+    "head": "250f77fcd575b30aeb06db6248984f1052ffc78c"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.76,
+    "loadavg_text": "0.76 0.97 0.91 20/651 3278296",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "probe_tell_backend",
+  "measurements": {
+    "entries": {
+      "iree@rocm:0": {
+        "backend": "iree",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/neuroevolution/benchmarks/_tell_worker.py",
+          "--backend",
+          "iree",
+          "--device",
+          "rocm:0"
+        ],
+        "device": "rocm:0",
+        "elapsed_s": 240.016104,
+        "last_phase": "build_tell_start",
+        "phase_timings": {
+          "build_tell_start": {
+            "backend": "iree",
+            "device": "rocm:0",
+            "elapsed_s": 0.304292,
+            "phase": "build_tell_start"
+          },
+          "evoxc_imported": {
+            "elapsed_s": 0.098483,
+            "evoxc_version": "0.1.0",
+            "phase": "evoxc_imported"
+          },
+          "numpy_imported": {
+            "elapsed_s": 0.042893,
+            "phase": "numpy_imported"
+          },
+          "pipeline_ready": {
+            "elapsed_s": 0.304257,
+            "generation": 0.0,
+            "phase": "pipeline_ready",
+            "pop_shapes": [
+              [
+                4,
+                80
+              ],
+              [
+                4,
+                80,
+                4
+              ],
+              [
+                4,
+                640,
+                2
+              ],
+              [
+                4,
+                640,
+                1
+              ]
+            ],
+            "randkey": 7960286522194355700,
+            "setup_s": 0.014973,
+            "species_leaves": 10
+          },
+          "start": {
+            "backend": "iree",
+            "device": "rocm:0",
+            "elapsed_s": 1e-06,
+            "phase": "start"
+          },
+          "tensorneat_imported": {
+            "elapsed_s": 0.285919,
+            "phase": "tensorneat_imported"
+          },
+          "worker_imports_done": {
+            "elapsed_s": 0.289244,
+            "phase": "worker_imports_done"
+          }
+        },
+        "phases_reached": [
+          "start",
+          "numpy_imported",
+          "evoxc_imported",
+          "tensorneat_imported",
+          "worker_imports_done",
+          "pipeline_ready",
+          "build_tell_start"
+        ],
+        "plugin_path": null,
+        "result": null,
+        "returncode": -9,
+        "status": "timeout",
+        "stderr_bytes": 335,
+        "stderr_tail": [
+          "/root/evox-robotics/.venv/lib/python3.12/site-packages/evoxc/numpy/creation.py:80: UserWarning: Embedding a tensor of 4147216 bytes as a graph constant (threshold 1048576 bytes, set via EVOXC_LARGE_CONSTANT_BYTES); prefer passing it as an explicit input instead.",
+          "  return ops.constant(core.tensor(np.full(s, fill_value, dtype=dtype)))"
+        ],
+        "stdout_bytes": 660,
+        "stdout_tail": [
+          "PHASE {\"backend\": \"iree\", \"device\": \"rocm:0\", \"elapsed_s\": 1e-06, \"phase\": \"start\"}",
+          "PHASE {\"elapsed_s\": 0.042893, \"phase\": \"numpy_imported\"}",
+          "PHASE {\"elapsed_s\": 0.098483, \"evoxc_version\": \"0.1.0\", \"phase\": \"evoxc_imported\"}",
+          "PHASE {\"elapsed_s\": 0.285919, \"phase\": \"tensorneat_imported\"}",
+          "PHASE {\"elapsed_s\": 0.289244, \"phase\": \"worker_imports_done\"}",
+          "PHASE {\"elapsed_s\": 0.304257, \"generation\": 0.0, \"phase\": \"pipeline_ready\", \"pop_shapes\": [[4, 80], [4, 80, 4], [4, 640, 2], [4, 640, 1]], \"randkey\": 7960286522194355700, \"setup_s\": 0.014973, \"species_leaves\": 10}",
+          "PHASE {\"backend\": \"iree\", \"device\": \"rocm:0\", \"elapsed_s\": 0.304292, \"phase\": \"build_tell_start\"}"
+        ],
+        "timed_out": true,
+        "timeout_s": 240.0,
+        "worker_processes_left": []
+      },
+      "numpy@cpu:0": {
+        "backend": "numpy",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/neuroevolution/benchmarks/_tell_worker.py",
+          "--backend",
+          "numpy",
+          "--device",
+          "cpu:0"
+        ],
+        "device": "cpu:0",
+        "elapsed_s": 0.718619,
+        "last_phase": "run_tell_done",
+        "phase_timings": {
+          "build_tell_done": {
+            "build_s": 0.27145,
+            "elapsed_s": 0.581524,
+            "phase": "build_tell_done",
+            "resolved_backend": "numpy",
+            "resolved_device": "cpu:0"
+          },
+          "build_tell_start": {
+            "backend": "numpy",
+            "device": "cpu:0",
+            "elapsed_s": 0.310059,
+            "phase": "build_tell_start"
+          },
+          "evoxc_imported": {
+            "elapsed_s": 0.101918,
+            "evoxc_version": "0.1.0",
+            "phase": "evoxc_imported"
+          },
+          "numpy_imported": {
+            "elapsed_s": 0.044168,
+            "phase": "numpy_imported"
+          },
+          "pipeline_ready": {
+            "elapsed_s": 0.310026,
+            "generation": 0.0,
+            "phase": "pipeline_ready",
+            "pop_shapes": [
+              [
+                4,
+                80
+              ],
+              [
+                4,
+                80,
+                4
+              ],
+              [
+                4,
+                640,
+                2
+              ],
+              [
+                4,
+                640,
+                1
+              ]
+            ],
+            "randkey": 7960286522194355700,
+            "setup_s": 0.013765,
+            "species_leaves": 10
+          },
+          "run_tell_done": {
+            "elapsed_s": 0.590172,
+            "phase": "run_tell_done",
+            "run_s": 0.008598
+          },
+          "run_tell_start": {
+            "elapsed_s": 0.58156,
+            "phase": "run_tell_start"
+          },
+          "start": {
+            "backend": "numpy",
+            "device": "cpu:0",
+            "elapsed_s": 1e-06,
+            "phase": "start"
+          },
+          "tensorneat_imported": {
+            "elapsed_s": 0.292921,
+            "phase": "tensorneat_imported"
+          },
+          "worker_imports_done": {
+            "elapsed_s": 0.296223,
+            "phase": "worker_imports_done"
+          }
+        },
+        "phases_reached": [
+          "start",
+          "numpy_imported",
+          "evoxc_imported",
+          "tensorneat_imported",
+          "worker_imports_done",
+          "pipeline_ready",
+          "build_tell_start",
+          "build_tell_done",
+          "run_tell_start",
+          "run_tell_done"
+        ],
+        "plugin_path": null,
+        "result": {
+          "backend": "numpy",
+          "build_s": 0.27145,
+          "device": "cpu:0",
+          "generation_out": 1.0,
+          "population": [
+            {
+              "dtype": "int32",
+              "shape": [
+                4,
+                80
+              ]
+            },
+            {
+              "dtype": "float32",
+              "shape": [
+                4,
+                80,
+                4
+              ]
+            },
+            {
+              "dtype": "int32",
+              "shape": [
+                4,
+                640,
+                2
+              ]
+            },
+            {
+              "dtype": "float32",
+              "shape": [
+                4,
+                640,
+                1
+              ]
+            }
+          ],
+          "randkey_out": 8375203692011359461,
+          "resolved_backend": "numpy",
+          "resolved_device": "cpu:0",
+          "run_s": 0.008598,
+          "setup_s": 0.013765,
+          "species_leaves": 10,
+          "status": "ok",
+          "total_s": 0.590203
+        },
+        "returncode": 0,
+        "status": "ok",
+        "stderr_bytes": 335,
+        "stderr_tail": [
+          "/root/evox-robotics/.venv/lib/python3.12/site-packages/evoxc/numpy/creation.py:80: UserWarning: Embedding a tensor of 4147216 bytes as a graph constant (threshold 1048576 bytes, set via EVOXC_LARGE_CONSTANT_BYTES); prefer passing it as an explicit input instead.",
+          "  return ops.constant(core.tensor(np.full(s, fill_value, dtype=dtype)))"
+        ],
+        "stdout_bytes": 1391,
+        "stdout_tail": [
+          "PHASE {\"backend\": \"numpy\", \"device\": \"cpu:0\", \"elapsed_s\": 1e-06, \"phase\": \"start\"}",
+          "PHASE {\"elapsed_s\": 0.044168, \"phase\": \"numpy_imported\"}",
+          "PHASE {\"elapsed_s\": 0.101918, \"evoxc_version\": \"0.1.0\", \"phase\": \"evoxc_imported\"}",
+          "PHASE {\"elapsed_s\": 0.292921, \"phase\": \"tensorneat_imported\"}",
+          "PHASE {\"elapsed_s\": 0.296223, \"phase\": \"worker_imports_done\"}",
+          "PHASE {\"elapsed_s\": 0.310026, \"generation\": 0.0, \"phase\": \"pipeline_ready\", \"pop_shapes\": [[4, 80], [4, 80, 4], [4, 640, 2], [4, 640, 1]], \"randkey\": 7960286522194355700, \"setup_s\": 0.013765, \"species_leaves\": 10}",
+          "PHASE {\"backend\": \"numpy\", \"device\": \"cpu:0\", \"elapsed_s\": 0.310059, \"phase\": \"build_tell_start\"}",
+          "PHASE {\"build_s\": 0.27145, \"elapsed_s\": 0.581524, \"phase\": \"build_tell_done\", \"resolved_backend\": \"numpy\", \"resolved_device\": \"cpu:0\"}",
+          "PHASE {\"elapsed_s\": 0.58156, \"phase\": \"run_tell_start\"}",
+          "PHASE {\"elapsed_s\": 0.590172, \"phase\": \"run_tell_done\", \"run_s\": 0.008598}",
+          "RESULT {\"backend\": \"numpy\", \"build_s\": 0.27145, \"device\": \"cpu:0\", \"generation_out\": 1.0, \"population\": [{\"dtype\": \"int32\", \"shape\": [4, 80]}, {\"dtype\": \"float32\", \"shape\": [4, 80, 4]}, {\"dtype\": \"int32\", \"shape\": [4, 640, 2]}, {\"dtype\": \"float32\", \"shape\": [4, 640, 1]}], \"randkey_out\": 8375203692011359461, \"resolved_backend\": \"numpy\", \"resolved_device\": \"cpu:0\", \"run_s\": 0.008598, \"setup_s\": 0.01"
+        ],
+        "timed_out": false,
+        "timeout_s": 240.0,
+        "worker_processes_left": []
+      },
+      "xla@rocm:0": {
+        "backend": "xla",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/neuroevolution/benchmarks/_tell_worker.py",
+          "--backend",
+          "xla",
+          "--device",
+          "rocm:0",
+          "--pjrt-plugin",
+          "/tmp/xla_rocm_whl/x/jax_plugins/xla_rocm7/xla_rocm_plugin.so"
+        ],
+        "device": "rocm:0",
+        "elapsed_s": 11.690903,
+        "last_phase": "run_tell_done",
+        "phase_timings": {
+          "build_tell_done": {
+            "build_s": 4.723988,
+            "elapsed_s": 5.108054,
+            "phase": "build_tell_done",
+            "resolved_backend": "xla",
+            "resolved_device": "rocm:0"
+          },
+          "build_tell_start": {
+            "backend": "xla",
+            "device": "rocm:0",
+            "elapsed_s": 0.384046,
+            "phase": "build_tell_start"
+          },
+          "evoxc_imported": {
+            "elapsed_s": 0.16974,
+            "evoxc_version": "0.1.0",
+            "phase": "evoxc_imported"
+          },
+          "numpy_imported": {
+            "elapsed_s": 0.106186,
+            "phase": "numpy_imported"
+          },
+          "pipeline_ready": {
+            "elapsed_s": 0.38401,
+            "generation": 0.0,
+            "phase": "pipeline_ready",
+            "pop_shapes": [
+              [
+                4,
+                80
+              ],
+              [
+                4,
+                80,
+                4
+              ],
+              [
+                4,
+                640,
+                2
+              ],
+              [
+                4,
+                640,
+                1
+              ]
+            ],
+            "randkey": 7960286522194355700,
+            "setup_s": 0.015276,
+            "species_leaves": 10
+          },
+          "run_tell_done": {
+            "elapsed_s": 11.268933,
+            "phase": "run_tell_done",
+            "run_s": 6.160802
+          },
+          "run_tell_start": {
+            "elapsed_s": 5.108112,
+            "phase": "run_tell_start"
+          },
+          "start": {
+            "backend": "xla",
+            "device": "rocm:0",
+            "elapsed_s": 1e-06,
+            "phase": "start"
+          },
+          "tensorneat_imported": {
+            "elapsed_s": 0.365378,
+            "phase": "tensorneat_imported"
+          },
+          "worker_imports_done": {
+            "elapsed_s": 0.368692,
+            "phase": "worker_imports_done"
+          }
+        },
+        "phases_reached": [
+          "start",
+          "numpy_imported",
+          "evoxc_imported",
+          "tensorneat_imported",
+          "worker_imports_done",
+          "pipeline_ready",
+          "build_tell_start",
+          "build_tell_done",
+          "run_tell_start",
+          "run_tell_done"
+        ],
+        "plugin_path": "/tmp/xla_rocm_whl/x/jax_plugins/xla_rocm7/xla_rocm_plugin.so",
+        "result": {
+          "backend": "xla",
+          "build_s": 4.723988,
+          "device": "rocm:0",
+          "generation_out": 1.0,
+          "population": [
+            {
+              "dtype": "int32",
+              "shape": [
+                4,
+                80
+              ]
+            },
+            {
+              "dtype": "float32",
+              "shape": [
+                4,
+                80,
+                4
+              ]
+            },
+            {
+              "dtype": "int32",
+              "shape": [
+                4,
+                640,
+                2
+              ]
+            },
+            {
+              "dtype": "float32",
+              "shape": [
+                4,
+                640,
+                1
+              ]
+            }
+          ],
+          "randkey_out": 8375203692011359461,
+          "resolved_backend": "xla",
+          "resolved_device": "rocm:0",
+          "run_s": 6.160802,
+          "setup_s": 0.015276,
+          "species_leaves": 10,
+          "status": "ok",
+          "total_s": 11.268992
+        },
+        "returncode": 0,
+        "status": "ok",
+        "stderr_bytes": 1513,
+        "stderr_tail": [
+          "/root/evox-robotics/.venv/lib/python3.12/site-packages/evoxc/numpy/creation.py:80: UserWarning: Embedding a tensor of 4147216 bytes as a graph constant (threshold 1048576 bytes, set via EVOXC_LARGE_CONSTANT_BYTES); prefer passing it as an explicit input instead.",
+          "  return ops.constant(core.tensor(np.full(s, fill_value, dtype=dtype)))",
+          "I1109 22:18:44.497948 3278423 service.cc:178] XLA service 0x16de84c0 initialized for platform ROCM (this does not guarantee that XLA will be used). Devices:",
+          "I1109 22:18:44.497966 3278423 service.cc:194]   StreamExecutor [0]: AMD Instinct MI300X VF, AMDGPU ISA version: gfx942:sramecc+:xnack- (Driver: 7.1.25424; Runtime: 7.1.25424; Toolkit: 7.2.26015; DNN: 0.0.0)",
+          "I1109 22:18:44.598484 3278423 se_gpu_pjrt_client.cc:1358] Using BFC allocator.",
+          "I1109 22:18:44.598508 3278423 gpu_helpers.cc:158] XLA backend allocating 143.77GiB (154367164416 bytes) on device 0 for BFCAllocator.",
+          "I1109 22:18:44.598518 3278423 gpu_helpers.cc:201] XLA backend will use up to 51455721472 bytes on device 0 for CollectiveBFCAllocator.",
+          "I1109 22:18:45.678492 3278467 amdgpu_backend.cc:176] TF_XLA_HSACO_CACHE_DIR is not set: HSACO file cache is disabled!",
+          "I1109 22:18:48.494556 3278423 se_gpu_pjrt_client.cc:1358] Using BFC allocator.",
+          "I1109 22:18:48.494587 3278423 gpu_helpers.cc:158] XLA backend allocating 143.77GiB (154367164416 bytes) on device 0 for BFCAllocator.",
+          "I1109 22:18:48.494598 3278423 gpu_helpers.cc:201] XLA backend will use up to 51455721472 bytes on device 0 for CollectiveBFCAllocator."
+        ],
+        "stdout_bytes": 1389,
+        "stdout_tail": [
+          "PHASE {\"backend\": \"xla\", \"device\": \"rocm:0\", \"elapsed_s\": 1e-06, \"phase\": \"start\"}",
+          "PHASE {\"elapsed_s\": 0.106186, \"phase\": \"numpy_imported\"}",
+          "PHASE {\"elapsed_s\": 0.16974, \"evoxc_version\": \"0.1.0\", \"phase\": \"evoxc_imported\"}",
+          "PHASE {\"elapsed_s\": 0.365378, \"phase\": \"tensorneat_imported\"}",
+          "PHASE {\"elapsed_s\": 0.368692, \"phase\": \"worker_imports_done\"}",
+          "PHASE {\"elapsed_s\": 0.38401, \"generation\": 0.0, \"phase\": \"pipeline_ready\", \"pop_shapes\": [[4, 80], [4, 80, 4], [4, 640, 2], [4, 640, 1]], \"randkey\": 7960286522194355700, \"setup_s\": 0.015276, \"species_leaves\": 10}",
+          "PHASE {\"backend\": \"xla\", \"device\": \"rocm:0\", \"elapsed_s\": 0.384046, \"phase\": \"build_tell_start\"}",
+          "PHASE {\"build_s\": 4.723988, \"elapsed_s\": 5.108054, \"phase\": \"build_tell_done\", \"resolved_backend\": \"xla\", \"resolved_device\": \"rocm:0\"}",
+          "PHASE {\"elapsed_s\": 5.108112, \"phase\": \"run_tell_start\"}",
+          "PHASE {\"elapsed_s\": 11.268933, \"phase\": \"run_tell_done\", \"run_s\": 6.160802}",
+          "RESULT {\"backend\": \"xla\", \"build_s\": 4.723988, \"device\": \"rocm:0\", \"generation_out\": 1.0, \"population\": [{\"dtype\": \"int32\", \"shape\": [4, 80]}, {\"dtype\": \"float32\", \"shape\": [4, 80, 4]}, {\"dtype\": \"int32\", \"shape\": [4, 640, 2]}, {\"dtype\": \"float32\", \"shape\": [4, 640, 1]}], \"randkey_out\": 8375203692011359461, \"resolved_backend\": \"xla\", \"resolved_device\": \"rocm:0\", \"run_s\": 6.160802, \"setup_s\": 0.015"
+        ],
+        "timed_out": false,
+        "timeout_s": 240.0,
+        "worker_processes_left": []
+      }
+    },
+    "gpu_after": {
+      "foreign_pids": [],
+      "gpu_free": true,
+      "note": "this probe process holds a HIP context because common.gpu_info() queried torch.cuda, so its own PIDs are excluded; an empty foreign list means no compile or rollout is left running",
+      "own_tree_pids": [
+        "3278276"
+      ],
+      "rocm_pids": [
+        "3278276"
+      ]
+    },
+    "verdict": {
+      "entries": {
+        "iree@rocm:0": {
+          "expected": "timeout",
+          "matches_expectation": true,
+          "status": "timeout"
+        },
+        "numpy@cpu:0": {
+          "expected": "ok",
+          "matches_expectation": true,
+          "status": "ok"
+        },
+        "xla@rocm:0": {
+          "expected": "ok",
+          "matches_expectation": true,
+          "status": "ok"
+        }
+      },
+      "expectations": {
+        "iree": "timeout",
+        "numpy": "ok",
+        "xla": "ok"
+      },
+      "gpu_free_after": true,
+      "iree_rocm_documented_failure_reproduced": true,
+      "matrix": true,
+      "no_worker_left": true
+    }
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "entries": 3,
+    "probe_total_s": 252.464077382
+  },
+  "process_role": "only",
+  "repeat": 0,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "go2",
+  "timings": {
+    "note": "per-entry build/run seconds are in measurements.entries[*].result"
+  },
+  "workload": {
+    "entries": [
+      "numpy@cpu:0",
+      "iree@rocm:0",
+      "xla@rocm:0"
+    ],
+    "genome": {
+      "max_conns": 640,
+      "max_nodes": 80,
+      "num_inputs": 45,
+      "num_outputs": 12,
+      "pop_size": 4,
+      "species_size": 2
+    },
+    "matrix": true,
+    "note": "each entry is a separate process group; a timeout kills the group (the IREE compile may spawn children) and records the last printed phase marker",
+    "per_entry_timeout_s": 240.0,
+    "pipeline": "Pipeline(DefaultGenome(45,12), TraceOnlyProblem(45,12), seed=0, backend='numpy')",
+    "probe": "tell_backend",
+    "worker": "_tell_worker.py"
+  }
+}

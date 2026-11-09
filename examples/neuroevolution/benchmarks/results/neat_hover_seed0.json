@@ -1,0 +1,1225 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_neat.py",
+    "train",
+    "--task",
+    "hover",
+    "--master-seed",
+    "0",
+    "--pop-size",
+    "8",
+    "--generations",
+    "3",
+    "--horizon",
+    "200",
+    "--residency",
+    "numpy",
+    "--backend",
+    "numpy",
+    "--device",
+    "cpu:0",
+    "--tell-backend",
+    "numpy",
+    "--process-role",
+    "only"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T21:45:10Z",
+  "error": null,
+  "genesis_init": {
+    "already_initialized": false,
+    "backend": "cpu",
+    "requested": "cpu"
+  },
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A55",
+    "dirty": true,
+    "dirty_files": [
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed0.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed1.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed2.json"
+    ],
+    "head": "223049e1e5de14d62511adcc260b810a6186d7ea"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.97,
+    "loadavg_text": "0.97 0.82 0.98 1/692 3260227",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "neat_train",
+  "measurements": {
+    "backend": "numpy",
+    "checks": {
+      "cache_hits": 33,
+      "cache_misses": 6,
+      "determinism_fingerprint": "1a13b28ad1e2aef615925702223c56cc8987826608682bb2bbcaa3973cab0ef5",
+      "distinct_seeds_per_generation": true,
+      "env_seed_table_restored": true,
+      "fingerprint_payload": "sha256 over seed_table, the per-generation seeds, the per-generation fitness (6 dp) and the held-out fitness of both sides (6 dp)",
+      "graphs_built_after_setup": [],
+      "holdout_disjoint": true,
+      "no_graph_build_during_run": true,
+      "seed_table_matches_seeding": true,
+      "seed_table_matches_trainer": true
+    },
+    "config": {
+      "episodes_per_policy": 3,
+      "evolution_seed": 3757552657,
+      "executable_build_time_s": 0.3871080211829394,
+      "generations": 3,
+      "genome": {
+        "max_conns": 640,
+        "max_nodes": 80,
+        "num_inputs": 17,
+        "num_outputs": 4,
+        "species_size": 3
+      },
+      "master_seed": 0,
+      "max_episode_length": 1500,
+      "pop_size": 8,
+      "rows": 24,
+      "seed_table": [
+        [
+          1454269175,
+          757617120,
+          1421746521
+        ],
+        [
+          1313752747,
+          908599966,
+          53557616
+        ],
+        [
+          1683657442,
+          1375977993,
+          1654802006
+        ]
+      ],
+      "tell_backend": "numpy",
+      "tell_build_time_s": 0.25760941579937935,
+      "tell_device": "cpu:0"
+    },
+    "device_name": "cpu:0",
+    "episode_length_note": "env default: Go2 20 s (max_episode_length 1000), hover 15 s (1500)",
+    "generations": [
+      {
+        "best_fitness": -0.148632407188,
+        "bookkeeping_s": 0.000168488826603,
+        "cache_hits": 11,
+        "cache_hits_delta": 6,
+        "cache_misses": 6,
+        "cache_misses_delta": 0,
+        "diagnostics": {
+          "commands": [
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ],
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ],
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ],
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ],
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ],
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ],
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ],
+            [
+              0.7152850031852722,
+              -0.921944797039032,
+              1.0
+            ],
+            [
+              -0.01356287021189928,
+              0.3130527436733246,
+              1.0
+            ],
+            [
+              -0.5126463770866394,
+              0.9154519438743591,
+              1.0
+            ]
+          ]
+        },
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 5420.51588692,
+        "env_steps_per_s_harness": 5416.7662313,
+        "env_wall_s": 0.885524570011,
+        "episode_returns": [
+          [
+            -0.821337401867,
+            -0.205193728209,
+            -0.149296671152
+          ],
+          [
+            -0.180647432804,
+            -0.262914538383,
+            -0.356194496155
+          ],
+          [
+            -1.03471183777,
+            -1.00029420853,
+            -0.154346823692
+          ],
+          [
+            -0.0819328278303,
+            -0.436954915524,
+            -0.703333258629
+          ],
+          [
+            -0.324989795685,
+            -0.195944532752,
+            -0.126536026597
+          ],
+          [
+            -0.138257205486,
+            -0.215778976679,
+            -0.0918610394001
+          ],
+          [
+            -0.510754704475,
+            -1.51692247391,
+            -1.03817677498
+          ],
+          [
+            -0.32089433074,
+            -0.350446909666,
+            -0.83531498909
+          ]
+        ],
+        "evaluate_s": 0.886137557914,
+        "evaluate_share": 0.989226945746,
+        "fitness": [
+          -0.391942590475,
+          -0.266585499048,
+          -0.729784309864,
+          -0.407407015562,
+          -0.215823456645,
+          -0.148632407188,
+          -1.02195131779,
+          -0.502218723297
+        ],
+        "generation": 0,
+        "generation_s": 0.895787929883,
+        "median_fitness": -0.399674803019,
+        "seeds": [
+          1454269175,
+          757617120,
+          1421746521
+        ],
+        "steps": 200,
+        "steps_per_s": 225.854828622,
+        "sync_s": 7.85070005804e-05,
+        "synchronised": true,
+        "tell_s": 0.00948188314214
+      },
+      {
+        "best_fitness": -0.169135883451,
+        "bookkeeping_s": 0.00030041183345,
+        "cache_hits": 17,
+        "cache_hits_delta": 6,
+        "cache_misses": 6,
+        "cache_misses_delta": 0,
+        "diagnostics": {
+          "commands": [
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ],
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ],
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ],
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ],
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ],
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ],
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ],
+            [
+              0.3085925877094269,
+              0.12941212952136993,
+              1.0
+            ],
+            [
+              -0.7232275009155273,
+              -0.5545058846473694,
+              1.0
+            ],
+            [
+              -0.9567340016365051,
+              -0.0039450787007808685,
+              1.0
+            ]
+          ]
+        },
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 5298.17768151,
+        "env_steps_per_s_harness": 5295.10731176,
+        "env_wall_s": 0.905971881002,
+        "episode_returns": [
+          [
+            -0.209544673562,
+            -0.281546890736,
+            -0.196742773056
+          ],
+          [
+            -0.239106237888,
+            -0.170083999634,
+            -0.124753989279
+          ],
+          [
+            -0.209298044443,
+            -0.150834769011,
+            -0.147274821997
+          ],
+          [
+            -0.214946985245,
+            -0.253537535667,
+            -0.178305596113
+          ],
+          [
+            -0.204203635454,
+            -0.245158478618,
+            -0.173317432404
+          ],
+          [
+            -0.184433504939,
+            -0.180867999792,
+            -0.163992702961
+          ],
+          [
+            -0.22198946774,
+            -0.222328275442,
+            -0.151902139187
+          ],
+          [
+            -0.199551254511,
+            -0.238412007689,
+            -0.150890812278
+          ]
+        ],
+        "evaluate_s": 0.9064972091,
+        "evaluate_share": 0.993339414598,
+        "fitness": [
+          -0.229278102517,
+          -0.177981421351,
+          -0.169135883451,
+          -0.215596720576,
+          -0.207559838891,
+          -0.176431402564,
+          -0.19873996079,
+          -0.19628469646
+        ],
+        "generation": 1,
+        "generation_s": 0.912575496128,
+        "median_fitness": -0.197512328625,
+        "seeds": [
+          1313752747,
+          908599966,
+          53557616
+        ],
+        "steps": 200,
+        "steps_per_s": 220.757403396,
+        "sync_s": 5.85061497986e-05,
+        "synchronised": true,
+        "tell_s": 0.00577787519433
+      },
+      {
+        "best_fitness": -0.188668176532,
+        "bookkeeping_s": 0.000274338293821,
+        "cache_hits": 23,
+        "cache_hits_delta": 6,
+        "cache_misses": 6,
+        "cache_misses_delta": 0,
+        "diagnostics": {
+          "commands": [
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ],
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ],
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ],
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ],
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ],
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ],
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ],
+            [
+              -0.2847749888896942,
+              -0.1505148857831955,
+              1.0
+            ],
+            [
+              0.8686009645462036,
+              -0.2333657145500183,
+              1.0
+            ],
+            [
+              0.3656545877456665,
+              0.7142921686172485,
+              1.0
+            ]
+          ]
+        },
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 5234.51100577,
+        "env_steps_per_s_harness": 5231.79056279,
+        "env_wall_s": 0.916991099017,
+        "episode_returns": [
+          [
+            -0.181886404753,
+            -0.209511250257,
+            -0.243271678686
+          ],
+          [
+            -0.185204148293,
+            -0.183614611626,
+            -0.217768192291
+          ],
+          [
+            -0.177738666534,
+            -0.213009983301,
+            -0.237708285451
+          ],
+          [
+            -0.192527651787,
+            -0.17017185688,
+            -0.228487625718
+          ],
+          [
+            -0.201936408877,
+            -0.141499757767,
+            -0.222568333149
+          ],
+          [
+            -0.190327271819,
+            -0.184431836009,
+            -0.229856282473
+          ],
+          [
+            -0.209513664246,
+            -0.331051021814,
+            -0.253364264965
+          ],
+          [
+            -0.231384128332,
+            -0.34998446703,
+            -0.234639301896
+          ]
+        ],
+        "evaluate_s": 0.917467918945,
+        "evaluate_share": 0.993059663147,
+        "fitness": [
+          -0.211556434631,
+          -0.19552898407,
+          -0.209485650063,
+          -0.197062373161,
+          -0.188668176532,
+          -0.201538458467,
+          -0.264642983675,
+          -0.272002607584
+        ],
+        "generation": 2,
+        "generation_s": 0.923879957059,
+        "median_fitness": -0.205512046814,
+        "seeds": [
+          1683657442,
+          1375977993,
+          1654802006
+        ],
+        "steps": 200,
+        "steps_per_s": 218.104625241,
+        "sync_s": 5.75380399823e-05,
+        "synchronised": true,
+        "tell_s": 0.0061376998201
+      }
+    ],
+    "genome": {
+      "max_conns": 640,
+      "max_nodes": 80,
+      "num_inputs": 17,
+      "num_outputs": 4,
+      "species_size": 3
+    },
+    "holdout": {
+      "best_policy": {
+        "delta": 0.0743289738894,
+        "heldout_fitness": -0.187822535634,
+        "index": 4,
+        "train_fitness": -0.188668176532
+      },
+      "best_policy_index": 4,
+      "disjoint_from_training": true,
+      "episodes_per_policy": 3,
+      "evaluate_s": {
+        "initial": 0.831101408927,
+        "trained": 0.89760069293
+      },
+      "evaluations": 2,
+      "initial": {
+        "best_fitness": -0.182655051351,
+        "end_reasons": {
+          "crash": 22,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 2
+        },
+        "env_steps": 4800,
+        "episode_returns": [
+          [
+            -0.19534599781,
+            -1.72935295105,
+            -0.24886123836
+          ],
+          [
+            -0.238275229931,
+            -0.175183087587,
+            -0.329252839088
+          ],
+          [
+            -1.04821515083,
+            -1.02644455433,
+            -1.0691280365
+          ],
+          [
+            -0.351338744164,
+            -0.370992302895,
+            -0.157015487552
+          ],
+          [
+            -0.238227561116,
+            -0.254758030176,
+            -0.293468922377
+          ],
+          [
+            -0.230808615685,
+            -0.15754878521,
+            -0.159607797861
+          ],
+          [
+            -1.1136289835,
+            -0.872860610485,
+            -0.717613518238
+          ],
+          [
+            -0.630906164646,
+            -0.471660643816,
+            -0.287168681622
+          ]
+        ],
+        "fitness": [
+          -0.724520027637,
+          -0.24757039547,
+          -1.04792928696,
+          -0.293115526438,
+          -0.262151509523,
+          -0.182655051351,
+          -0.901367664337,
+          -0.463245153427
+        ],
+        "median_fitness": -0.378180339932,
+        "seeds": [
+          467914131,
+          431644425,
+          2034563381
+        ],
+        "steps": 200
+      },
+      "median_delta": 0.155961155891,
+      "median_initial": -0.378180339932,
+      "median_trained": -0.189829781651,
+      "note": "one held-out triple (3 episodes per policy) because every episode is a full-horizon episode of the pilot's own episode length; the triple is never used for training, and the trained side is the population that was evaluated in the last training generation (with a single generation the two sides are necessarily the same population)",
+      "per_policy_delta": [
+        0.532682999969,
+        0.0673431009054,
+        0.850057914853,
+        0.122186213732,
+        0.0743289738894,
+        0.00286300480366,
+        0.620049566031,
+        0.189736098051
+      ],
+      "seed_table": [
+        [
+          467914131,
+          431644425,
+          2034563381
+        ]
+      ],
+      "separates_initial_from_trained": true,
+      "source": "seeding.generation_seed_table(master_seed + 1000, 1)",
+      "trained": {
+        "best_fitness": -0.170929312706,
+        "end_reasons": {
+          "crash": 24,
+          "error": 0,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "episode_returns": [
+          [
+            -0.227850347757,
+            -0.166398197412,
+            -0.181262537837
+          ],
+          [
+            -0.181178420782,
+            -0.182275682688,
+            -0.177227780223
+          ],
+          [
+            -0.223921984434,
+            -0.177933186293,
+            -0.191758900881
+          ],
+          [
+            -0.203247636557,
+            -0.160037696362,
+            -0.149502620101
+          ],
+          [
+            -0.190251484513,
+            -0.228693038225,
+            -0.144523113966
+          ],
+          [
+            -0.225667119026,
+            -0.160411924124,
+            -0.153297126293
+          ],
+          [
+            -0.28953447938,
+            -0.245421305299,
+            -0.30899849534
+          ],
+          [
+            -0.285204589367,
+            -0.256153941154,
+            -0.279168635607
+          ]
+        ],
+        "fitness": [
+          -0.191837027669,
+          -0.180227294564,
+          -0.197871372104,
+          -0.170929312706,
+          -0.187822535634,
+          -0.179792046547,
+          -0.281318098307,
+          -0.273509055376
+        ],
+        "median_fitness": -0.189829781651,
+        "seeds": [
+          467914131,
+          431644425,
+          2034563381
+        ],
+        "steps": 200
+      }
+    },
+    "learning_curve": {
+      "best_fitness": [
+        -0.148632407188,
+        -0.169135883451,
+        -0.188668176532
+      ],
+      "cumulative_env_steps": [
+        4800,
+        9600,
+        14400
+      ],
+      "cumulative_loop_s": [
+        0.895787929883,
+        1.80836342601,
+        2.73224338307
+      ],
+      "generations": [
+        0,
+        1,
+        2
+      ],
+      "median_fitness": [
+        -0.399674803019,
+        -0.197512328625,
+        -0.205512046814
+      ],
+      "x_axes": "cumulative_env_steps and cumulative_loop_s are the two x-axes of the report figure"
+    },
+    "perturbation": {
+      "base_pos": 0.05,
+      "base_rpy": 0.05,
+      "is_zero": false,
+      "joint_pos": 0.0,
+      "source": "the pilot trainer CLI defaults (go2_neat_train.py / hover_neat_train.py)"
+    },
+    "pop_size": 8,
+    "residency": "numpy",
+    "rows": 24,
+    "seed_table": [
+      [
+        1454269175,
+        757617120,
+        1421746521
+      ],
+      [
+        1313752747,
+        908599966,
+        53557616
+      ],
+      [
+        1683657442,
+        1375977993,
+        1654802006
+      ]
+    ],
+    "sync_note": "common.sync() runs before and after each timed region; it calls torch.cuda.synchronize() only when a HIP/CUDA device is available and is a no-op on a CPU-resident run, where every timed region is host wall clock",
+    "task": "hover",
+    "tell": {
+      "backend": "numpy",
+      "device": "cpu:0",
+      "key": [
+        "tell",
+        "8",
+        "numpy",
+        "cpu:0",
+        "None"
+      ]
+    },
+    "totals": {
+      "best_fitness": -0.14863240718841553,
+      "cache_hits": 33,
+      "cache_misses": 6,
+      "env_steps": 14400,
+      "env_steps_per_s": {
+        "stats": {
+          "max": 5420.51588692,
+          "mean": 5317.734858066667,
+          "median": 5298.17768151,
+          "min": 5234.51100577,
+          "n": 3,
+          "spread": 186.00488115000007,
+          "stdev": 77.18512947909889
+        }
+      },
+      "env_steps_per_s_evaluate": 5313.45180188,
+      "env_steps_per_s_loop": 5270.13399207,
+      "env_wall_s": 2.70848755003,
+      "evaluate_s": 2.71010268596,
+      "evaluate_s_stats": {
+        "max": 0.917467918945,
+        "mean": 0.9033675619863333,
+        "median": 0.9064972091,
+        "min": 0.886137557914,
+        "n": 3,
+        "spread": 0.031330361031000065,
+        "stdev": 0.012980598313772325
+      },
+      "final_best_fitness": -0.1886681765317917,
+      "generation_s": 2.73224338307,
+      "generation_s_stats": {
+        "max": 0.923879957059,
+        "mean": 0.9107477943566668,
+        "median": 0.912575496128,
+        "min": 0.895787929883,
+        "n": 3,
+        "spread": 0.0280920271759999,
+        "stdev": 0.01154111109723209
+      },
+      "generations": 3,
+      "loop_s": 2.73237834591,
+      "note": "evaluate_s/tell_s are common.sync()-bracketed wall clock of the two trainer regions; generation_s is the whole generation (tell end minus the previous tell end, or the run start) and bookkeeping_s is what is left of it between the regions",
+      "steps": 600,
+      "steps_per_s": {
+        "stats": {
+          "max": 225.854828622,
+          "mean": 221.572285753,
+          "median": 220.757403396,
+          "min": 218.104625241,
+          "n": 3,
+          "spread": 7.750203381000006,
+          "stdev": 3.216047061588537
+        }
+      },
+      "tell_s": 0.0213974581566,
+      "tell_s_stats": {
+        "max": 0.00948188314214,
+        "mean": 0.00713248605219,
+        "median": 0.0061376998201,
+        "min": 0.00577787519433,
+        "n": 3,
+        "spread": 0.0037040079478099994,
+        "stdev": 0.0016677566679078766
+      },
+      "unattributed_s": 0.000134962844185
+    },
+    "trainer_totals": {
+      "best_fitness": -0.14863240718841553,
+      "cache_hits": 23,
+      "cache_misses": 6,
+      "env_steps": 14400,
+      "final_best_fitness": -0.1886681765317917,
+      "steps": 600,
+      "wall_time_s": 2.732356162974611
+    }
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "build_s": 4.17957170517,
+    "close_s": 0.123995019123,
+    "first_generation_s": 0.895787929883,
+    "graph_build_note": "measured inside ExecutableCache.get while the env and the trainer are built; the env compiles its own graphs in __init__, the trainer compiles the tell graph in setup(), and every later generation is a cache lookup",
+    "graph_build_s": {
+      "advance": {
+        "build_s": 0.0573397141416,
+        "build_s_per_build": 0.0573397141416,
+        "builds": 1,
+        "calls": 7,
+        "lookup_s": 2.52900645137e-06
+      },
+      "controls": {
+        "build_s": 0.00188939995132,
+        "build_s_per_build": 0.00188939995132,
+        "builds": 1,
+        "calls": 7,
+        "lookup_s": 1.15828588605e-05
+      },
+      "fitness": {
+        "build_s": 0.000817755004391,
+        "build_s_per_build": 0.000817755004391,
+        "builds": 1,
+        "calls": 7,
+        "lookup_s": 2.01328657568e-06
+      },
+      "policy": {
+        "build_s": 0.0538822049275,
+        "build_s_per_build": 0.0538822049275,
+        "builds": 1,
+        "calls": 7,
+        "lookup_s": 4.15020622313e-06
+      },
+      "reset_obs": {
+        "build_s": 0.00194566184655,
+        "build_s_per_build": 0.00194566184655,
+        "builds": 1,
+        "calls": 7,
+        "lookup_s": 4.14322130382e-06
+      },
+      "tell": {
+        "build_s": 0.257603175007,
+        "build_s_per_build": 0.257603175007,
+        "builds": 1,
+        "calls": 4,
+        "lookup_s": 5.35813160241e-06
+      }
+    },
+    "graph_build_total_s": 0.373477910878,
+    "holdout_s": 1.72870210186,
+    "import_note": "the first import of the pilot env module and its kernels: genesis itself was already imported (and initialised) by the CLI's _ensure_gs_init, and the evoxc/TensorNEAT stack the trainer adds is imported right after, outside this timer",
+    "import_s": 0.226949176984,
+    "setup_s": 0.38711699401,
+    "steady_generation_median_s": 0.918227726593,
+    "steady_note": "first_generation_s is generation 0 (initial population); steady is generations 1..",
+    "tell_build_s": 0.257609415799,
+    "totals_s": 9.15295472508,
+    "trainer_build_s": 0.387108021183
+  },
+  "process_role": "only",
+  "repeat": 0,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "hover",
+  "timings": {
+    "note": "per-generation timings live in measurements.generations[*]; phases holds the build side"
+  },
+  "workload": {
+    "backend": "numpy",
+    "device": "cpu:0",
+    "episode_length": "env default: Go2 20 s (max_episode_length 1000), hover 15 s (1500)",
+    "episodes_per_policy": 3,
+    "generations": 3,
+    "genome": {
+      "max_conns": 640,
+      "max_nodes": 80,
+      "num_inputs": 17,
+      "num_outputs": 4,
+      "species_size": 3
+    },
+    "holdout": {
+      "episodes_per_policy": 3,
+      "populations": "the generation-0 (initial) and the last-generation (trained) population",
+      "seed_stream": "seeding.generation_seed_table(master_seed + 1000, 1)"
+    },
+    "horizon": 200,
+    "max_episode_length": 1500,
+    "note": "generations are real generations, not warm-ups: generation 0 trains on the initial population, so it is reported separately from the steady generations 1..",
+    "perturbation": {
+      "base_pos": 0.05,
+      "base_rpy": 0.05,
+      "joint_pos": 0.0,
+      "source": "the pilot trainer CLI defaults"
+    },
+    "physics_backend": "cpu",
+    "pjrt_plugin": null,
+    "pop_size": 8,
+    "residency": "numpy",
+    "resolved_backend": "numpy",
+    "resolved_device": "cpu:0",
+    "rows": 24,
+    "stop_when_done": false,
+    "sync": "common.sync() before and after each timed region",
+    "task": "hover",
+    "tell_backend": "numpy",
+    "timer_groups": {
+      "evaluate": "env.evaluate: seed draw + reset + scene.step() loop + fitness graph, sync-bracketed",
+      "generation_total": "the whole generation, tell end minus the previous tell end",
+      "tell": "trainer.run_tell: one compiled NEAT generation transition, sync-bracketed"
+    }
+  }
+}

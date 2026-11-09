@@ -1,0 +1,1046 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_neat.py",
+    "train",
+    "--task",
+    "go2",
+    "--master-seed",
+    "2",
+    "--pop-size",
+    "8",
+    "--generations",
+    "3",
+    "--horizon",
+    "200",
+    "--residency",
+    "numpy",
+    "--backend",
+    "numpy",
+    "--device",
+    "cpu:0",
+    "--tell-backend",
+    "numpy",
+    "--process-role",
+    "only"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T21:44:44Z",
+  "error": null,
+  "genesis_init": {
+    "already_initialized": false,
+    "backend": "cpu",
+    "requested": "cpu"
+  },
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A55",
+    "dirty": true,
+    "dirty_files": [
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed0.json",
+      "?? examples/neuroevolution/benchmarks/results/neat_go2_seed1.json"
+    ],
+    "head": "223049e1e5de14d62511adcc260b810a6186d7ea"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.96,
+    "loadavg_text": "0.96 0.81 0.97 1/695 3260071",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "neat_train",
+  "measurements": {
+    "backend": "numpy",
+    "checks": {
+      "cache_hits": 7,
+      "cache_misses": 5,
+      "determinism_fingerprint": "e153cdae5a94c113cd28daa5737f793d3c633d2aaa7adc610009546fb34254e9",
+      "distinct_seeds_per_generation": true,
+      "env_seed_table_restored": true,
+      "fingerprint_payload": "sha256 over seed_table, the per-generation seeds, the per-generation fitness (6 dp) and the held-out fitness of both sides (6 dp)",
+      "graphs_built_after_setup": [],
+      "holdout_disjoint": true,
+      "no_graph_build_during_run": true,
+      "seed_table_matches_seeding": true,
+      "seed_table_matches_trainer": true
+    },
+    "config": {
+      "episodes_per_policy": 3,
+      "evolution_seed": 2001025171,
+      "executable_build_time_s": 0.27056966279633343,
+      "generations": 3,
+      "genome": {
+        "max_conns": 640,
+        "max_nodes": 80,
+        "num_inputs": 45,
+        "num_outputs": 12,
+        "species_size": 3
+      },
+      "master_seed": 2,
+      "max_episode_length": 1000,
+      "pop_size": 8,
+      "rows": 24,
+      "seed_table": [
+        [
+          1991377894,
+          1989260167,
+          1931293449
+        ],
+        [
+          1197126621,
+          1726522278,
+          1773739743
+        ],
+        [
+          1453270531,
+          1501343001,
+          109030781
+        ]
+      ],
+      "tell_backend": "numpy",
+      "tell_build_time_s": 0.25905913300812244,
+      "tell_device": "cpu:0"
+    },
+    "device_name": "cpu:0",
+    "episode_length_note": "env default: Go2 20 s (max_episode_length 1000), hover 15 s (1500)",
+    "generations": [
+      {
+        "best_fitness": -24.6063842773,
+        "bookkeeping_s": 0.000153282890096,
+        "cache_hits": 5,
+        "cache_hits_delta": 1,
+        "cache_misses": 5,
+        "cache_misses_delta": 0,
+        "diagnostics": {
+          "init_qpos": [
+            [
+              0.017780445516109467,
+              -0.008129328489303589,
+              0.3802225887775421,
+              0.9996615052223206,
+              0.0223274827003479,
+              -0.0034332871437072754,
+              0.012908331118524075,
+              -0.025632735341787338,
+              0.8114483952522278,
+              -1.4923243522644043,
+              0.0487259179353714,
+              0.7759484648704529,
+              -1.5295404195785522,
+              0.04287894442677498,
+              1.0186923742294312,
+              -1.5052868127822876,
+              -0.007673280313611031,
+              0.9933809638023376,
+              -1.49311101436615
+            ],
+            [
+              -0.014676797203719616,
+              0.01736479066312313,
+              0.4401111602783203,
+              0.9999541640281677,
+              -0.006957173813134432,
+              0.00500536011531949,
+              -0.004279041197150946,
+              0.017143558710813522,
+              0.7968252301216125,
+              -1.5098270177841187,
+              0.00504476111382246,
+              0.7822364568710327,
+              -1.4976414442062378,
+              0.010816184803843498,
+              0.9658815860748291,
+              -1.534719467163086,
+              -0.032986659556627274,
+              0.9561792016029358,
+              -1.545049786567688
+            ],
+            [
+              -0.0464479960501194,
+              0.02516464702785015,
+              0.37546825408935547,
+              0.9998931884765625,
+              0.012903690338134766,
+              0.002368032932281494,
+              -0.00645140465348959,
+              -0.04469694197177887,
+              0.7902179956436157,
+              -1.5155127048492432,
+              -0.043715331703424454,
+              0.8383193016052246,
+              -1.5290817022323608,
+              0.0364144928753376,
+              1.0330255031585693,
+              -1.5497537851333618,
+              -0.03185160085558891,
+              1.0140761137008667,
+              -1.4833811521530151
+            ]
+          ]
+        },
+        "end_reasons": {
+          "error": 0,
+          "tilted": 24,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 3586.69496499,
+        "env_steps_per_s_harness": 3570.14164423,
+        "env_wall_s": 1.33827940398,
+        "episode_returns": [
+          [
+            -60.0670814514,
+            -55.6070022583,
+            -45.8741149902
+          ],
+          [
+            -113.58177948,
+            -214.31489563,
+            -127.618812561
+          ],
+          [
+            -64.5030136108,
+            -340.745727539,
+            -63.0079650879
+          ],
+          [
+            -27.8862190247,
+            -29.7442893982,
+            -31.0226192474
+          ],
+          [
+            -244.595779419,
+            -113.351699829,
+            -873.42980957
+          ],
+          [
+            -172.275848389,
+            -139.675140381,
+            -170.563781738
+          ],
+          [
+            -21.4179439545,
+            -31.8294258118,
+            -20.5717868805
+          ],
+          [
+            -31.7475357056,
+            -35.9325218201,
+            -32.3101196289
+          ]
+        ],
+        "evaluate_s": 1.34448447102,
+        "evaluate_share": 0.993214707995,
+        "fitness": [
+          -53.8493995667,
+          -151.838485718,
+          -156.085571289,
+          -29.5510425568,
+          -410.459106445,
+          -160.838256836,
+          -24.6063842773,
+          -33.3300590515
+        ],
+        "generation": 0,
+        "generation_s": 1.35366951395,
+        "median_fitness": -102.843940735,
+        "seeds": [
+          1991377894,
+          1989260167,
+          1931293449
+        ],
+        "steps": 200,
+        "steps_per_s": 149.445623541,
+        "sync_s": 7.72580970079e-05,
+        "synchronised": true,
+        "tell_s": 0.00903176004067
+      },
+      {
+        "best_fitness": -14.2936897278,
+        "bookkeeping_s": 0.000298195984215,
+        "cache_hits": 6,
+        "cache_hits_delta": 1,
+        "cache_misses": 5,
+        "cache_misses_delta": 0,
+        "diagnostics": {
+          "init_qpos": [
+            [
+              0.013594611547887325,
+              0.015127846039831638,
+              0.4058719575405121,
+              0.9993746280670166,
+              -0.020268559455871582,
+              0.01746588945388794,
+              0.023119647055864334,
+              -0.000821091525722295,
+              0.7539860010147095,
+              -1.462792992591858,
+              -0.03918800130486488,
+              0.8305994272232056,
+              -1.491869330406189,
+              0.013800169341266155,
+              1.0259616374969482,
+              -1.5486810207366943,
+              -0.022595349699258804,
+              1.0293618440628052,
+              -1.4949663877487183
+            ],
+            [
+              0.012307281605899334,
+              -0.03723149001598358,
+              0.4423564076423645,
+              0.999833345413208,
+              0.0006667376146651804,
+              0.018241705372929573,
+              0.0003840793506242335,
+              0.03704093396663666,
+              0.8129793405532837,
+              -1.5472184419631958,
+              0.04160324111580849,
+              0.8185479640960693,
+              -1.456006407737732,
+              0.0043965671211481094,
+              0.9641589522361755,
+              -1.5121281147003174,
+              -0.028557730838656425,
+              0.9982615113258362,
+              -1.5098142623901367
+            ],
+            [
+              -0.013755635358393192,
+              -0.026186155155301094,
+              0.39275532960891724,
+              0.9994737505912781,
+              0.012989580631256104,
+              0.020414769649505615,
+              0.021603994071483612,
+              -0.044520288705825806,
+              0.8326048851013184,
+              -1.4617300033569336,
+              -0.03646782413125038,
+              0.7612028121948242,
+              -1.533734679222107,
+              -0.039954110980033875,
+              1.0269454717636108,
+              -1.4911048412322998,
+              0.03608337417244911,
+              1.043808102607727,
+              -1.5494000911712646
+            ]
+          ]
+        },
+        "end_reasons": {
+          "error": 0,
+          "tilted": 24,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 3783.47942716,
+        "env_steps_per_s_harness": 3782.3061837,
+        "env_wall_s": 1.268673477,
+        "episode_returns": [
+          [
+            -20.725402832,
+            -28.579662323,
+            -22.0872383118
+          ],
+          [
+            -36.2744445801,
+            -28.5386505127,
+            -29.033208847
+          ],
+          [
+            -37.575050354,
+            -50.6400718689,
+            -37.907585144
+          ],
+          [
+            -121.559120178,
+            -99.2952804565,
+            -120.29108429
+          ],
+          [
+            -29.1520938873,
+            -40.6788673401,
+            -30.050327301
+          ],
+          [
+            -12.5906820297,
+            -21.5355110168,
+            -12.2690925598
+          ],
+          [
+            -14.5074424744,
+            -14.3289527893,
+            -14.0446748734
+          ],
+          [
+            -24.6203308105,
+            -33.1046676636,
+            -25.3216667175
+          ]
+        ],
+        "evaluate_s": 1.26906701014,
+        "evaluate_share": 0.995165350004,
+        "fitness": [
+          -23.7974338531,
+          -31.2821025848,
+          -42.0409011841,
+          -113.715156555,
+          -33.293762207,
+          -15.46509552,
+          -14.2936897278,
+          -27.682220459
+        ],
+        "generation": 1,
+        "generation_s": 1.27523231204,
+        "median_fitness": -29.4821624756,
+        "seeds": [
+          1197126621,
+          1726522278,
+          1773739743
+        ],
+        "steps": 200,
+        "steps_per_s": 157.644976132,
+        "sync_s": 5.78870531172e-05,
+        "synchronised": true,
+        "tell_s": 0.00586710590869
+      },
+      {
+        "best_fitness": -8.19572544098,
+        "bookkeeping_s": 0.000262715853751,
+        "cache_hits": 7,
+        "cache_hits_delta": 1,
+        "cache_misses": 5,
+        "cache_misses_delta": 0,
+        "diagnostics": {
+          "init_qpos": [
+            [
+              -0.03694932535290718,
+              -0.037488844245672226,
+              0.4024840295314789,
+              0.9996162056922913,
+              -0.018382729962468147,
+              0.02030438371002674,
+              -0.00416099326685071,
+              0.001506515429355204,
+              0.8314012885093689,
+              -1.4659384489059448,
+              0.027618303894996643,
+              0.7894929647445679,
+              -1.521824836730957,
+              0.011830379255115986,
+              0.9661062955856323,
+              -1.545135259628296,
+              0.029952015727758408,
+              0.9925203323364258,
+              -1.5118777751922607
+            ],
+            [
+              0.01957620494067669,
+              0.010683172382414341,
+              0.3923782706260681,
+              0.9997693300247192,
+              -0.002311110496520996,
+              0.004664957523345947,
+              0.02083667367696762,
+              0.04593943804502487,
+              0.7834484577178955,
+              -1.4522721767425537,
+              -0.008602156303822994,
+              0.8333773016929626,
+              -1.4880883693695068,
+              0.023777291178703308,
+              0.9598954916000366,
+              -1.532291293144226,
+              0.04186725988984108,
+              1.034529447555542,
+              -1.521375298500061
+            ],
+            [
+              0.0003159056941512972,
+              0.03308229148387909,
+              0.3970699608325958,
+              0.9995738863945007,
+              -0.019057929515838623,
+              0.00918644666671753,
+              -0.020111795514822006,
+              -0.0180197786539793,
+              0.761002779006958,
+              -1.5437171459197998,
+              -0.03765683248639107,
+              0.7923375964164734,
+              -1.5190283060073853,
+              -0.016700204461812973,
+              0.999424397945404,
+              -1.4956512451171875,
+              -0.002402264392003417,
+              1.0002928972244263,
+              -1.4965564012527466
+            ]
+          ]
+        },
+        "end_reasons": {
+          "error": 0,
+          "tilted": 24,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "env_steps_per_s": 3849.63930563,
+        "env_steps_per_s_harness": 3848.45722755,
+        "env_wall_s": 1.24687006208,
+        "episode_returns": [
+          [
+            -14.3998031616,
+            -13.4244842529,
+            -14.7697181702
+          ],
+          [
+            -11.8520927429,
+            -12.2193622589,
+            -11.7065696716
+          ],
+          [
+            -11.9461669922,
+            -12.2377052307,
+            -12.0717201233
+          ],
+          [
+            -8.33287239075,
+            -8.13466072083,
+            -8.11964225769
+          ],
+          [
+            -12.5501422882,
+            -11.8371696472,
+            -12.1870193481
+          ],
+          [
+            -8.35260868073,
+            -8.4565410614,
+            -7.90480995178
+          ],
+          [
+            -19.0947666168,
+            -18.5258846283,
+            -19.0697746277
+          ],
+          [
+            -56.4992713928,
+            -35.1273193359,
+            -58.2551994324
+          ]
+        ],
+        "evaluate_s": 1.24725304614,
+        "evaluate_share": 0.995190921305,
+        "fitness": [
+          -14.1980018616,
+          -11.9260072708,
+          -12.0851974487,
+          -8.19572544098,
+          -12.191444397,
+          -8.23798656464,
+          -18.8968086243,
+          -49.9605979919
+        ],
+        "generation": 2,
+        "generation_s": 1.2532801691,
+        "median_fitness": -12.1383209229,
+        "seeds": [
+          1453270531,
+          1501343001,
+          109030781
+        ],
+        "steps": 200,
+        "steps_per_s": 160.401637735,
+        "sync_s": 5.52851706743e-05,
+        "synchronised": true,
+        "tell_s": 0.00576440710574
+      }
+    ],
+    "genome": {
+      "max_conns": 640,
+      "max_nodes": 80,
+      "num_inputs": 45,
+      "num_outputs": 12,
+      "species_size": 3
+    },
+    "holdout": {
+      "best_policy": {
+        "delta": 16.9494304657,
+        "heldout_fitness": -16.1827411652,
+        "index": 3,
+        "train_fitness": -8.19572544098
+      },
+      "best_policy_index": 3,
+      "disjoint_from_training": true,
+      "episodes_per_policy": 3,
+      "evaluate_s": {
+        "initial": 1.10388286691,
+        "trained": 1.24032900808
+      },
+      "evaluations": 2,
+      "initial": {
+        "best_fitness": -24.0395450592,
+        "end_reasons": {
+          "error": 0,
+          "tilted": 24,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "episode_returns": [
+          [
+            -81.794128418,
+            -56.7209815979,
+            -55.7534141541
+          ],
+          [
+            -110.880661011,
+            -173.926467896,
+            -109.932914734
+          ],
+          [
+            -388.896118164,
+            -183.051895142,
+            -24.054271698
+          ],
+          [
+            -39.1027641296,
+            -29.147901535,
+            -31.1458473206
+          ],
+          [
+            -105.123641968,
+            -76.2598266602,
+            -443.753997803
+          ],
+          [
+            -132.330871582,
+            -102.369239807,
+            -327.652679443
+          ],
+          [
+            -28.9949684143,
+            -21.8051719666,
+            -21.3184967041
+          ],
+          [
+            -55.9723892212,
+            -37.2810249329,
+            -13.1562652588
+          ]
+        ],
+        "fitness": [
+          -64.7561721802,
+          -131.58001709,
+          -198.667419434,
+          -33.1321716309,
+          -208.379150391,
+          -187.450927734,
+          -24.0395450592,
+          -35.4698944092
+        ],
+        "median_fitness": -98.168094635,
+        "seeds": [
+          1859742865,
+          949621590,
+          1277626881
+        ],
+        "steps": 200
+      },
+      "median_delta": 83.3385820389,
+      "median_initial": -98.168094635,
+      "median_trained": -15.7270989418,
+      "note": "one held-out triple (3 episodes per policy) because every episode is a full-horizon episode of the pilot's own episode length; the triple is never used for training, and the trained side is the population that was evaluated in the last training generation (with a single generation the two sides are necessarily the same population)",
+      "per_policy_delta": [
+        50.3686037064,
+        116.308560371,
+        182.350072861,
+        16.9494304657,
+        196.240992546,
+        177.200632095,
+        -2.75101470947,
+        -21.3046607971
+      ],
+      "seed_table": [
+        [
+          1859742865,
+          949621590,
+          1277626881
+        ]
+      ],
+      "separates_initial_from_trained": true,
+      "source": "seeding.generation_seed_table(master_seed + 1000, 1)",
+      "trained": {
+        "best_fitness": -10.250295639,
+        "end_reasons": {
+          "error": 0,
+          "tilted": 24,
+          "timeout": 0,
+          "unfinished": 0
+        },
+        "env_steps": 4800,
+        "episode_returns": [
+          [
+            -14.4498434067,
+            -13.8948965073,
+            -14.8179645538
+          ],
+          [
+            -21.6480617523,
+            -11.7273654938,
+            -12.4389429092
+          ],
+          [
+            -24.4610290527,
+            -12.2245082855,
+            -12.266500473
+          ],
+          [
+            -23.5889129639,
+            -16.7506122589,
+            -8.20869827271
+          ],
+          [
+            -12.9162807465,
+            -11.6172027588,
+            -11.8809900284
+          ],
+          [
+            -14.6484107971,
+            -8.2910528183,
+            -7.81142282486
+          ],
+          [
+            -42.7936096191,
+            -19.0213165283,
+            -18.5567569733
+          ],
+          [
+            -77.8812484741,
+            -56.1158752441,
+            -36.3265457153
+          ]
+        ],
+        "fitness": [
+          -14.3875684738,
+          -15.2714567184,
+          -16.3173465729,
+          -16.1827411652,
+          -12.1381578445,
+          -10.250295639,
+          -26.7905597687,
+          -56.7745552063
+        ],
+        "median_fitness": -15.7270989418,
+        "seeds": [
+          1859742865,
+          949621590,
+          1277626881
+        ],
+        "steps": 200
+      }
+    },
+    "learning_curve": {
+      "best_fitness": [
+        -24.6063842773,
+        -14.2936897278,
+        -8.19572544098
+      ],
+      "cumulative_env_steps": [
+        4800,
+        9600,
+        14400
+      ],
+      "cumulative_loop_s": [
+        1.35366951395,
+        2.62890182599,
+        3.88218199509
+      ],
+      "generations": [
+        0,
+        1,
+        2
+      ],
+      "median_fitness": [
+        -102.843940735,
+        -29.4821624756,
+        -12.1383209229
+      ],
+      "x_axes": "cumulative_env_steps and cumulative_loop_s are the two x-axes of the report figure"
+    },
+    "perturbation": {
+      "base_pos": 0.05,
+      "base_rpy": 0.05,
+      "is_zero": false,
+      "joint_pos": 0.05,
+      "source": "the pilot trainer CLI defaults (go2_neat_train.py / hover_neat_train.py)"
+    },
+    "pop_size": 8,
+    "residency": "numpy",
+    "rows": 24,
+    "seed_table": [
+      [
+        1991377894,
+        1989260167,
+        1931293449
+      ],
+      [
+        1197126621,
+        1726522278,
+        1773739743
+      ],
+      [
+        1453270531,
+        1501343001,
+        109030781
+      ]
+    ],
+    "sync_note": "common.sync() runs before and after each timed region; it calls torch.cuda.synchronize() only when a HIP/CUDA device is available and is a no-op on a CPU-resident run, where every timed region is host wall clock",
+    "task": "go2",
+    "tell": {
+      "backend": "numpy",
+      "device": "cpu:0",
+      "key": [
+        "tell",
+        "8",
+        "numpy",
+        "cpu:0",
+        "None"
+      ]
+    },
+    "totals": {
+      "best_fitness": -8.195725440979004,
+      "cache_hits": 7,
+      "cache_misses": 5,
+      "env_steps": 14400,
+      "env_steps_per_s": {
+        "stats": {
+          "max": 3849.63930563,
+          "mean": 3739.9378992599995,
+          "median": 3783.47942716,
+          "min": 3586.69496499,
+          "n": 3,
+          "spread": 262.94434064000006,
+          "stdev": 111.67461680421073
+        }
+      },
+      "env_steps_per_s_evaluate": 3729.7925596,
+      "env_steps_per_s_loop": 3709.1173073,
+      "env_wall_s": 3.85382294306,
+      "evaluate_s": 3.8608045273,
+      "evaluate_s_stats": {
+        "max": 1.34448447102,
+        "mean": 1.2869348424333333,
+        "median": 1.26906701014,
+        "min": 1.24725304614,
+        "n": 3,
+        "spread": 0.09723142487999992,
+        "stdev": 0.04165678871601268
+      },
+      "final_best_fitness": -8.195725440979004,
+      "generation_s": 3.88218199509,
+      "generation_s_stats": {
+        "max": 1.35366951395,
+        "mean": 1.29406066503,
+        "median": 1.27523231204,
+        "min": 1.2532801691,
+        "n": 3,
+        "spread": 0.10038934484999995,
+        "stdev": 0.04309203559120164
+      },
+      "generations": 3,
+      "loop_s": 3.88232531003,
+      "note": "evaluate_s/tell_s are common.sync()-bracketed wall clock of the two trainer regions; generation_s is the whole generation (tell end minus the previous tell end, or the run start) and bookkeeping_s is what is left of it between the regions",
+      "steps": 600,
+      "steps_per_s": {
+        "stats": {
+          "max": 160.401637735,
+          "mean": 155.83074580266668,
+          "median": 157.644976132,
+          "min": 149.445623541,
+          "n": 3,
+          "spread": 10.956014194000005,
+          "stdev": 4.653109033802891
+        }
+      },
+      "tell_s": 0.0206632730551,
+      "tell_s_stats": {
+        "max": 0.00903176004067,
+        "mean": 0.0068877576850333334,
+        "median": 0.00586710590869,
+        "min": 0.00576440710574,
+        "n": 3,
+        "spread": 0.00326735293493,
+        "stdev": 0.0015166182417390612
+      },
+      "unattributed_s": 0.000143314937227
+    },
+    "trainer_totals": {
+      "best_fitness": -8.195725440979004,
+      "cache_hits": 7,
+      "cache_misses": 5,
+      "env_steps": 14400,
+      "final_best_fitness": -8.195725440979004,
+      "steps": 600,
+      "wall_time_s": 3.8823019310366362
+    }
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "build_s": 6.48406602209,
+    "close_s": 0.130138920154,
+    "first_generation_s": 1.35366951395,
+    "graph_build_note": "measured inside ExecutableCache.get while the env and the trainer are built; the env compiles its own graphs in __init__, the trainer compiles the tell graph in setup(), and every later generation is a cache lookup",
+    "graph_build_s": {
+      "advance": {
+        "build_s": 0.04355107015,
+        "build_s_per_build": 0.04355107015,
+        "builds": 1,
+        "calls": 2,
+        "lookup_s": 5.83939254284e-07
+      },
+      "fitness": {
+        "build_s": 0.00082220393233,
+        "build_s_per_build": 0.00082220393233,
+        "builds": 1,
+        "calls": 2,
+        "lookup_s": 3.88128682971e-07
+      },
+      "obs": {
+        "build_s": 0.0149973861407,
+        "build_s_per_build": 0.0149973861407,
+        "builds": 1,
+        "calls": 2,
+        "lookup_s": 3.28407622874e-06
+      },
+      "policy": {
+        "build_s": 0.195956931217,
+        "build_s_per_build": 0.195956931217,
+        "builds": 1,
+        "calls": 2,
+        "lookup_s": 1.32992863655e-06
+      },
+      "tell": {
+        "build_s": 0.259052388836,
+        "build_s_per_build": 0.259052388836,
+        "builds": 1,
+        "calls": 4,
+        "lookup_s": 5.4829288274e-06
+      }
+    },
+    "graph_build_total_s": 0.514379980275,
+    "holdout_s": 2.34421187499,
+    "import_note": "the first import of the pilot env module and its kernels: genesis itself was already imported (and initialised) by the CLI's _ensure_gs_init, and the evoxc/TensorNEAT stack the trainer adds is imported right after, outside this timer",
+    "import_s": 0.225027685985,
+    "setup_s": 0.270580140874,
+    "steady_generation_median_s": 1.26425624057,
+    "steady_note": "first_generation_s is generation 0 (initial population); steady is generations 1..",
+    "tell_build_s": 0.259059133008,
+    "totals_s": 13.112515094,
+    "trainer_build_s": 0.270569662796
+  },
+  "process_role": "only",
+  "repeat": 0,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 2,
+  "status": "ok",
+  "task": "go2",
+  "timings": {
+    "note": "per-generation timings live in measurements.generations[*]; phases holds the build side"
+  },
+  "workload": {
+    "backend": "numpy",
+    "device": "cpu:0",
+    "episode_length": "env default: Go2 20 s (max_episode_length 1000), hover 15 s (1500)",
+    "episodes_per_policy": 3,
+    "generations": 3,
+    "genome": {
+      "max_conns": 640,
+      "max_nodes": 80,
+      "num_inputs": 45,
+      "num_outputs": 12,
+      "species_size": 3
+    },
+    "holdout": {
+      "episodes_per_policy": 3,
+      "populations": "the generation-0 (initial) and the last-generation (trained) population",
+      "seed_stream": "seeding.generation_seed_table(master_seed + 1000, 1)"
+    },
+    "horizon": 200,
+    "max_episode_length": 1000,
+    "note": "generations are real generations, not warm-ups: generation 0 trains on the initial population, so it is reported separately from the steady generations 1..",
+    "perturbation": {
+      "base_pos": 0.05,
+      "base_rpy": 0.05,
+      "joint_pos": 0.05,
+      "source": "the pilot trainer CLI defaults"
+    },
+    "physics_backend": "cpu",
+    "pjrt_plugin": null,
+    "pop_size": 8,
+    "residency": "numpy",
+    "resolved_backend": "numpy",
+    "resolved_device": "cpu:0",
+    "rows": 24,
+    "stop_when_done": false,
+    "sync": "common.sync() before and after each timed region",
+    "task": "go2",
+    "tell_backend": "numpy",
+    "timer_groups": {
+      "evaluate": "env.evaluate: seed draw + reset + scene.step() loop + fitness graph, sync-bracketed",
+      "generation_total": "the whole generation, tell end minus the previous tell end",
+      "tell": "trainer.run_tell: one compiled NEAT generation transition, sync-bracketed"
+    }
+  }
+}

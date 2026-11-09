@@ -1,0 +1,756 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_probe.py",
+    "torch-cpu",
+    "--out",
+    "examples/neuroevolution/benchmarks/results/torch_cpu_boundary.json"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T22:14:10Z",
+  "error": null,
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A56",
+    "dirty": false,
+    "dirty_files": [],
+    "head": "42230b382ddbe614e4e50e362c3852623e039113"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 0.76,
+    "loadavg_text": "0.76 0.98 0.91 20/651 3278164",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "probe_torch_cpu_boundary",
+  "measurements": {
+    "ast_scan": {
+      "files": {
+        "examples/drone/hover_device_rollout.py": {
+          "exists": true,
+          "genesis": [
+            {
+              "line": 103,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "from genesis.utils.misc import qd_to_torch"
+            },
+            {
+              "line": 428,
+              "scope": "DeviceRollout:_ensure_state",
+              "scope_kind": "method",
+              "statement": "import genesis as gs"
+            },
+            {
+              "line": 473,
+              "scope": "DeviceRollout:_error_mask",
+              "scope_kind": "method",
+              "statement": "from genesis.utils.misc import tensor_to_array"
+            }
+          ],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": [
+            {
+              "line": 384,
+              "scope": "DeviceRollout:_import",
+              "scope_kind": "method",
+              "statement": "import torch"
+            },
+            {
+              "line": 398,
+              "scope": "DeviceRollout:_download",
+              "scope_kind": "method",
+              "statement": "import torch"
+            },
+            {
+              "line": 414,
+              "scope": "DeviceRollout:_export",
+              "scope_kind": "method",
+              "statement": "import torch"
+            },
+            {
+              "line": 426,
+              "scope": "DeviceRollout:_ensure_state",
+              "scope_kind": "method",
+              "statement": "import torch"
+            },
+            {
+              "line": 457,
+              "scope": "DeviceRollout:_read_state",
+              "scope_kind": "method",
+              "statement": "import torch"
+            }
+          ]
+        },
+        "examples/drone/hover_kernels.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/drone/hover_neat_env.py": {
+          "exists": true,
+          "genesis": [
+            {
+              "line": 91,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "import genesis as gs"
+            },
+            {
+              "line": 92,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "from genesis.utils.misc import tensor_to_array"
+            }
+          ],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/locomotion/go2_device_rollout.py": {
+          "exists": true,
+          "genesis": [
+            {
+              "line": 94,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "import genesis as gs"
+            },
+            {
+              "line": 96,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "from genesis.utils.geom import inv_quat, quat_to_xyz, transform_quat_by_quat"
+            },
+            {
+              "line": 97,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "from genesis.utils.misc import qd_to_torch"
+            }
+          ],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": [
+            {
+              "line": 92,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "import torch"
+            }
+          ]
+        },
+        "examples/locomotion/go2_evox_kernels.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/locomotion/go2_neat_env.py": {
+          "exists": true,
+          "genesis": [
+            {
+              "line": 106,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "import genesis as gs"
+            },
+            {
+              "line": 108,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "from genesis.utils.geom import inv_quat, quat_to_xyz, transform_quat_by_quat"
+            }
+          ],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": [
+            {
+              "line": 103,
+              "scope": "module",
+              "scope_kind": "module",
+              "statement": "import torch"
+            }
+          ]
+        },
+        "examples/locomotion/go2_neat_kernels.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/neuroevolution/env_base.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/neuroevolution/evolution_graphs.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/neuroevolution/evox_runtime.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/neuroevolution/policy_graphs.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/neuroevolution/seeding.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/neuroevolution/selfcheck.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        },
+        "examples/neuroevolution/trainer.py": {
+          "exists": true,
+          "genesis": [],
+          "rsl_rl": [],
+          "syntax_error": null,
+          "tensordict": [],
+          "torch": []
+        }
+      },
+      "summary": {
+        "neuroevolution_torch_at_import_time": [],
+        "no_torch": [
+          "examples/neuroevolution/env_base.py",
+          "examples/neuroevolution/evolution_graphs.py",
+          "examples/neuroevolution/evox_runtime.py",
+          "examples/neuroevolution/policy_graphs.py",
+          "examples/neuroevolution/seeding.py",
+          "examples/neuroevolution/selfcheck.py",
+          "examples/neuroevolution/trainer.py",
+          "examples/locomotion/go2_neat_kernels.py",
+          "examples/locomotion/go2_evox_kernels.py",
+          "examples/drone/hover_neat_env.py",
+          "examples/drone/hover_kernels.py"
+        ],
+        "rule": "scope_kind == 'module' means the import runs when the module is imported; 'function'/'method' means it is deferred",
+        "scanned": 14,
+        "tensordict_or_genesis": [
+          "examples/locomotion/go2_neat_env.py",
+          "examples/locomotion/go2_device_rollout.py",
+          "examples/drone/hover_neat_env.py",
+          "examples/drone/hover_device_rollout.py"
+        ],
+        "torch_at_import_time": [
+          "examples/locomotion/go2_neat_env.py",
+          "examples/locomotion/go2_device_rollout.py"
+        ],
+        "torch_only_inside_functions": [
+          "examples/drone/hover_device_rollout.py"
+        ]
+      }
+    },
+    "measured_boundary": {
+      "go2": {
+        "replay": {
+          "created_utc": "2026-11-09T20:41:45Z",
+          "exists": true,
+          "git_head": "7c567d49519f5e155ed69413083659a0254ae456",
+          "kind": "env_replay",
+          "source": "results/env_go2_replay_seed0.json",
+          "status": "ok",
+          "values": {
+            "aggregate_over_two_generations": {
+              "state_read_ms_per_step": 0.469768628245,
+              "state_read_share_of_generation": 0.0687340149195
+            },
+            "generation": 0,
+            "per_step_ms": {
+              "generation_total": 8.14968801104,
+              "graph_advance": 0.816039270721,
+              "graph_controls": 0.0,
+              "graph_fitness": 0.000872579403222,
+              "graph_obs": 0.00751836923882,
+              "graph_policy": 2.52915879479,
+              "host_rng": 0.0577545003034,
+              "physics": 4.04751600465,
+              "state_read": 0.473838222679,
+              "write_reset": 0.039226738736,
+              "write_targets": 0.109346336685
+            },
+            "state_read_ms_per_step": 0.473838222679,
+            "state_read_s": 0.0473838222679,
+            "state_read_share_of_generation": 0.0581418849454,
+            "steps": 100,
+            "wall_time_s": 0.80878717103
+          }
+        },
+        "residency_gpu": {
+          "created_utc": "2026-11-09T21:26:39Z",
+          "exists": true,
+          "git_head": "cdda51acf1ba470fa8eded55b832b0ddadbd6ecf",
+          "kind": "env_residency",
+          "source": "results/residency_go2_gpu.json",
+          "status": "ok",
+          "values": {
+            "device_resident_intermediates": {
+              "host_touches_per_step": [
+                "the (rows,) done mask, for np.flatnonzero and the end_reasons classification",
+                "the solver-error test, plus the base_rpy_deg / error_mask rows on a step that ended"
+              ],
+              "items": [
+                "observations (the obs output is handed straight to the policy graph)",
+                "raw and clipped actions",
+                "last_actions",
+                "returns / alive / episode_length (fed back into the advance graph)",
+                "PD joint targets (built from last_actions on the device)",
+                "the per-generation init-qpos tile and the reset rows gathered from it",
+                "the zero-valued reset operands (base_ang_vel_world / base_quat / dof_vel / actions)"
+              ],
+              "source": "examples/locomotion/go2_device_rollout.py, section 'What stays on the device'"
+            },
+            "device_side_counters": {
+              "host_bytes_per_step": 395.68,
+              "host_calls_per_step": 4.065,
+              "sync_calls_per_step": 2.005
+            },
+            "host_bytes_per_step": {
+              "device": 395.68,
+              "numpy": 95553.18
+            },
+            "host_calls_per_step": {
+              "device": 4.065,
+              "numpy": 4.085
+            },
+            "numpy_side_counters": {
+              "host_bytes_per_step": 95553.18,
+              "host_calls_per_step": 4.085,
+              "sync_calls_per_step": 0.0
+            },
+            "steps_per_s_median": {
+              "device": 161.273380814,
+              "numpy": 120.731736582
+            },
+            "sync_calls_per_step": {
+              "device": 2.005,
+              "numpy": 0.0
+            }
+          }
+        },
+        "throughput_numpy_cpu_pop8": {
+          "created_utc": "2026-11-09T21:23:19Z",
+          "exists": true,
+          "git_head": "cdda51acf1ba470fa8eded55b832b0ddadbd6ecf",
+          "kind": "env_throughput",
+          "source": "results/env_go2_throughput_numpy_cpu_pop8.json",
+          "status": "ok",
+          "values": {
+            "per_step_ms": {
+              "graph_advance": 0.798067079547,
+              "graph_fitness": 0.000291955269252,
+              "graph_obs": 0.00153960155634,
+              "graph_policy": 2.44872023196,
+              "host_rng": 0.0002139286759,
+              "physics": 1.73019755787,
+              "state_read": 0.452779413123,
+              "write_reset": 0.0174221435251,
+              "write_targets": 0.102287638389
+            },
+            "per_step_s": {
+              "graph_advance": 0.000798067079547,
+              "graph_fitness": 2.91955269252e-07,
+              "graph_obs": 1.53960155634e-06,
+              "graph_policy": 0.00244872023196,
+              "host_rng": 2.139286759e-07,
+              "physics": 0.00173019755787,
+              "state_read": 0.000452779413123,
+              "write_reset": 1.74221435251e-05,
+              "write_targets": 0.000102287638389
+            },
+            "state_read_parity": {
+              "base_pos": {
+                "bit_identical": true,
+                "max_abs_diff": 0.0
+              },
+              "base_quat": {
+                "bit_identical": false,
+                "max_abs_diff": 1.19209289551e-07
+              },
+              "dof_pos": {
+                "bit_identical": true,
+                "max_abs_diff": 0.0
+              },
+              "note": "getter vs live solver buffer, read after the last generation; a nonzero base_quat entry means the two residencies feed the graphs a last-bit different orientation, which is the only arithmetic difference between them"
+            },
+            "throughput": {
+              "env_steps_per_s": {
+                "max": 4297.9175433,
+                "mean": 4273.0000275266675,
+                "median": 4266.83248882,
+                "min": 4254.25005046,
+                "n": 3,
+                "spread": 43.667492839999795,
+                "stdev": 18.352863228145633
+              },
+              "note": "median and spread over the timed generations of this process; the warm-up generation is excluded everywhere (it carries the first-step JIT of the compiled kernels and the empty caches)",
+              "rows": 24,
+              "steps_per_s": {
+                "max": 179.079897637,
+                "mean": 178.04166781333333,
+                "median": 177.784687034,
+                "min": 177.260418769,
+                "n": 3,
+                "spread": 1.819478867999976,
+                "stdev": 0.7647026343552086
+              },
+              "steps_per_s_harness": {
+                "max": 179.023688432,
+                "mean": 177.98647028633332,
+                "median": 177.724529954,
+                "min": 177.211192473,
+                "n": 3,
+                "spread": 1.812495958999989,
+                "stdev": 0.7627777979748315
+              },
+              "steps_total": 600,
+              "timed_generations": [
+                1,
+                2,
+                3
+              ],
+              "wall_time_s": {
+                "max": 1.12828346784,
+                "mean": 1.12335322797,
+                "median": 1.12495627906,
+                "min": 1.11681993701,
+                "n": 3,
+                "spread": 0.011463530829999957,
+                "stdev": 0.004815285686952373
+              },
+              "warmup_generation": 0
+            }
+          }
+        }
+      },
+      "hover": {
+        "replay": {
+          "created_utc": "2026-11-09T20:42:09Z",
+          "exists": true,
+          "git_head": "7c567d49519f5e155ed69413083659a0254ae456",
+          "kind": "env_replay",
+          "source": "results/env_hover_replay_seed0.json",
+          "status": "ok",
+          "values": {
+            "aggregate_over_two_generations": {
+              "state_read_ms_per_step": 0.202978439629,
+              "state_read_share_of_generation": 0.0457006426552
+            },
+            "generation": 0,
+            "per_step_ms": {
+              "generation_total": 4.66575493105,
+              "graph_advance": 1.01784963626,
+              "graph_controls": 0.0540425325744,
+              "graph_fitness": 0.00101375160739,
+              "graph_obs": 0.00188277801499,
+              "graph_policy": 1.68327000691,
+              "host_rng": 0.119593059644,
+              "physics": 0.645327672828,
+              "state_read": 0.204436127096,
+              "write_reset": 0.334831031505,
+              "write_targets": 0.52046103403
+            },
+            "state_read_ms_per_step": 0.204436127096,
+            "state_read_s": 0.0204436127096,
+            "state_read_share_of_generation": 0.0438163019955,
+            "steps": 100,
+            "wall_time_s": 0.465912587009
+          }
+        },
+        "residency_gpu": {
+          "created_utc": "2026-11-09T21:29:01Z",
+          "exists": true,
+          "git_head": "cdda51acf1ba470fa8eded55b832b0ddadbd6ecf",
+          "kind": "env_residency",
+          "source": "results/residency_hover_gpu.json",
+          "status": "ok",
+          "values": {
+            "device_resident_intermediates": {
+              "host_touches_per_step": [
+                "scene.get_error_envs_mask() (a host query by contract)",
+                "the two host command draws (x, y uniforms, plus the pinned z), uploaded per step"
+              ],
+              "items": [
+                "the staged base-state buffers (pos / quat / vel / ang) imported over the live solver buffers",
+                "observation, clipped actions and propeller RPM",
+                "returns / alive / episode_length / end_code / commands",
+                "last_actions and last_base_pos",
+                "the four genome payload leaves (staged once per generation)"
+              ],
+              "source": "examples/drone/hover_device_rollout.py, sections 'Host round-trips left' and '_ensure_state'"
+            },
+            "device_side_counters": {
+              "host_bytes_per_step": 1109.48,
+              "host_calls_per_step": 8.115,
+              "sync_calls_per_step": 1.0
+            },
+            "host_bytes_per_step": {
+              "device": 1109.48,
+              "numpy": 85450.56
+            },
+            "host_calls_per_step": {
+              "device": 8.115,
+              "numpy": 5.015
+            },
+            "numpy_side_counters": {
+              "host_bytes_per_step": 85450.56,
+              "host_calls_per_step": 5.015,
+              "sync_calls_per_step": 0.0
+            },
+            "steps_per_s_median": {
+              "device": 167.574195864,
+              "numpy": 105.330541667
+            },
+            "sync_calls_per_step": {
+              "device": 1.0,
+              "numpy": 0.0
+            }
+          }
+        },
+        "throughput_numpy_cpu_pop8": {
+          "created_utc": "2026-11-09T21:25:07Z",
+          "exists": true,
+          "git_head": "cdda51acf1ba470fa8eded55b832b0ddadbd6ecf",
+          "kind": "env_throughput",
+          "source": "results/env_hover_throughput_numpy_cpu_pop8.json",
+          "status": "ok",
+          "values": {
+            "per_step_ms": {
+              "graph_advance": 1.02009174065,
+              "graph_controls": 0.0531395761452,
+              "graph_fitness": 0.000299178839972,
+              "graph_obs": 0.000447526496525,
+              "graph_policy": 1.66817743525,
+              "host_rng": 0.115576460569,
+              "physics": 0.67917309818,
+              "state_read": 0.20433730407,
+              "write_reset": 0.00496809409621,
+              "write_targets": 0.42983360705
+            },
+            "per_step_s": {
+              "graph_advance": 0.00102009174065,
+              "graph_controls": 5.31395761452e-05,
+              "graph_fitness": 2.99178839972e-07,
+              "graph_obs": 4.47526496525e-07,
+              "graph_policy": 0.00166817743525,
+              "host_rng": 0.000115576460569,
+              "physics": 0.00067917309818,
+              "state_read": 0.00020433730407,
+              "write_reset": 4.96809409621e-06,
+              "write_targets": 0.00042983360705
+            },
+            "state_read_parity": null,
+            "throughput": {
+              "env_steps_per_s": {
+                "max": 5683.07028704,
+                "mean": 5629.904199046668,
+                "median": 5626.97569741,
+                "min": 5579.66661269,
+                "n": 3,
+                "spread": 103.40367435000007,
+                "stdev": 42.265131875240336
+              },
+              "note": "median and spread over the timed generations of this process; the warm-up generation is excluded everywhere (it carries the first-step JIT of the compiled kernels and the empty caches)",
+              "rows": 24,
+              "steps_per_s": {
+                "max": 236.794595293,
+                "mean": 234.57934162666666,
+                "median": 234.457320725,
+                "min": 232.486108862,
+                "n": 3,
+                "spread": 4.308486430999977,
+                "stdev": 1.7610471613712093
+              },
+              "steps_per_s_harness": {
+                "max": 236.639515441,
+                "mean": 234.433968927,
+                "median": 234.308404518,
+                "min": 232.353986822,
+                "n": 3,
+                "spread": 4.28552861899999,
+                "stdev": 1.7518111963855445
+              },
+              "steps_total": 600,
+              "timed_generations": [
+                1,
+                2,
+                3
+              ],
+              "wall_time_s": {
+                "max": 0.860266451957,
+                "mean": 0.8526380139716667,
+                "median": 0.853033717955,
+                "min": 0.844613872003,
+                "n": 3,
+                "spread": 0.015652579954000045,
+                "stdev": 0.006396261983164357
+              },
+              "warmup_generation": 0
+            }
+          }
+        }
+      },
+      "note": "each block names its source record and that record's git head; state_read is the NumPy-side device->host read of the full state, and the per-step share is relative to generation_total"
+    },
+    "runtime_probe": {
+      "command": [
+        "/root/evox-robotics/.venv/bin/python",
+        "-c",
+        "\nimport json\nimport sys\nimport time\n\nreport = {\"torch_in_sys_modules_before_genesis\": \"torch\" in sys.modules}\nstarted = time.perf_counter()\nimport genesis\nreport[\"genesis_import_s\"] = round(time.perf_counter() - started, 3)\nreport[\"genesis_version\"] = getattr(genesis, \"__version__\", None)\nreport[\"genesis_initialized\"] = bool(getattr(genesis, \"_initialized\", False))\nreport[\"genesis_device\"] = repr(getattr(genesis, \"device\", None))\nreport[\"torch_in_sys_modules_after_import_genesis\"] = \"torch\" in sys.modules\nimport torch\nreport[\"torch_version\"] = torch.__version__\nreport[\"torch_hip_version\"] = getattr(torch.version, \"hip\", None)\nreport[\"torch_cuda_version\"] = getattr(torch.version, \"cuda\", None)\navailable = bool(torch.cuda.is_available())\nreport[\"torch_cuda_is_available\"] = available\nreport[\"hip_device_visible\"] = bool(available and getattr(torch.version, \"hip\", None))\nreport[\"torch_cuda_device_count\"] = torch.cuda.device_count() if available else 0\nif available:\n    try:\n        report[\"hip_device_name\"] = torch.cuda.get_device_name(0)\n    except Exception as exc:\n        report[\"hip_device_error\"] = f\"{type(exc).__name__}: {exc}\"\nimport importlib.util\nreport[\"find_spec\"] = {}\nfor name in (\"torch\", \"tensordict\", \"rsl_rl\", \"evoxc\", \"tensorneat\"):\n    try:\n        report[\"find_spec\"][name] = importlib.util.find_spec(name) is not None\n    except Exception as exc:\n        report[\"find_spec\"][name] = f\"{type(exc).__name__}: {exc}\"\nprint(\"PROBE \" + json.dumps(report))\n"
+      ],
+      "elapsed_s": 12.490622,
+      "exception": null,
+      "method": "fresh subprocess, import genesis + torch, no scene",
+      "report": {
+        "find_spec": {
+          "evoxc": true,
+          "rsl_rl": false,
+          "tensordict": false,
+          "tensorneat": true,
+          "torch": true
+        },
+        "genesis_device": "None",
+        "genesis_import_s": 11.769,
+        "genesis_initialized": false,
+        "genesis_version": "1.4.6",
+        "hip_device_name": "AMD Instinct MI300X VF",
+        "hip_device_visible": true,
+        "torch_cuda_device_count": 1,
+        "torch_cuda_is_available": true,
+        "torch_cuda_version": null,
+        "torch_hip_version": "7.1.52802",
+        "torch_in_sys_modules_after_import_genesis": true,
+        "torch_in_sys_modules_before_genesis": false,
+        "torch_version": "2.13.0+rocm7.1"
+      },
+      "returncode": 0,
+      "stderr_tail": [],
+      "timed_out": false
+    }
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "ast_scan_s": 0.0722873739433,
+    "runtime_probe_s": 12.4908346462
+  },
+  "process_role": "only",
+  "repeat": 0,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "go2+hover",
+  "timings": {
+    "note": "phase seconds are in phases; boundary numbers are copied from the source records"
+  },
+  "workload": {
+    "measured_record_glob": [
+      "results/env_<task>_replay_seed0.json",
+      "results/env_<task>_throughput_numpy_cpu_pop8.json",
+      "results/residency_<task>_gpu.json"
+    ],
+    "probe": "torch_cpu",
+    "rule": "AST evidence plus one fresh-subprocess import probe; the committed records are cited, never re-measured, so a number can be traced to its source file and git head",
+    "runtime_probe_timeout_s": 180.0,
+    "scan_targets": [
+      "examples/neuroevolution/env_base.py",
+      "examples/neuroevolution/evolution_graphs.py",
+      "examples/neuroevolution/evox_runtime.py",
+      "examples/neuroevolution/policy_graphs.py",
+      "examples/neuroevolution/seeding.py",
+      "examples/neuroevolution/selfcheck.py",
+      "examples/neuroevolution/trainer.py",
+      "examples/locomotion/go2_neat_env.py",
+      "examples/locomotion/go2_neat_kernels.py",
+      "examples/locomotion/go2_evox_kernels.py",
+      "examples/locomotion/go2_device_rollout.py",
+      "examples/drone/hover_neat_env.py",
+      "examples/drone/hover_kernels.py",
+      "examples/drone/hover_device_rollout.py"
+    ]
+  }
+}
