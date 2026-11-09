@@ -145,6 +145,9 @@ This section covers `go2_neat_env.py`; `try1.py`'s own boundary is described und
 - `RigidOptions(enable_self_collision=False, max_collision_pairs=20, tolerance=1e-5)` is tuned for a locomotion policy with few contact pairs (saves memory).
 - One scene with `3 * pop_size` rows (rather than 3 sequential episodes per policy) keeps every policy on identical reset perturbations and amortizes one `scene.step()` across all rows.
 - Backflip policies use a phase clock (`sin`/`cos` of `episode_length_buf`) in the observation instead of velocity commands.
+- Kernels are plain functions decorated `@evoxc.defn` (`go2_gait`, `go2_walking_reward`, `go2_neat_obs`, `go2_neat_advance`, `go2_neat_fitness`); the algorithm-dependent graphs (`policy`, `tell`) are closures defined inside their `build_*` and handed straight to `evoxc.build`, so trace-time objects (`algo`, `config`, the species pytree) are captured rather than passed as operands.
+- `evoxc.build(fn, *positional_operands, backend=..., device=...)` is positional: every operand is either `evoxc.TensorSpec(shape, dtype, name=...)` (runtime tensor) or a plain host value (static specialization, baked in and re-validated with `array_equal`); there is no class-based kernel API and no `evoxc.jit`, and the ops are top-level `evoxc.*` (this version has no `evoxc.ops` submodule).
+- Build-time metadata (rows, standing pose, command vector, thresholds) is stashed on the executable by `_attach` because `Executable.backend` / `.device` / `.functions` are read-only properties; the `run_*` wrappers re-tile their statics from that metadata so callers only supply per-step values.
 
 ## Dependencies
 - `evoxc` 0.1.0 (VCS install, not declared in `pyproject.toml`), with optional `iree-base-compiler` / `iree-base-runtime` adapters for CUDA/ROCm targets.
@@ -160,6 +163,8 @@ This section covers `go2_neat_env.py`; `try1.py`'s own boundary is described und
 - The gait `step` input must be a 0-d `int32` ndarray; `np.ascontiguousarray` promotes 0-d to shape `(1,)` and the executable rejects it.
 - Static ndarray leaves specialize the graph but must still be passed to `evoxc.run` on every call (validated with `array_equal`).
 - Graph-time constants need `evoxc.constant(evoxc.from_numpy(arr))`; `evoxc.zeros` is a concrete creator, not a graph op.
+- A graph's return decides `evoxc.run`'s result: a dict comes back name-indexed (`outputs[name]`), a tuple/list positionally, a single-leaf graph as the bare tensor (`_outputs` is the normalizer).
+- Plain Python ints promote to int64 in graph arithmetic: use `_int32(value)` for int32 constants and a correctly typed zero vector (`episode_length - episode_length`) inside `evoxc.select`, because a literal `0` would flip the branch dtype.
 - `scene.clear_errno()` must be called for every row the graphs report in `error_mask` (and once per generation reset): a latched solver error otherwise re-raises `GenesisException: Invalid constraint forces causing 'nan'` on the next `scene.step()` although the graph already marked those rows dead.
 - The trainer's per-generation `end_reasons` count comes from the graphs' `done`/`alive` state plus the genesis error mask; `tilted` dominates for untrained policies at the full horizon.
 - `max_collision_pairs=20`: exceeding ~20 collision pairs raises an exception; keep policy contact sparse.

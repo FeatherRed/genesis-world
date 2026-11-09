@@ -87,6 +87,8 @@ Other:
 - `raycast_qd.py` carries duplicated collision vs visual BVH traversal kernels (`bvh_ray_cast` vs `bvh_ray_cast_visual`, etc.); a FIXME documents that Quadrants cannot accept either of two dataclass shapes for one `qd.func` arg, forcing parallel copies.
 - `data.py` works around upstream Quadrants limitations documented in FIXMEs: a kernel reads an ndarray's layout through private `_qd_layout`; a struct-for over a field ignores `serialize` on GPU; `qd.ndarray` takes no memory layout (so `V()` allocates ndarrays through `qd.tensor`); a kernel cannot take `None` for a struct argument (unused arrays become 0-d placeholders); Metal silently mis-addresses tensors above 2 GiB.
 - `mjcf.py` importing `mujoco` with `MUJOCO_GL=EGL` forcibly defines `PYOPENGL_PLATFORM=egl` (documented side effect).
+- `quat_to_xyz(..., rpy=True)` exists only in the torch/numpy backends (`qd_quat_to_xyz` implements the non-`rpy` intrinsic x-y-z convention only); `rpy=True` angles of `q` equal the negated non-`rpy` angles of `inv_quat(q)`.
+- `_tc_quat_to_xyz` applies the `gs.EPS` gimbal-lock test to the `|q|^2`-scaled cosine, while `_np_quat_to_xyz`/`qd_quat_to_xyz` test the normalized cosine, so non-unit quaternions near pitch ±90° can take different branches per backend.
 - Heavy optional dependencies are imported lazily inside functions (e.g. `pygel3d` in `hybrid.py`, `moviepy` in `tools.animate`), so module import stays cheap but the deps are still required at call time.
 
 # Dependencies (beyond the package manager)
