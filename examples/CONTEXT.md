@@ -13,7 +13,7 @@ Authoring rules live in `.github/contributing/EXAMPLES.md`; read it before addin
 - `gui/` — the built-in ImGui viewer overlay (`enable_gui=True`).
 - `ipc/` — external IPC (Incremental Potential Contact) coupler demos via `pyuipc`.
 - `kinematic/` — `KinematicEntity` as a visualization-only ghost reference motion.
-- `locomotion/` — Go2 quadruped RL env + rsl-rl train/eval + backflip playback.
+- `locomotion/` — Go2 quadruped: rsl-rl PPO train/eval (`go2_train.py`/`go2_eval.py`), independent TensorNEAT neuroevolution walking trainer (`go2_neat_train.py` + `go2_neat_env.py` + `go2_neat_kernels.py`), scripted-trot EvoX demo (`try1.py`), backflip playback.
 - `manipulation/` — Franka grasping RL env + train/eval + behavior cloning.
 - `rendering/` — photorealistic RayTracer (LuisaRender), camera control, async render, speed test.
 - `rigid/` — the largest group: Franka control, IK, terrain, domain randomization, multi-GPU, convex decomposition, constraints.
@@ -61,7 +61,7 @@ Authoring rules live in `.github/contributing/EXAMPLES.md`; read it before addin
 - `gui/` -> ImGui viewer overlay
 - `ipc/` -> external IPC coupler (`pyuipc`)
 - `kinematic/` -> kinematic ghost entities
-- `locomotion/` -> Go2 RL train/eval + backflip (see `locomotion/backflip/` for checkpoints)
+- `locomotion/` -> Go2 PPO train/eval (`go2_*`), TensorNEAT neuroevolution walking trainer (`go2_neat_*`), scripted trot (`try1.py`), backflip (checkpoints in `locomotion/backflip/`)
 - `manipulation/` -> grasping RL + behavior cloning
 - `rendering/` -> RayTracer (LuisaRender), cameras, async render
 - `rigid/` -> rigid-body control/IK/terrain/DR/multi-GPU/constraints
