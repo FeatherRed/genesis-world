@@ -1,0 +1,37 @@
+python.exe : [W 11/09/26 23:07:13.365 71932] [frontend_ir.cpp:quadrants::lang::ASTBuilder::begin_frontend_struct_for_on
+_external_tensor@1553] qd.loop_config(serialize=True) does not have effect on the struct for. The execution order is no
+t guaranteed.
+At line:1 char:129
++ ... ND="dummy"; & C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python.e ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: ([W 11/09/26 23:...not guaranteed.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+[W 11/09/26 23:07:13.373 71932] [frontend_ir.cpp:quadrants::lang::ASTBuilder::begin_frontend_struct_for_on_external_ten
+sor@1553] qd.loop_config(serialize=True) does not have effect on the struct for. The execution order is not guaranteed.
+[W 11/09/26 23:07:13.496 71932] [frontend_ir.cpp:quadrants::lang::ASTBuilder::begin_frontend_struct_for_on_external_ten
+sor@1553] qd.loop_config(serialize=True) does not have effect on the struct for. The execution order is not guaranteed.
+[W 11/09/26 23:07:13.506 71932] [frontend_ir.cpp:quadrants::lang::ASTBuilder::begin_frontend_struct_for_on_external_ten
+sor@1553] qd.loop_config(serialize=True) does not have effect on the struct for. The execution order is not guaranteed.
+[W 11/09/26 23:07:13.532 71932] [frontend_ir.cpp:quadrants::lang::ASTBuilder::begin_frontend_struct_for_on_external_ten
+sor@1553] qd.loop_config(serialize=True) does not have effect on the struct for. The execution order is not guaranteed.
+[W 11/09/26 23:07:13.536 71932] [frontend_ir.cpp:quadrants::lang::ASTBuilder::begin_frontend_struct_for_on_external_ten
+sor@1553] qd.loop_config(serialize=True) does not have effect on the struct for. The execution order is not guaranteed.
+[38;5;226m[Genesis] [23:07:13] [WARNING] Neutral robot position (qpos0) exceeds joint limits.[0m
+INFO go2_neat_env: Go2NeatEnv: pop_size=8 rows=24 horizon=25 max_episode_length=1000 backend=numpy device=cpu:0
+C:\04_Study\github\EvoxC-Robotic\.venv\Lib\site-packages\evoxc\numpy\creation.py:80: UserWarning: Embedding a tensor of
+ 4147216 bytes as a graph constant (threshold 1048576 bytes, set via EVOXC_LARGE_CONSTANT_BYTES); prefer passing it as 
+an explicit input instead.
+  return ops.constant(core.tensor(np.full(s, fill_value, dtype=dtype)))
+C:\04_Study\github\EvoxC-Robotic\.venv\Lib\site-packages\evoxc\backends\numpy\kernels\elementwise.py:145: RuntimeWarnin
+g: overflow encountered in exp
+  return core.Tensor(np.asarray(np_fn(x_arr)))
+Go2 NEAT walking: pop_size=8 rows=24 generations=2 horizon=25 max_episode_length=1000 genesis=cpu evoxc=numpy@cpu:0 master_seed=0 evolution_seed=3757552657 perturbation=nonzero
+built 5 executables in 35.525 s (cache 0 hits / 5 misses)
+gen 0 | seeds [1454269175, 757617120, 1421746521] | best -7.3785 median -51.7754 | best p7 [-7.872 -7.145 -7.119] | 21 steps 1.416 s (14.8 steps/s, 356 env-steps/s) | cache +6 hits/+0 misses (total 6 hits/5 misses) | ends timeout=0 tilted=24 error=0 unfinished=0
+gen 1 | seeds [1313752747, 908599966, 53557616] | best -7.3180 median -19.0252 | best p0 [-7.420 -6.670 -7.865] | 10 steps 0.062 s (160.5 steps/s, 3852 env-steps/s) | cache +6 hits/+0 misses (total 12 hits/5 misses) | ends timeout=0 tilted=24 error=0 unfinished=0
+done: 2 generations, 31 steps, 2.3 s total, best fitness -7.3180; wrote ._verify_smoke\history.jsonl and ._verify_smoke\summary.json
+exit=0
+===GITIGNORE=== 
+===GENESIS_TOML=== 
+NO_GENESIS_TOML 
