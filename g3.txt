@@ -1,0 +1,4 @@
+﻿940: def inv_quat(quat):
+1069: def xyz_to_quat(xyz, rpy=False, degrees=False):
+1208: def quat_to_xyz(quat, rpy=False, degrees=False):
+1389: def transform_quat_by_quat(v, u):

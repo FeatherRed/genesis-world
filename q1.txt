@@ -1,0 +1,4 @@
+﻿current transform_quat_by_quat(pert, init) = [0.       0.707107 0.707107 0.      ]
+world  transform_quat_by_quat(init, pert) = [0.       0.707107 0.       0.707107]
+R of init@pert vs R of expected [0.5,0.5,-0.5,0.5]: 2.0
+R of pert@init vs R of expected [0.5,0.5,-0.5,0.5]: 1.0
