@@ -1,7 +1,0 @@
-﻿python.exe : C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python.exe: No module named ruff
-At line:1 char:63
-+ ... ing]::UTF8; & "C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python. ...
-+                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
-    + CategoryInfo          : NotSpecified: (C:\04_Study\git...dule named ruff:String) [], RemoteException
-    + FullyQualifiedErrorId : NativeCommandError
- 

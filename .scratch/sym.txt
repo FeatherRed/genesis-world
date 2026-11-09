@@ -1,6 +1,0 @@
-﻿type <class 'evoxc.core.symbolic.SymbolicTensor'>
-shape attr (8, 80)
-spec MISSING
-dtype int32
-dir ['dtype', 'id', 'location', 'shape', 'value']
-built

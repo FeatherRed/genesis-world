@@ -1,6 +1,0 @@
-﻿.scratch/tensorneat/src\tensorneat\pipeline.py:1347:    def _details(self, label: str, callback: Callable[[], Any]) -> None:
-.scratch/tensorneat/src\tensorneat\pipeline.py:1358:            callback()
-.scratch/tensorneat/src\tensorneat\algorithm\CONTEXT.md:42:`tell(state, fitness) -> State` consumes a `(P,)` maximised fitness array and returns the next-generation state; `show_details(state, fitness) -> None` is the only other host-side method (converts with `common.tools.to_numpy` and prints — evoxc has no `io_callback`).
-.scratch/tensorneat/src\tensorneat\algorithm\CONTEXT.md:161:`evoxc` has no `io_callback`/print op, so all logging stays in `show_details` on the host side.
-.scratch/tensorneat/src\tensorneat\algorithm\neat\neat.py:854:            Host-side only: ``evoxc`` exposes no ``io_callback`` and
-.scratch/tensorneat/src\tensorneat.egg-info\PKG-INFO:1164:4. Thanks to [EvoX Genesis](https://github.com/EMI-Group/evox) for the framework and the multi-device/distributed direction this library follows.

@@ -1,6 +1,0 @@
-﻿940: def inv_quat(quat):
-1140: def _np_quat_to_xyz(quat, rpy=False, out=None):
-1208: def quat_to_xyz(quat, rpy=False, degrees=False):
-1408: def _np_transform_by_quat(v, quat, out=None):
-1437: def transform_by_quat(v, quat):
-1448:         return _np_transform_by_quat(v, quat, out=None)

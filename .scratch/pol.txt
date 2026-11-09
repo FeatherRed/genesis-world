@@ -1,6 +1,0 @@
-﻿kinds SymbolicTensor SymbolicTensor SymbolicTensor SymbolicTensor
-shapes (8, 80) (8, 80, 4) (8, 640, 2) (8, 640, 1)
-payload (8, 80) (8, 80, 4) (8, 640, 2) (8, 640, 1)
-fields ('node_keys', 'node_attrs', 'conn_keys', 'conn_attrs')
-transformed ok
-built
