@@ -30,6 +30,7 @@ import numpy as np
 from .constants import backend as _gs_backend
 from .logging import Logger
 from .utils import ZeroCopyMode, get_device, redirect_libc_stderr, set_environ, set_random_seed
+from .utils.hsa import ensure_system_hsa_runtime, inspect_hsa_runtime
 from .version import __version__
 
 
@@ -85,6 +86,11 @@ def init(
     if logging_level is None:
         logging_level = _logging.DEBUG if debug else _logging.INFO
     logger = Logger(logging_level, logger_verbose_time, theme)
+
+    # Repair the HSA runtime before any GPU work: 'LD_PRELOAD' must be in place before the dynamic loader maps torch's
+    # HIP/HSA libraries, which is why a mismatch is fixed by re-executing the interpreter. This is a no-op except on a
+    # ROCm host whose torch bundles an HSA runtime that differs from the system one.
+    ensure_system_hsa_runtime(requested_backend=backend, logger=logger)
 
     # Get device and backend
     global device

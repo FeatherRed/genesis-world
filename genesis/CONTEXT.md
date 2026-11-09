@@ -9,6 +9,7 @@ This node documents the package root (top-level modules + `logging/` + `assets/`
 - `__init__.py` — the public namespace and lifecycle: `gs.init(...)` / `gs.destroy()`, `gs.register_external_module(init_fun, destroy_fun)` / `unregister_external_module`, `gs.GenesisException`.
   It configures Quadrants + torch, sets backend-dependent dtypes (`gs.qd_float`/`gs.np_float`/`gs.tc_float`, `gs.qd_vec3`, `gs.qd_mat3`, int/bool equivalents), zero-copy mode, and precision (32/64).
   It re-exports: `gs.Scene`, `gs.Mesh`, `gs.states`, `gs.materials`, `gs.force_fields`, `gs.morphs`, `gs.sensors`, `gs.renderers`, `gs.surfaces`, `gs.textures`, `gs.recorders`, `gs.tools`, `gs.UID`, `gs.List`, `gs.utils.geom.*`, misc helpers (`raise_exception`, `assert_built`, ...), and the constants enums (`gs.JOINT_TYPE`, `gs.GEOM_TYPE`, `gs.CTRL_MODE`, `gs.integrator`, `gs.constraint_solver`, `gs.friction_cone`, `gs.contact_resolution`, `gs.broadphase_traversal`, `gs.link_ref_frame`, `gs.backend` with members `cpu/gpu/cuda/amdgpu/metal`).
+  It also re-exports the ROCm HSA runtime helpers `gs.ensure_system_hsa_runtime` / `gs.inspect_hsa_runtime`, `gs.init` calling the former before any GPU work (see `gs.utils.HsaRuntimeStatus` and the ROCm HSA note below).
 - `_main.py` — the `gs` CLI (pyproject `[project.scripts] gs = "genesis._main:main"`): `gs launch` / `gs view` (deprecated alias) to inspect an asset in the viewer, `gs play` (ImGui joint controls), `gs replay` (`.gstraj` trajectory), `gs animate` (images → video).
 - `constants.py` — file-format constants (`URDF_FORMAT`, `MJCF_FORMAT`, `MESH_FORMATS`, `USD_FORMATS`, `XACRO_FORMAT`, `GLTF_FORMATS`) and the enums above (rigid solver geometry/joint/equality/control types, integrator/constraint/friction/contact-resolution/broadphase options, `backend`, `IMAGE_TYPE`, `PARA_LEVEL`, `ACTIVE`/`INACTIVE`).
 - `datatypes.py` — `gs.List[T]`: a pydantic-compatible, richly-repr'd list used everywhere for entity/link/geom collections.
@@ -61,6 +62,16 @@ Solver state lives in Quadrants device buffers and reaches torch only through DL
 `Field`/`Ndarray` export DLPack via `to_dlpack()` / `to_torch(copy=False)`; the `qd.Tensor` wrapper does not itself implement `__dlpack__`, so call `to_dlpack()` or use the cached torch view.
 On ROCm (`qd.init(arch=qd.amdgpu)`) Quadrants memory appears to torch as `torch.device("cuda", 0)` and its DLPack device is `(kDLROCM=10, 0)`; `gs.device` is `torch.device("cuda", 0)` and `gs.use_zerocopy.is_supported` is True.
 `gs.tc_float`/`gs.tc_int`/`gs.tc_bool` are float32/int32/bool (Quadrants f32/i32/bool), while `gs.use_ndarray` defaults to True; recording (autodiff) disables zero-copy, so `copy=False` views are unavailable in a recording scene.
+
+### ROCm HSA runtime (AMD Instinct MI300X VF)
+On this host torch 2.13.0+rocm7.1 bundles `torch/lib/libhsa-runtime64.so` (version 1.18.70101, sha256 `10ac797047ff6f153551295adda65c2ab5ab83fcaf7e2a7699d1ea81427c33c8`), which corrupts AQL packets after roughly 50-600 steps, surfacing as `HSA_STATUS_ERROR_INVALID_PACKET_FORMAT` -> `hipErrorLaunchFailure` in Quadrants' `hipStreamSynchronize`, and sometimes as a SIGSEGV.
+The system `/opt/rocm/lib/libhsa-runtime64.so.1.18.70100` (ROCm 7.1.0, sha256 `e45cf51a79392a6033623e95a705408bb72a3b66998c80f2e400e0e8716926e3`) does not have this defect.
+`genesis/utils/hsa.py` detects the mismatch (`inspect_hsa_runtime` / `system_hsa_runtime_path`, pure detection that never imports torch beyond `find_spec`, never raises and never re-executes) and `ensure_system_hsa_runtime` repairs it.
+`gs.init` on a GPU/ROCm backend calls `ensure_system_hsa_runtime` right after the logger exists and strictly before any `get_device` probing or `qd.init`, so the repair precedes all torch/quadrants GPU work; a user scene therefore needs no `LD_PRELOAD` prefix and no example-local shim.
+A `ctypes.CDLL(..., RTLD_GLOBAL)` preload is NOT equivalent: the symbols bind but the abort persists, because `LD_PRELOAD` must be in place before the dynamic loader maps torch's HIP/HSA libraries, which is why a one-shot `os.execve` of the current interpreter is required.
+`GS_HSA_REEXEC=0` opts out (with one warning naming both libraries) and `GS_HSA_REEXEC_DONE=1` is the internal one-shot sentinel that keeps the re-exec from ever looping.
+The re-exec is warn-only under pytest (`PYTEST_VERSION` or `pytest` in `sys.modules`), `python -m`, interactive/IPython and embedded interpreters, and never happens for `gs.cpu`/`gs.metal`, for a missing torch ROCm wheel, or once the system runtime is already preloaded.
+The cost is one extra interpreter start on the affected host only, since the parent already paid `import genesis` (measured baseline 13.0 s / 3.2 GB for `import genesis` on this host).
 
 ## See Also
 - `../README.md`, `../pyproject.toml`, `../CLAUDE.md`, `../CODING_GUIDELINES.md` — project overview and conventions.
