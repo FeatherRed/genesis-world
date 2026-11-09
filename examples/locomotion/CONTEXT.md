@@ -16,6 +16,18 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
   Helpers: `DT`, `ACTION_SCALE`, `STANDING` (4×3) / `STANDING_FLAT` (12), `REWARD_TERM_NAMES`, `resolve_backend_device(backend, device)`, `build_gait()`, `build_reward()`, `run_gait(executable, step, previous_action)`, `run_reward(executable, ...)`.
 - `go2_legacy_reference.py` → the pre-migration math as importable pure functions and the parity oracle: `gait_step(step, previous_action, ...)` (numpy float64) and `walking_reward_terms(...)` (torch float32 state terms, numpy float64 action rate). No genesis import; quaternion helpers are transcribed from `genesis.utils.geom`.
 
+### TensorNEAT Go2 walking graphs (`go2_neat_kernels.py`)
+- Pure-`evoxc` module (no `genesis`, no torch, no simulation): every compiled graph the TensorNEAT Go2-walking trainer needs.
+- Constants: `NUM_OBS=45`, `NUM_ACTIONS=12`, `EPISODES_PER_POLICY=3`, `CLIP_ACTIONS=100.0`, `TERMINATION_LIMIT_DEG=10.0`, `OBS_SCALES`, `REWARD_SCALES`, `DEFAULT_COMMANDS`.
+- `DEFAULT_COMMANDS = [0.5, 0, 0]` is exact (not an approximation): `go2_train.get_cfgs()` uses singleton ranges, so `go2_env`'s command resampling is a no-op.
+- `Perturbation(base_pos, base_rpy, joint_pos)` — frozen reset-amplitude dataclass with `is_zero`; zero = the original fixed reset. The RNG-side `perturbed_init_qpos` belongs to the env module, not here.
+- `build_obs(rows, *, standing_flat, commands, backend, device)` / `run_obs(exe, *, base_ang_vel_world, base_quat, dof_pos, dof_vel, actions, commands)` → `(rows,45)`, same layout/scaling as `go2_env._update_observation`.
+- `build_policy(algo, config, pop_arrays, rows, ...)` / `run_policy(exe, pop_arrays, obs)` → raw `(rows,12)` actions; one trace runs `algo.transform` + `algo.prepare_forward(samples=EPISODES_PER_POLICY)` + `algo.forward_prepared`; `rows = pop_size * EPISODES_PER_POLICY`, policy-major rows.
+- `build_advance(rows, *, max_episode_length, ...)` / `run_advance(...)` → `{"obs","reward","returns","alive","done","episode_length"}`: clips raw actions to ±100, the six dt-scaled `go2_env` reward terms, `alive`/`done`/`returns` masking, int32 episode counter, arctan2-free roll/pitch termination.
+- `build_fitness(n_policies, ...)` / `run_fitness(exe, returns)` → per-policy episode mean `(NP,)`.
+- `build_tell(algo, config, pop_arrays, species_leaves, n_policies, ...)` / `run_tell(...)` → `{"randkey","generation","pop","species"}`, species rebuilt with the pytree captured during the trace.
+- `ExecutableCache.get(key, builder)` / `hits` / `misses` / `clear()`: shape-keyed reuse, so generation N+1 runs on generation N's executables (each call logged as `hit`/`miss` + key).
+
 ### RL stack
 - `go2_env.py` → `Go2Env` class: vectorized (`num_envs`) Go2 environment using `tensordict.TensorDict` for observations.
   Control runs at 50 Hz (`dt=0.02`, `substeps=2`), driving 12 motors via PD position control (`control_dofs_position`).
@@ -78,6 +90,11 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - Graph-time constants need `evoxc.constant(evoxc.from_numpy(arr))`; `evoxc.zeros` is a concrete creator, not a graph op.
 - `max_collision_pairs=20`: exceeding ~20 collision pairs raises an exception; keep policy contact sparse.
 - `base_init_quat` differs between walking (`[1,0,0,0]`) and backflip (`[0,0,0,1]`) configs; the backflip robot starts inverted.
+- `go2_neat_kernels.py` bakes its static operands (tiled `standing_flat`/`commands`, `dt`, thresholds, `max_episode_length`) into each graph and re-passes them on every call; use the `run_*` wrappers (they read them off the executable) instead of calling `evoxc.run` directly.
+- `run_advance` takes `base_quat` already relative to the init pose (identity for the Go2 config) and world-frame `get_vel()`/`get_ang()`; the graph rotates by `inv(base_quat)`.
+- In `run_advance` the timeout fires when `episode_length + 1 > max_episode_length`; the dying step's reward is counted exactly once, `alive` never re-arms, and `episode_length` restarts at 0 on that step.
+- Roll/pitch termination is `|sinp| > tanθ·cosp` and `|sinrcosp| > tanθ·cosrcosp`, with the `cosrcosp·cosp <= 0` quadrant guard; do not add a second `cosp` factor (that shrinks the roll threshold with pitch and fires false positives).
+- `build_policy` logs an `evoxc` `UserWarning` about embedding the pop batch as a >1 MiB graph constant (raise `EVOXC_LARGE_CONSTANT_BYTES` if `pop_size` grows).
 - Backflip `.pt` checkpoints are data (torch `state_dict`s), not code; they are loaded with `torch.load(..., weights_only=True)`.
 - `go2_train.py` expects a GPU for the 4096-env throughput; `go2_eval.py`/`go2_backflip.py`/`try1.py` run on CPU or GPU.
 
@@ -86,6 +103,7 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - That harness still ignores `*_train.py`, `*_eval.py`, `*_env.py`, `behavior_cloning.py`, `quadcopter_controller.py`; `go2_backflip.py` is the other smoke test here and shortens playback to 5 steps when `PYTEST_VERSION` is set.
 - `go2_evox_kernels.py` and `go2_legacy_reference.py` are excluded from that smoke run as shared helper modules, not runnable demos.
 - `tests/test_go2_evox_parity.py` (`@pytest.mark.required`, `importorskip("evoxc")`) covers the graph math without a simulator: 250 chained gait steps (5e-5 tolerance), exact gait semantics at steps 0/25/26, and 200 randomized states (1e-5 per reward term, 1e-6 on the total) against the `go2_legacy_reference.py` oracle.
+- No committed test covers `go2_neat_kernels.py`; verify a change with throwaway scripts against `go2_legacy_reference.walking_reward_terms` (reward), an independent numpy `go2_env._update_observation` (obs, 1e-6) and `genesis.utils.geom.quat_to_xyz(..., rpy=True, degrees=True)` (10k quats incl. near-threshold and pitch≈±90°, exact agreement on the roll-or-pitch decision).
 
 ## Routing Table
 - `backflip/` → Pre-trained single/double backflip policy checkpoints + readme (data, not code).
