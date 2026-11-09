@@ -83,7 +83,9 @@ Camera recordings (`start_recording`) and `split_envs` multi-video output need e
 - `viewer_plugins/` → pyglet event-handling plugins (base class, BVH raycasting, default controls, mouse interaction).
 - `../engine/sensors/camera.py` → camera sensor wrapper that consumes this package (sibling — read-only, escalate writes to parent).
 - `../engine/scene.py` → constructs and owns the `Visualizer` (sibling — read-only).
-- `../options/vis.py` → `VisOptions`/`ViewerOptions`/`RendererOptions` consumed here (sibling — read-only).
+- `../options/vis.py` → `VisOptions`/`ViewerOptions` consumed here (sibling — read-only).
+- `../options/renderers.py` → `RayTracer`/`BatchRenderer`/`Rasterizer` renderer options dispatched in `Visualizer` (sibling — read-only).
+- `../options/sensors/camera.py` → camera sensor options for the sensors that wrap `genesis.vis.Camera` (sibling — read-only).
 - `../ext/pyrender` → vendored renderer/viewer implementation (sibling — read-only).
 - `../ext/LuisaRender` → git submodule providing `LuisaRenderPy` (sibling — read-only).
 
