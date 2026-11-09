@@ -19,7 +19,8 @@ Resets
 The three init qpos are applied once per generation.  Episodes that restart after a ``done`` are
 discarded by design: the episode's reward is already booked, the row keeps stepping its physics
 from the same init qpos with zeroed actions, and only the *first* ending of each row is reported
-in ``end_reasons``.
+in ``end_reasons``.  The sampled ``base_rpy`` rotation is a world-axis rotation composed on top of
+the authored init orientation (``q_pert * q_init``, not ``q_init * q_pert``).
 
 ``horizon`` is the number of ``scene.step()`` calls per generation.  ``None`` means
 ``max_episode_length`` (one full episode, so nothing times out); a horizon larger than
@@ -261,7 +262,9 @@ def perturbation_from_seed(seed, perturbation, num_dof=NUM_ACTIONS):
     ``Perturbation`` draws nothing and returns exact zeros, with ``base_quat == [1, 0, 0, 0]``.
 
     ``base_quat`` is the standard w-first roll-pitch-yaw quaternion of ``base_rpy``
-    (``genesis.utils.geom.xyz_to_quat(..., rpy=True)``), i.e. the small base rotation in world axes.
+    (``genesis.utils.geom.xyz_to_quat(..., rpy=True)``), i.e. the small base rotation in world axes
+    that :func:`perturbed_init_qpos` applies on top of the authored init orientation (``q_pert *
+    q_init``).
 
     Args:
         seed (int): Episode seed of the generation's seed table.
@@ -319,7 +322,7 @@ def perturbed_init_qpos(init_qpos, seeds, perturbation):
     for index, seed in enumerate(seeds):
         drawn = perturbation_from_seed(int(seed), perturbation)
         out[index, :3] = init_qpos[:3] + drawn["base_pos"]
-        out[index, 3:7] = transform_quat_by_quat(drawn["base_quat"], init_quat)
+        out[index, 3:7] = transform_quat_by_quat(init_quat, drawn["base_quat"])
         out[index, 7:] = init_qpos[7:] + drawn["joint_pos"]
     return out
 
