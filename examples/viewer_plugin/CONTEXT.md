@@ -11,7 +11,7 @@ Demonstrates the interactive viewer's plugin system: keybindings, raycasting, an
 # Constraints
 
 - Interactive demos; all use CPU backend and `show_viewer=True`.
-- Under pytest (`PYTEST_VERSION` set) the run loop breaks after one step, so they smoke-test plugin construction without a real window.
+- When `PYTEST_VERSION` is present in `os.environ`, the run loop breaks after one step, so they smoke-test plugin construction without a real window.
 
 # Dependencies
 
