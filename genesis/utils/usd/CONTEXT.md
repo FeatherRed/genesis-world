@@ -71,7 +71,7 @@ Note: `decompress_usdz` lives in `usd_context.py`, not `usd_utils.py`.
 
 ## See Also (siblings — read-only, escalate writes to parent)
 
-- `../usd/UsdParserSpec.md` — parser transform/scale/joint-anchor specification (in-tree).
+- `./UsdParserSpec.md` — parser transform/scale/joint-anchor specification (same directory).
 - `genesis/constants.py` — `USD_FORMATS = (".usd", ".usda", ".usdc", ".usdz")`.
 - `genesis/options/morphs.py` — `gs.morphs.USD` (parser options: joint attr candidates, visual/collision prim regex patterns, `prim_path`, `fixed`).
 - `genesis/utils/cache.py` — `get_usd_cache_dir`, `get_usd_bake_path`, `get_usd_zip_path` (cache layout under `<cache>/usd/{zip,bake}/<hash>`).
