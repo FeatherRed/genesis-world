@@ -4,7 +4,8 @@ This module owns every compiled graph the drone-hover *eval* environment asks fo
 the environment module stays thin: it reads the simulator, hands the measured state to
 a graph, and writes the policy targets (rotor RPMs) back.  Nothing here imports
 ``genesis`` or Torch, nothing here simulates, and nothing here trains; the module
-speaks only ``numpy`` and ``evoxc``.  The generic build/run helpers
+speaks ``numpy`` and ``evoxc`` (plus TensorNEAT, imported lazily by the policy builder
+that traces the genome).  The generic build/run helpers
 (``resolve_backend_device``, ``_constant``, ``_to_device_array``, ``_to_numpy``) are
 imported from the sibling Go2 example instead of being copied a third time.
 
@@ -15,6 +16,7 @@ Graphs (each compiled once, then reused every step and every generation)
 ``hover_reset_obs``  commands -> the analytic post-``reset()`` observation row.
 ``hover_advance``    one environment step: geometry -> masks -> reward -> observation.
 ``hover_fitness``    per-episode returns -> per-policy fitness (episode mean).
+``hover_policy``     genome payload + observations -> the raw actions of a generation.
 
 The baseline being migrated is ``examples/drone/hover_env.py`` (torch + genesis +
 tensordict), with its config in ``hover_train.get_cfgs()``; the parity oracle the graphs
@@ -797,6 +799,101 @@ def run_fitness(executable, returns):
     return np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)
 
 
+# --- Policy -------------------------------------------------------------------------
+
+#: ``(name, ...)`` of the four ``tensorneat.genome.utils.GenomeTensors`` payload leaves.
+POP_OPERANDS = ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
+
+
+def _host(array) -> np.ndarray:
+    """Materialize one genome-payload leaf (host array or ``evoxc`` tensor) as numpy."""
+    if isinstance(array, np.ndarray):
+        return array
+    return np.asarray(_to_numpy(array))
+
+
+def _pop_specs(pop_arrays):
+    """``TensorSpec`` list for the four ``GenomeTensors`` payload arrays."""
+    arrays = tuple(pop_arrays)
+    if len(arrays) != len(POP_OPERANDS):
+        raise ValueError(f"pop_arrays must hold the {len(POP_OPERANDS)} GenomeTensors payloads, got {len(arrays)}")
+    specs = []
+    for array, name in zip(arrays, POP_OPERANDS, strict=True):
+        arr = _host(array)
+        specs.append(evoxc.TensorSpec(tuple(int(dim) for dim in arr.shape), evoxc.dtype(arr.dtype), name=name))
+    return specs
+
+
+def build_policy(algo, config, pop_arrays, rows, *, backend="numpy", device=None):
+    """Compile the genome-payload + observation -> raw-action graph for ``rows`` rows.
+
+    ``rows`` must be ``algo.pop_size * EPISODES_PER_POLICY`` and the rows are
+    **policy-major**: rows ``3p, 3p+1, 3p+2`` are the three episodes of policy ``p``.
+    ``prepare_forward(samples=EPISODES_PER_POLICY)`` tiles the *genome statics* of
+    individual ``p`` to its three rows, so each row carries its own observation: the
+    three episodes of a policy are independent and need not share a state.
+
+    The observation and action widths come from the traced genome
+    (``algo.genome.num_inputs`` / ``num_outputs``), not from a task constant -- the
+    sibling ``go2_neat_kernels.build_policy`` bakes the Go2 widths (45 obs, 12 actions)
+    into its spec and the staging check of its runner, so it cannot trace the drone's
+    17 -> 4 genome.
+
+    Args:
+        algo: a TensorNEAT ``NEAT`` algorithm instance.
+        config: the tensor-free ``pipeline._static_config(state)`` captured at build time.
+        pop_arrays: the four genome payload arrays (``state.pop`` as numpy).
+        rows (int): ``pop_size * EPISODES_PER_POLICY``.
+        backend (str): ``evoxc`` backend name.
+        device (str | evoxc.Device | None): ``evoxc`` device.
+
+    Returns:
+        evoxc.Executable: bound executable; ``run_policy`` stages its operands.
+    """
+    from tensorneat.genome.utils import GenomeTensors
+
+    n_policies = int(algo.pop_size)
+    rows = _positive_int(rows, "rows")
+    if rows != n_policies * EPISODES_PER_POLICY:
+        raise ValueError(
+            f"rows must be pop_size * EPISODES_PER_POLICY = {n_policies * EPISODES_PER_POLICY}, got {rows}"
+        )
+    num_obs = int(algo.genome.num_inputs)
+    resolved_backend, resolved_device = resolve_backend_device(backend, device)
+    specs = [*_pop_specs(pop_arrays), evoxc.TensorSpec((rows, num_obs), evoxc.float32, name="obs")]
+
+    def kernel(node_keys, node_attrs, conn_keys, conn_attrs, obs):
+        payload = GenomeTensors(node_keys, node_attrs, conn_keys, conn_attrs)
+        transformed = algo.transform(config, payload)
+        prepared = algo.prepare_forward(config, transformed, payload, samples=EPISODES_PER_POLICY)
+        return algo.forward_prepared(config, transformed, prepared, obs)
+
+    executable = evoxc.build(kernel, *specs, backend=resolved_backend, device=resolved_device)
+    return _attach(
+        executable,
+        graph="policy",
+        rows=rows,
+        n_policies=n_policies,
+        num_obs=num_obs,
+        pop_shapes=tuple(_host(array).shape for array in pop_arrays),
+        device_name=_device_name(resolved_device),
+    )
+
+
+def run_policy(executable, pop_arrays, obs):
+    """Run the policy graph; returns raw (unclipped) actions ``(rows, num_actions)`` float32."""
+    arrays = tuple(_host(array) for array in pop_arrays)
+    if len(arrays) != len(POP_OPERANDS):
+        raise ValueError(f"pop_arrays must hold the {len(POP_OPERANDS)} GenomeTensors payloads, got {len(arrays)}")
+    for array, shape in zip(arrays, executable.pop_shapes, strict=True):
+        if array.shape != shape:
+            raise ValueError(f"pop_arrays leaf must keep the built shape {shape}, got {array.shape}")
+    outputs = evoxc.run(
+        executable,
+        *[_to_device_array(executable, np.ascontiguousarray(array)) for array in arrays],
+        _to_device_array(executable, _stage(executable, "obs", obs, executable.num_obs)),
+    )
+    return np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)
 
 
 # --- Self-check ---------------------------------------------------------------------
