@@ -10,8 +10,8 @@ and :func:`go2_neat_env.perturbed_init_qpos`.
 These tests pin the pure helper contracts (table shape / reproducibility / prefix stability, stream
 independence, draw order, amplitude independence, rotation composition, seed pairing) without a
 simulator.  Nothing here re-derives the implementation: every expected value comes from the
-documented stream definition, an explicit rotation matrix, or the reference ``genesis.utils.geom``
-helpers.
+documented stream definition, an explicit quaternion product, or the reference
+``genesis.utils.geom`` helpers.
 
 The env layer is covered through its pure pieces only (seed table -> per-row qpos mapping): building
 a ``Go2NeatEnv`` (scene + four compiled graphs) costs 27 s on a warm compiler cache and 71 s cold,
@@ -39,7 +39,7 @@ if str(EXAMPLES_DIR) not in sys.path:
     sys.path.insert(0, str(EXAMPLES_DIR))
 
 import go2_neat_env as neat_env  # noqa: E402
-from genesis.utils.geom import transform_by_quat, xyz_to_quat  # noqa: E402
+from genesis.utils.geom import quat_to_R, xyz_to_quat  # noqa: E402
 from go2_neat_kernels import EPISODES_PER_POLICY, NUM_ACTIONS, Perturbation  # noqa: E402
 
 MASTER_SEED = 20240601
@@ -70,24 +70,6 @@ INIT_QPOS = np.array(
     dtype=np.float32,
 )
 QPOS_SIZE = 7 + NUM_ACTIONS
-
-
-def _rotation_matrix(quat) -> np.ndarray:
-    """Return the 3x3 rotation matrix of a w-first quaternion (``R(q) @ v`` rotates ``v``).
-
-    This is the active convention of ``genesis.utils.geom`` (``transform_by_quat(v, q)`` is
-    ``R(q) @ v``); the quaternion is normalized here, so a non-normalized input still yields an
-    orthonormal matrix.
-    """
-    w, x, y, z = np.asarray(quat, dtype=np.float64)
-    norm = w * w + x * x + y * y + z * z
-    return np.array(
-        [
-            [1.0 - 2.0 * (y * y + z * z) / norm, 2.0 * (x * y - w * z) / norm, 2.0 * (x * z + w * y) / norm],
-            [2.0 * (x * y + w * z) / norm, 1.0 - 2.0 * (x * x + z * z) / norm, 2.0 * (y * z - w * x) / norm],
-            [2.0 * (x * z - w * y) / norm, 2.0 * (y * z + w * x) / norm, 1.0 - 2.0 * (x * x + y * y) / norm],
-        ]
-    )
 
 
 def _expected_row(init_qpos, seed, perturbation) -> np.ndarray:
@@ -258,7 +240,13 @@ def test_perturbed_init_qpos_row_layout():
         drawn = neat_env.perturbation_from_seed(seed, perturbation)
         np.testing.assert_array_equal(rows[index, :3], init_qpos[:3] + drawn["base_pos"])
         np.testing.assert_array_equal(rows[index, 7:], init_qpos[7:] + drawn["joint_pos"])
-        # The base rotation is composed with the authored orientation, not copied from either.
+        # The base rotation is the world-axis composition q_pert * q_init (R_pert @ R_init), not
+        # either input on its own.
+        np.testing.assert_allclose(
+            quat_to_R(rows[index, 3:7]),
+            quat_to_R(drawn["base_quat"]) @ quat_to_R(init_qpos[3:7]),
+            atol=1e-6,
+        )
         assert not np.array_equal(rows[index, 3:7], drawn["base_quat"])
         assert not np.array_equal(rows[index, 3:7], init_qpos[3:7])
         assert np.isclose(np.linalg.norm(rows[index, 3:7]), 1.0, atol=1e-6)
@@ -268,40 +256,49 @@ def test_perturbed_init_qpos_row_layout():
             neat_env.perturbed_init_qpos(np.zeros(wrong_size, dtype=np.float32), seeds, perturbation)
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "perturbed_init_qpos post-multiplies the sampled base rotation by the authored init "
-        "quaternion: transform_quat_by_quat(drawn, init) == quatmul(init, drawn), i.e. "
-        "R(row) == R(init) @ R(pert). Its docstring documents the opposite (q_pert * q_init, "
-        "'the perturbation acts in world axes after the authored orientation', "
-        "R(row) == R(pert) @ R(init)). Invisible with the identity base_init_quat of the Go2 "
-        "config; measured with init_quat=[0.5, 0.5, 0.5, 0.5] (90 deg about z) and "
-        "pert_quat=[0.7071, 0.7071, 0, 0] (90 deg about x): expected [0.5, 0.5, -0.5, 0.5], "
-        "actual [0.5, 0.5, 0.5, 0.5]."
-    ),
-)
-def test_perturbed_init_qpos_composes_rotation_after_init_orientation():
-    init_qpos = INIT_QPOS.copy()
-    init_qpos[3:7] = np.array([0.9, 0.1, -0.2, 0.3], dtype=np.float32)
-    init_qpos[3:7] /= np.linalg.norm(init_qpos[3:7])
+def test_perturbed_init_qpos_composes_rotation_after_init_orientation(monkeypatch):
+    # The documented composition is ``q_pert * q_init``: the sampled perturbation acts in world
+    # axes *after* the authored init orientation.  For init = 90 deg about z
+    # (``[0.7071, 0, 0, 0.7071]``) and pert = 90 deg about x (``[0.7071, 0.7071, 0, 0]``) that is
+    # ``[0.5, 0.5, -0.5, 0.5]``; the body-axis order ``q_init * q_pert`` would give
+    # ``[0.5, 0.5, 0.5, 0.5]`` instead.
     perturbation = Perturbation(base_pos=0.05, base_rpy=0.1, joint_pos=0.05)
-    seed = 987654321
+    init_qpos = INIT_QPOS.copy()
+    init_qpos[3:7] = np.array([0.7071, 0.0, 0.0, 0.7071], dtype=np.float32)
+    init_quat = init_qpos[3:7].copy()
+    pert_quat = np.array([0.7071, 0.7071, 0.0, 0.0], dtype=np.float32)
 
-    # Sanity-check the explicit matrix against the genesis rotation convention: R(q) @ v is
-    # transform_by_quat(v, q) for a body-frame vector v.
-    probe = np.array([0.3, -0.5, 0.8], dtype=np.float32)
-    probe_quat = np.array([0.5, 0.5, 0.5, 0.5], dtype=np.float32)
-    np.testing.assert_allclose(_rotation_matrix(probe_quat) @ probe, transform_by_quat(probe, probe_quat), atol=1e-6)
+    # Pin the sampled perturbation so that only the composition is under test (the sampler itself
+    # is covered by the tests above).
+    drawn = {
+        "base_pos": np.array([0.02, -0.03, 0.01], dtype=np.float32),
+        "base_quat": pert_quat,
+        "joint_pos": np.full(NUM_ACTIONS, 0.01, dtype=np.float32),
+    }
+    with monkeypatch.context() as patch:
+        patch.setattr(neat_env, "perturbation_from_seed", lambda seed, _perturbation: drawn)
+        row = neat_env.perturbed_init_qpos(init_qpos, [987654321], perturbation)[0]
 
-    row = neat_env.perturbed_init_qpos(init_qpos, [seed], perturbation)[0]
-    drawn = neat_env.perturbation_from_seed(seed, perturbation)
+    np.testing.assert_allclose(row[3:7], np.array([0.5, 0.5, -0.5, 0.5], dtype=np.float32), atol=1e-6)
+    np.testing.assert_allclose(quat_to_R(row[3:7]), quat_to_R(pert_quat) @ quat_to_R(init_quat), atol=1e-6)
+    np.testing.assert_array_equal(row[:3], init_qpos[:3] + drawn["base_pos"])
+    np.testing.assert_array_equal(row[7:], init_qpos[7:] + drawn["joint_pos"])
 
-    np.testing.assert_allclose(
-        _rotation_matrix(row[3:7]),
-        _rotation_matrix(drawn["base_quat"]) @ _rotation_matrix(init_qpos[3:7]),
-        atol=1e-5,
-    )
+    # A randomized non-identity init orientation composes the same way, at float32 precision.
+    rng = np.random.default_rng(2024)
+    for _ in range(4):
+        init_quat = rng.normal(size=4).astype(np.float32)
+        init_quat /= np.linalg.norm(init_quat)
+        init_qpos = INIT_QPOS.copy()
+        init_qpos[3:7] = init_quat
+        seed = int(rng.integers(0, 2**31 - 1))
+        row = neat_env.perturbed_init_qpos(init_qpos, [seed], perturbation)[0]
+        drawn = neat_env.perturbation_from_seed(seed, perturbation)
+        np.testing.assert_allclose(
+            quat_to_R(row[3:7]),
+            quat_to_R(drawn["base_quat"]) @ quat_to_R(init_quat),
+            atol=1e-6,
+        )
 
 
 def test_perturbed_init_qpos_uses_the_seed_at_its_index():
