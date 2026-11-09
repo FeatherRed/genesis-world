@@ -32,7 +32,7 @@ import pytest
 
 pytest.importorskip("evoxc")
 
-pytestmark = [pytest.mark.required]
+pytestmark = [pytest.mark.required, pytest.mark.parametrize("backend", [None])]  # Disable genesis initialization
 
 EXAMPLES_DIR = Path(__file__).resolve().parents[1] / "examples"
 for _dir in ("drone", "neuroevolution"):

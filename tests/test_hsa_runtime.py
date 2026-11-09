@@ -30,7 +30,7 @@ import pytest
 from genesis.constants import backend as gs_backend
 from genesis.utils import hsa
 
-pytestmark = [pytest.mark.required]
+pytestmark = [pytest.mark.required, pytest.mark.parametrize("backend", [None])]  # Disable genesis initialization
 
 #: Version embedded in the bundled runtime, and the version carried by the fake system runtime's filename.
 BUNDLED_VERSION = "1.18.70101"

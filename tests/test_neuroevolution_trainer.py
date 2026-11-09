@@ -43,7 +43,7 @@ import pytest
 pytest.importorskip("evoxc")
 pytest.importorskip("tensorneat")
 
-pytestmark = [pytest.mark.required]
+pytestmark = [pytest.mark.required, pytest.mark.parametrize("backend", [None])]  # Disable genesis initialization
 
 #: ``examples/`` is a set of plain scripts rather than a package, so both the shared
 #: neuroevolution layer and the Go2 kernels import their siblings by bare module name.
