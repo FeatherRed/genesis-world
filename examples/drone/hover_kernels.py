@@ -574,7 +574,7 @@ def hover_advance(
     returns_next = returns + evoxc.select(credit, total, zero)
     alive_next = evoxc.logical_and(alive, evoxc.logical_not(done))
 
-    # The first ending is latched, exactly like ``HoverNeatEnv._classify_endings``:
+    # The first ending is latched, exactly like the host rule this graph replaced:
     # error wins over timeout wins over crash, and an already-tagged row is never re-armed.
     code_this = evoxc.select(
         error_mask,

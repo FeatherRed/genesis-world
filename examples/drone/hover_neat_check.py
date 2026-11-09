@@ -1,6 +1,6 @@
 """Smoke and parity CLI for the batched TensorNEAT drone hover evaluation environment.
 
-Three things this script is for, all of them cheap enough for the example smoke suite:
+Four things this script is for, all of them cheap enough for the example smoke suite:
 
 * **Default mode** builds :class:`hover_neat_env.HoverNeatEnv`, scores the untouched population
   of the trace pipeline for ``--generations`` generations and prints the per-generation
@@ -15,6 +15,10 @@ Three things this script is for, all of them cheap enough for the example smoke 
   reset state of a live scene, the policy's policy-major row tiling, and prints a deterministic
   episode fingerprint (``fingerprint<TAB>...``) that two independent process invocations must
   reproduce byte for byte.
+* **``--perturb``** re-runs either mode with a nonzero reset perturbation (three amplitudes,
+  ``base_pos`` / ``base_rpy`` / ``joint_pos``; bare flag: ``0.05 0.05 0.0``): the same
+  fingerprint determinism, the same numeric tolerances, and the analytic reset observation must
+  still match the live reset state at a perturbed pose.
 * **``--imports``** statically proves that the migrated stack stays free of ``torch``: an AST
   scan of ``hover_kernels.py``, ``hover_neat_env.py``, ``hover_neat_train.py`` (skipped with a
   note while it does not exist yet) and the six modules of the shared
@@ -40,6 +44,9 @@ PARITY_ROWS = 6
 PARITY_STEPS = 200
 #: Seed of the fixed action/state trace, so every invocation replays the same episode.
 FIXED_TRACE_SEED = 20241109
+
+#: Amplitudes the bare ``--perturb`` flag uses: ``base_pos`` (m), ``base_rpy`` (rad), ``joint_pos``.
+DEFAULT_PERTURBATION = (0.05, 0.05, 0.0)
 
 #: Largest accepted ``|graph - oracle|`` per reported quantity; masks and the repeated
 #: in-process episode must agree exactly.
@@ -90,6 +97,16 @@ def _parse_args(argv=None):
     )
     parser.add_argument("--parity", action="store_true", help="replay the fixed oracle trace instead of scoring")
     parser.add_argument(
+        "--perturb",
+        nargs="*",
+        type=float,
+        default=None,
+        metavar="AMPLITUDE",
+        help="enable the reset perturbation, optionally as three amplitudes "
+        "base_pos/base_rpy/joint_pos (bare flag: "
+        f"{DEFAULT_PERTURBATION[0]} {DEFAULT_PERTURBATION[1]} {DEFAULT_PERTURBATION[2]})",
+    )
+    parser.add_argument(
         "--imports", action="store_true", help="AST-scan the migrated stack for `import torch` and exit"
     )
     parser.add_argument("--quiet", action="store_true", help="print only the summary lines")
@@ -101,6 +118,18 @@ def _resolve_targets(args):
     backend = args.evoxc_backend or ("iree" if args.gpu else "numpy")
     device = args.evoxc_device or ("rocm:0" if args.gpu else "cpu:0")
     return backend, device
+
+
+def _perturbation(args):
+    """Return the ``seeding.Perturbation`` of ``--perturb``, or None for the fixed reset."""
+    if args.perturb is None:
+        return None
+    from seeding import Perturbation  # ``hover_kernels`` puts the shared layer on ``sys.path``
+
+    amplitudes = list(args.perturb) or list(DEFAULT_PERTURBATION)
+    if len(amplitudes) != 3:
+        raise SystemExit(f"--perturb takes three amplitudes (base_pos base_rpy joint_pos), got {len(amplitudes)}")
+    return Perturbation(*amplitudes)
 
 
 def _print_rows(values):
@@ -321,6 +350,7 @@ def _scene_parity(args, backend, device):
         episode_length_s=args.episode_length_s,
         backend=backend,
         device=device,
+        perturbation=_perturbation(args),
     )
     try:
         # (a) The analytic reset observation vs the observation of the same reset state.
@@ -459,6 +489,7 @@ def run_default(args):
         episode_length_s=args.episode_length_s,
         backend=backend,
         device=device,
+        perturbation=_perturbation(args),
     )
     try:
         # No trainer here: every generation scores the same untouched population, so the seed
