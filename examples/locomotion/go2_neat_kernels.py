@@ -233,6 +233,8 @@ def _obs_rows(
     inv_quat = _inv_quat_rows(base_quat)
     body_ang_vel = _rotate_rows(base_ang_vel_world, inv_quat)
     projected_gravity = _projected_gravity_rows(base_quat)
+    # ``axis=1``, never ``-1``: evoxc emits a negative axis verbatim into StableHLO
+    # (``dimension = -1``) and ``iree-compile`` rejects it; the operands are rank-2.
     return evoxc.concatenate(
         [
             body_ang_vel * OBS_SCALES["ang_vel"],
@@ -242,7 +244,7 @@ def _obs_rows(
             dof_vel * OBS_SCALES["dof_vel"],
             actions,
         ],
-        axis=-1,
+        axis=1,
     )
 
 
