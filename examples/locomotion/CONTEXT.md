@@ -28,6 +28,41 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - `build_tell(algo, config, pop_arrays, species_leaves, n_policies, ...)` / `run_tell(...)` → `{"randkey","generation","pop","species"}`, species rebuilt with the pytree captured during the trace.
 - `ExecutableCache.get(key, builder)` / `hits` / `misses` / `clear()`: shape-keyed reuse, so generation N+1 runs on generation N's executables (each call logged as `hit`/`miss` + key).
 
+### TensorNEAT Go2 walking trainer (`go2_neat_env.py` + `go2_neat_train.py`)
+- Two modules layered on `go2_neat_kernels.py`: `go2_neat_env.py` is the batched, seeded evaluation env (no CLI); `go2_neat_train.py` is the CLI entry that drives NEAT generations through it.
+- `go2_neat_env.py` builds ONE `gs.Scene` with `n_envs = rows = EPISODES_PER_POLICY * pop_size` (policy `p` owns rows `3p, 3p+1, 3p+2`), with the same plane+Go2 morphs, `SimOptions(dt=0.02, substeps=2)` and `RigidOptions(enable_self_collision=False, max_collision_pairs=20, tolerance=1e-5)` as `go2_env.py`.
+- `CFG` is a literal copy of the authoritative `go2_train.get_cfgs()` numbers (joint names, default dof angles, kp/kd, base init pos/quat, `clip_actions`, `action_scale`, termination thresholds, `tracking_sigma`, `base_height_target`, `episode_length_s`, command ranges), because `go2_train` cannot even be imported without `rsl-rl-lib`.
+- Public API of `go2_neat_env.py`: `generation_seed_table(master_seed, num_generations, episodes=EPISODES_PER_POLICY) -> (G,3) int64`; `evolution_seed(master_seed) -> int`; `perturbation_from_seed(seed, perturbation, num_dof=NUM_ACTIONS) -> {"base_pos","base_quat","joint_pos"}`; `perturbed_init_qpos(init_qpos, seeds, perturbation) -> (3,19) float32`; `TraceOnlyProblem`; `class Go2NeatEnv(pop_size, master_seed, *, perturbation=Perturbation(), horizon=None, episode_length_s=None, backend="numpy", device=None, show_viewer=False, seed_table=None, stop_when_done=True)`.
+- `Go2NeatEnv.evaluate(pop_arrays, generation)` returns `{"seeds" (3,), "episode_returns" (NP,3), "returns" (rows,), "fitness" (NP,) float32, "steps", "env_steps", "wall_time_s", "steps_per_s", "env_steps_per_s", "cache_hits", "cache_misses", "end_reasons", "init_qpos"}`; `steps` counts simulated steps and `env_steps = steps * rows`.
+- `Go2NeatEnv` also exposes `.rows`, `.max_episode_length`, `.cache`, `.executables()` (the four built graph executables), `.read_state()`, `._write_targets()`, `._write_reset()`, `.close()`.
+- `horizon` = steps per episode; default = the full episode (`episode_length_s / dt` = 1000) and it is the `max_episode_length` baked into `build_advance`.
+- `end_reasons` buckets every row at the end of the generation: `timeout`, `tilted`, `error` (genesis `scene.get_error_envs_mask()`), `stopped` (early stop with `alive` rows still live), `running`.
+- `stop_when_done=True` (default) ends the generation as soon as every row's `alive` is False; `stop_when_done=False` always simulates the full horizon (needed for throughput measurements and to exercise auto-reset/timeout).
+- `go2_neat_train.py` CLI: `--pop-size` (8), `--generations` (2; 1 under pytest), `--horizon` (full 1000; 20 under pytest), `--episode-length-s` (20.0), `--master-seed` (0), `--perturb-base-pos` / `--perturb-base-rpy` / `--perturb-joint-pos` (0.05 each), `--no-perturbation`, `--stop-when-done` / `--no-stop-when-done`, `-e/--exp-name`, `-o/--output-dir` (`out/go2_neat`), `-g/--gpu`, `--evoxc-backend`, `--evoxc-device`, `-v/--vis`, `--quiet`.
+- Trainer loop: `DefaultGenome(num_inputs=45, num_outputs=12, max_nodes=80, max_conns=640)` -> `NEAT(gen, pop_size=NP, species_size=3)` -> `Pipeline(algo, TraceOnlyProblem(), seed=evolution_seed(master_seed), backend="numpy", is_detailed=False)` -> `state = pipe.setup()` -> `config = pipe._static_config(state)`; then per generation ask (`pop` leaves) -> `env.evaluate` -> `run_fitness` -> `run_tell`.
+- `TraceOnlyProblem(tensorneat.problem.BaseProblem)` only declares `input_shape=(45,)` / `output_shape=(12,)`; its `evaluate` raises `NotImplementedError` because all real evaluation happens in the host loop.
+- All five graphs (obs, policy, advance, fitness, tell) are built once through `ExecutableCache` and reused for every generation; each generation logs `+N hits/+0 misses` and the trainer prints the total `built 5 executables in ... (cache 0 hits / 5 misses)` line.
+- Outputs: one compact line per generation on stdout, `history.jsonl` (one JSON object per generation) and `summary.json` (config + records + totals) under `--output-dir`; both files are git-ignored run artifacts.
+- `go2_train.py` stays the untouched PPO control path (rsl-rl); neither new module imports it.
+
+### Seed rules
+- `np.random.SeedSequence(master_seed).spawn(2)` gives `(evolution_seq, env_seq)`; `evolution_seed(master_seed)` is the first child (`evolution_seed(0) = 3757552657`) and feeds `Pipeline(seed=...)`, while the second child drives `generation_seed_table` — the evolution and environment streams are independent.
+- The seed table holds one row per generation with 3 distinct seeds per row; a generation's ordered triple is shared by every policy (and by all three rows of a policy), so all policies are compared on identical reset perturbations.
+- `perturbation_from_seed` draws the whole reset (base position offset, a small w-first `base_quat` rotation, 12 joint offsets, each component uniform in `[-p, p]`) from `default_rng(seed)` alone and returns exact zeros when `Perturbation.is_zero`, so the zero-perturbation config reproduces the original fixed reset bit-for-bit.
+- A perturbed episode keeps its perturbation across auto-reset (post-reset episodes are discarded by the `alive`/`returns` masking), so a fresh seed per episode is unnecessary.
+- Fitness = mean of the policy's 3 episode returns, where an episode return includes the step that ended it (first done inclusive).
+- Same `master_seed` + same flags implies a byte-identical seed table, per-generation seeds, returns and fitness arrays.
+
+### Measured numbers (TensorNEAT trainer, RTX 5070, CPU/numpy path)
+- Compile cost: `built 5 executables in 7.4–9.7 s (cache 0 hits / 5 misses)`, then 6 hits / 0 misses per generation for every generation.
+- NP=8 (24 rows), full horizon 1000 steps, `--no-stop-when-done`: 5.61 / 5.85 / 5.94 s per generation (178.3 / 170.9 / 168.4 steps/s, 4279 / 4101 / 4042 env-steps/s); best fitness −7.3785 / −7.3180 / −6.0399; ends timeout=0 tilted=24 every generation; 3000 steps in 17.5 s.
+- NP=16 (48 rows), full horizon 1000 steps, `--no-stop-when-done`: 7.04 / 8.09 / 8.20 s per generation (142.0 / 123.5 / 122.0 steps/s, 6817 / 5930 / 5857 env-steps/s); best fitness −6.6796 / −5.6710 / −3.6158; tilted=48; 3000 steps in 23.4 s.
+- NP=8, `--horizon 25` (early stop): 21 / 10 / 13 steps, warm-up generation 12.7 steps/s then 164–167 steps/s (~3945–4017 env-steps/s); best fitness −7.3785 / −7.3180 / −6.0399; 44 steps in 4.4 s including first-generation warm-up.
+- Timeout probe (`--generations 1 --episode-length-s 0.1 --horizon 40`, so `max_episode_length=5`): ends timeout=12 tilted=12, 40 steps in 0.475 s (84.2 steps/s, 2022 env-steps/s).
+- Reproducibility (NP=8, horizon 25, `--master-seed 0`, run twice): identical seed table `[[1454269175, 757617120, 1421746521], [1313752747, 908599966, 53557616], [1683657442, 1375977993, 1654802006]]`, `fitness` arrays byte-identical for all generations, identical returns/episode_returns/steps.
+- Zero perturbation (`--no-perturbation`, NP=8, horizon 25, 2 generations): initial observation bitwise identical across all rows (max peak-to-peak 0.0), fitness −7.4132 / −7.4132; the seed table still changes per generation while `init_qpos` does not; perturbed runs deviate from the base init qpos by at most 0.0492 per component (0.0802 in joint space).
+- GPU: `-g` (genesis `gs.gpu` + evoxc `iree` on `cuda:0`) is BLOCKED at graph compile — `iree-compile` rejects the emitted StableHLO with `'stablehlo.concatenate' op attribute 'dimension' failed to satisfy constraint: 64-bit signless integer attribute whose value is non-negative` (a negative concat dimension produced by the evoxc iree adapter). CPU/numpy is the only measured path; the ROCm invocation recipe is the same flag with `--evoxc-device rocm:0` (or `EVOXC_DEVICE=rocm:0`), unmeasured here (no AMD GPU).
+
 ### RL stack
 - `go2_env.py` → `Go2Env` class: vectorized (`num_envs`) Go2 environment using `tensordict.TensorDict` for observations.
   Control runs at 50 Hz (`dt=0.02`, `substeps=2`), driving 12 motors via PD position control (`control_dofs_position`).
@@ -89,6 +124,8 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - The gait `step` input must be a 0-d `int32` ndarray; `np.ascontiguousarray` promotes 0-d to shape `(1,)` and the executable rejects it.
 - Static ndarray leaves specialize the graph but must still be passed to `evoxc.run` on every call (validated with `array_equal`).
 - Graph-time constants need `evoxc.constant(evoxc.from_numpy(arr))`; `evoxc.zeros` is a concrete creator, not a graph op.
+- `scene.clear_errno()` must be called for every row the graphs report in `error_mask` (and once per generation reset): a latched solver error otherwise re-raises `GenesisException: Invalid constraint forces causing 'nan'` on the next `scene.step()` although the graph already marked those rows dead.
+- The trainer's per-generation `end_reasons` count comes from the graphs' `done`/`alive` state plus the genesis error mask; `tilted` dominates for untrained policies at the full horizon.
 - `max_collision_pairs=20`: exceeding ~20 collision pairs raises an exception; keep policy contact sparse.
 - `base_init_quat` differs between walking (`[1,0,0,0]`) and backflip (`[0,0,0,1]`) configs; the backflip robot starts inverted.
 - `go2_neat_kernels.py` bakes its static operands (tiled `standing_flat`/`commands`, `dt`, thresholds, `max_episode_length`) into each graph and re-passes them on every call; use the `run_*` wrappers (they read them off the executable) instead of calling `evoxc.run` directly.

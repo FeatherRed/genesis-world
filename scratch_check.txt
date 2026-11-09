@@ -1,0 +1,5 @@
+﻿
+.gitignore:51:# every example writes under 'out/', relative to the directory it is launched from
+.gitignore:52:out/
+
+
