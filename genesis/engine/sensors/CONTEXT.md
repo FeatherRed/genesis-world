@@ -72,6 +72,15 @@ Lifecycle: `activate` (idempotent, called from a consumer's `build`, constructs 
 - Elastomer `HydroShear` uses a precomputed real-FFT kernel (`_precompute_hydroshear_dilate_kernel_fft`) with a `compressibility` blend (1 = local Gaussian, 0 = incompressible 1/r or bonded-layer transfer) and a `dilation_reg` epsilon; `register_grid_fft_sensor` in `tactile_shared.py` handles per-sensor FFT sizing/padding.
 - `TemperatureGridSensor` uses batched FFT semi-implicit diffusion with mirror padding (Neumann BC, no wrap-around) and explicit heat generation.
 
+## Host/Device Traffic (per step)
+
+- `SensorManager.step` (sensor_manager.py:324) performs no host↔device transfer itself: ring rotation advances a host-resident 0-D index (utils/ring_buffer.py:42,113-117) and every cache/ring write is device-to-device.
+- The default `SimpleSensor` pipeline is fully device-resident; per class per step it costs roughly 6-8 full-cache-sized GPU copies (GT and measured timeline slots, intermediate working buffer, return-space ring slot, return cache) plus `randn` of the same size when noise/random-walk is enabled.
+- Per-step D2H syncs exist in a few sensor classes: `TemperatureGridSensor` (`.item()` per sensor in `_apply_radiation_convection`, temperature.py:437,439,440, and `_apply_T_measured_filter`, temperature.py:468); `ContactSensor`/`ContactForceSensor` via `Collider.get_contacts` (`n_contacts.max().item()`, solvers/rigid/collider/collider.py:969/976, once per solver step thanks to `_contact_data_cache`); `ElastomerTaxelSensor` on the BVH path via `_build_shear_active_pc_index` (`.tolist()` x3, point_cloud_tactile.py:1781-1783).
+- Syncs that only occur on first step/reset/geometry change: `ProbeSensorMixin._maybe_build_cache_col_probe_idx` (probe.py:304-305), `RaycastContext` static regroup (`bool(device_tensor.all())`, raycaster.py:140 and 200/221).
+- `read()` / `read_ground_truth()` / `read_sensors()` never synchronize and never return host data: they return fresh device tensors (advanced indexing copy of the per-class cache, base_sensor.py:532, sensor_manager.py:473-478); history reads allocate `(B, H, ...)` on device.
+- Camera `read()` is the outlier: each stale read re-renders and uploads a host-produced image to the device (camera.py:555,713,813) and then returns views of the per-sensor `image_cache` without cloning (camera.py:367-390).
+
 ## Constraints
 
 - Do NOT write/modify source code in this directory from context-extraction tasks — only CONTEXT.md.
@@ -91,6 +100,9 @@ Lifecycle: `activate` (idempotent, called from a consumer's `build`, constructs 
 - `temperature.py`: MPS silently ignores the `device` arg on `fftfreq`/`rfftfreq`, so `_compute_K2_rfft3` moves the result explicitly; `STEFAN_BOLTZMANN`/`KELVIN_OFFSET`/`MAX_TEMP` are module constants.
 - FP precision is configurable via `gs.tc_float` / `gs.qd_float` / `gs.np_float`; kernels must not hardcode float32/float64.
 - `scene.add_sensor` is wrapped in `with namespace(self._namespace)`; sensor options carry `entity_idx`/`link_idx_local` to attach to entities (or `entity_idx=-1` for static sensors).
+
+- `read_sensors()` also covers camera classes, but their per-class cache is never written (`Camera._update_shared_cache` is a no-op), so it returns zero-filled image-shaped tensors for them; use `Camera.read()` instead.
+- `read()` / `read_ground_truth()` copy the whole per-class cache (fancy-indexing with the full `envs_idx` tensor) even for a single sensor, so many per-step reads of different sensors of one class duplicate that copy.
 
 ## Dependencies
 
