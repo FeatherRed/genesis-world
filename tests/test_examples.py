@@ -41,6 +41,8 @@ EXAMPLE_DEPENDENCIES = {
     # Whole neuroevolution tree, plus the drone smoke that imports its executable stack
     "neuroevolution": ["evoxc", "tensorneat"],
     "hover_neat_check.py": ["evoxc", "tensorneat"],
+    # The backflip demo builds go2_env, which imports tensordict (optional, undeclared)
+    "go2_backflip.py": ["tensordict"],
 }
 # Examples running on a CUDA GPU alone, which the CPU fallback of 'gs.gpu' cannot stand in for
 CUDA_SCRIPT_NAMES = {"single_franka_batch_render.py"}
