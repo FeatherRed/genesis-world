@@ -44,6 +44,13 @@ pytestmark = [
 ]
 
 
+def _decode_output(output: str | bytes | None) -> str | None:
+    # 'text=True' makes TimeoutExpired.stdout/stderr 'str', but plain pipes would yield 'bytes'
+    if isinstance(output, bytes):
+        return output.decode(errors="replace")
+    return output
+
+
 def _discover_examples():
     if not EXAMPLES_DIR.exists():
         raise ValueError(f"Example directory '{EXAMPLES_DIR}' does not exist.")
@@ -84,9 +91,9 @@ def test_example(file: Path):
     except subprocess.TimeoutExpired as e:
         err_msg = f"Timeout running example {path_rel}."
         if e.stdout is not None:
-            err_msg += f"\n\n--- STDOUT ---\n{e.stdout.decode()}"
+            err_msg += f"\n\n--- STDOUT ---\n{_decode_output(e.stdout)}"
         if e.stderr is not None:
-            err_msg += f"\n\n--- STDERR ---\n{e.stderr.decode()}"
+            err_msg += f"\n\n--- STDERR ---\n{_decode_output(e.stderr)}"
         pytest.fail(err_msg)
 
     if result.returncode != 0:
