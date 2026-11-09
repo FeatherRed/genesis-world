@@ -54,7 +54,7 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - Control/reward math lives exclusively in `go2_evox_kernels.py`; `try1.py` must not re-derive the standing pose, `dt`, or the reward terms.
 - `go2_train.py` / `go2_eval.py` enforce `rsl-rl-lib>=5.0.0` via `importlib.metadata` at import time.
 - `go2_env.py` imports `tensordict.TensorDict` and helpers from `genesis.utils.geom` (quat transforms).
-- `go2_reward.png` is a run artifact next to the script: not git-ignored, never committed.
+- `go2_reward.png` is a git-ignored run artifact next to the script, never tracked.
 
 ## Design Decisions
 - Static graph specializations (standing pose, phases, dt, 1/action_scale) keep the runtime signature to genuinely per-step values only.
@@ -82,10 +82,12 @@ RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose c
 - `go2_train.py` expects a GPU for the 4096-env throughput; `go2_eval.py`/`go2_backflip.py`/`try1.py` run on CPU or GPU.
 
 ## Test Strategy
-- `tests/test_examples.py` executes every `examples/**/*.py` as a subprocess, so `try1.py` must run there too: it detects `PYTEST_VERSION` and does 5 viewerless steps, while `go2_evox_kernels.py` and `go2_legacy_reference.py` just import cleanly (they exit immediately with no side effects).
+- `tests/test_examples.py` smoke-tests `try1.py` as a subprocess: no viewer, 5 steps under `PYTEST_VERSION`, and skipped where `evoxc` is missing via the `EXAMPLE_DEPENDENCIES` entry for `try1.py`.
 - That harness still ignores `*_train.py`, `*_eval.py`, `*_env.py`, `behavior_cloning.py`, `quadcopter_controller.py`; `go2_backflip.py` is the other smoke test here and shortens playback to 5 steps when `PYTEST_VERSION` is set.
-- Numeric parity is asserted against `go2_legacy_reference.py` with an ad-hoc script (not committed); no permanent unit test exists for it.
+- `go2_evox_kernels.py` and `go2_legacy_reference.py` are excluded from that smoke run as shared helper modules, not runnable demos.
+- `tests/test_go2_evox_parity.py` (`@pytest.mark.required`, `importorskip("evoxc")`) covers the graph math without a simulator: 250 chained gait steps (5e-5 tolerance), exact gait semantics at steps 0/25/26, and 200 randomized states (1e-5 per reward term, 1e-6 on the total) against the `go2_legacy_reference.py` oracle.
 
 ## Routing Table
 - `backflip/` → Pre-trained single/double backflip policy checkpoints + readme (data, not code).
 - `../tests/test_examples.py` → Example smoke-test runner (sibling — read-only, escalate writes to parent).
+- `../tests/test_go2_evox_parity.py` → Numeric parity tests of `go2_evox_kernels.py` against `go2_legacy_reference.py` (sibling — read-only, escalate writes to parent).
