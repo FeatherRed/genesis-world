@@ -240,7 +240,7 @@ def _throughput_tables(summary):
         steps = split["steps"] or 1
         rows_ms.append(
             head
-            + [_ms(split["per_step_ms"].get(name)) for name in CHUNK_COLUMNS]
+            + [_f(split["per_step_ms"].get(name), 6) for name in CHUNK_COLUMNS]
             + [_f(sum(split["per_step_ms"].get(name) or 0.0 for name in OTHER_GROUPS), 4), _ms((split["residual_s"] or 0.0) / steps)]
         )
         rows_share.append(

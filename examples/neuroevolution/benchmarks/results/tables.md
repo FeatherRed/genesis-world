@@ -120,14 +120,14 @@ Sources: `env_go2_throughput_numpy_cpu_pop32.json`, `env_go2_throughput_numpy_cp
 
 | task | pop | record | physics | graph_policy | graph_advance | state_read | write_targets | write_reset | host_rng | other | residual |
 |---|---|---|---|---|---|---|---|---|---|---|---|
-| go2 | 32 | env_go2_throughput_numpy_cpu_pop32 | 4535.0036 | 5361.0610 | 813.7174 | 491.1241 | 105.8692 | 22.1712 | 0.2150 | 0.0019 | 0.0725 |
-| go2 | 32 | env_go2_throughput_numpy_cpu_pop32_r1 | 4605.9630 | 5560.4425 | 832.5719 | 501.6673 | 109.3403 | 22.2989 | 0.2047 | 0.0020 | 0.0724 |
-| go2 | 8 | env_go2_throughput_numpy_cpu_pop8 | 1730.1976 | 2448.7202 | 798.0671 | 452.7794 | 102.2876 | 17.4221 | 0.2139 | 0.0018 | 0.0670 |
-| go2 | 8 | env_go2_throughput_numpy_cpu_pop8_r1 | 1750.8568 | 2469.0772 | 803.3368 | 457.2536 | 102.7689 | 17.5083 | 0.2130 | 0.0019 | 0.0681 |
-| hover | 32 | env_hover_throughput_numpy_cpu_pop32 | 1138.0966 | 3096.9732 | 1035.3428 | 221.5570 | 436.8566 | 5.3759 | 435.6385 | 0.0597 | 0.1595 |
-| hover | 32 | env_hover_throughput_numpy_cpu_pop32_r1 | 1114.3506 | 3060.3652 | 1017.4079 | 214.5378 | 425.5608 | 5.7324 | 425.0929 | 0.0578 | 0.1556 |
-| hover | 8 | env_hover_throughput_numpy_cpu_pop8 | 679.1731 | 1668.1774 | 1020.0917 | 204.3373 | 429.8336 | 4.9681 | 115.5765 | 0.0539 | 0.0898 |
-| hover | 8 | env_hover_throughput_numpy_cpu_pop8_r1 | 685.4218 | 1645.1215 | 992.7145 | 204.6851 | 423.7789 | 4.9859 | 116.0746 | 0.0544 | 0.0911 |
+| go2 | 32 | env_go2_throughput_numpy_cpu_pop32 | 4.535004 | 5.361061 | 0.813717 | 0.491124 | 0.105869 | 0.022171 | 0.000215 | 0.0019 | 0.0725 |
+| go2 | 32 | env_go2_throughput_numpy_cpu_pop32_r1 | 4.605963 | 5.560443 | 0.832572 | 0.501667 | 0.109340 | 0.022299 | 0.000205 | 0.0020 | 0.0724 |
+| go2 | 8 | env_go2_throughput_numpy_cpu_pop8 | 1.730198 | 2.448720 | 0.798067 | 0.452779 | 0.102288 | 0.017422 | 0.000214 | 0.0018 | 0.0670 |
+| go2 | 8 | env_go2_throughput_numpy_cpu_pop8_r1 | 1.750857 | 2.469077 | 0.803337 | 0.457254 | 0.102769 | 0.017508 | 0.000213 | 0.0019 | 0.0681 |
+| hover | 32 | env_hover_throughput_numpy_cpu_pop32 | 1.138097 | 3.096973 | 1.035343 | 0.221557 | 0.436857 | 0.005376 | 0.435638 | 0.0597 | 0.1595 |
+| hover | 32 | env_hover_throughput_numpy_cpu_pop32_r1 | 1.114351 | 3.060365 | 1.017408 | 0.214538 | 0.425561 | 0.005732 | 0.425093 | 0.0578 | 0.1556 |
+| hover | 8 | env_hover_throughput_numpy_cpu_pop8 | 0.679173 | 1.668177 | 1.020092 | 0.204337 | 0.429834 | 0.004968 | 0.115576 | 0.0539 | 0.0898 |
+| hover | 8 | env_hover_throughput_numpy_cpu_pop8_r1 | 0.685422 | 1.645121 | 0.992715 | 0.204685 | 0.423779 | 0.004986 | 0.116075 | 0.0544 | 0.0911 |
 
 Sources: `env_go2_throughput_numpy_cpu_pop32.json`, `env_go2_throughput_numpy_cpu_pop32_r1.json`, `env_go2_throughput_numpy_cpu_pop8.json`, `env_go2_throughput_numpy_cpu_pop8_r1.json`, `env_hover_throughput_numpy_cpu_pop32.json`, `env_hover_throughput_numpy_cpu_pop32_r1.json`, `env_hover_throughput_numpy_cpu_pop8.json`, `env_hover_throughput_numpy_cpu_pop8_r1.json`
 
