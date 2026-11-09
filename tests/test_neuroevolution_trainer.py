@@ -105,12 +105,13 @@ TIMING_FIELDS = (
 
 
 def _fitness_rule(episode_returns):
-    """Return the fitness the contract asks for: the float32 episode mean with NaN counted as 0.
+    """Return the fitness the contract asks for: the float32 episode mean with non-finite counted as 0.
 
-    The expression is the one ``env_base.validate_evaluation`` recomputes, so a result handed
-    back by this helper is well formed by construction.
+    Every non-finite episode return (NaN, ``+inf`` and ``-inf`` alike) contributes exactly 0, which is
+    the rule ``env_base.validate_evaluation`` and ``trainer._aggregate`` share, so a result handed back
+    by this helper is well formed by construction.
     """
-    return np.nan_to_num(episode_returns, nan=0.0).mean(axis=1)
+    return np.nan_to_num(episode_returns, nan=0.0, posinf=0.0, neginf=0.0).mean(axis=1)
 
 
 def _evaluation(episode_returns=None, **overrides):
@@ -307,14 +308,29 @@ def test_validate_evaluation_accepts_valid_and_rejects_bad_results():
     assert nan_result["fitness"][1] == np.nan_to_num(nan_returns[1], nan=0.0).mean()
     assert validate_evaluation(nan_result, POP_SIZE) is None
 
-    # +inf is accepted as well; the validator's rule substitutes only NaN, so inf saturates to the
-    # float32 maximum instead of 0 (the trainer's own aggregation maps +-inf to 0 -- see test 5).
+    # +-inf is non-finite as well, and the rule counts it as 0 exactly like ``trainer._aggregate``,
+    # so an env reporting that mean must validate (it was rejected while only NaN was substituted).
     inf_returns = np.array(EPISODE_RETURNS, dtype=np.float32)
     inf_returns[1, 1] = np.inf
+    inf_returns[2, 0] = -np.inf
     inf_result = _evaluation(inf_returns)
+    counted_zero = np.where(np.isfinite(inf_returns), inf_returns, np.float32(0.0)).mean(axis=1, dtype=np.float32)
     assert np.isfinite(inf_result["fitness"]).all()
-    assert inf_result["fitness"][1] > np.float32(1e37)
+    assert np.array_equal(inf_result["fitness"], counted_zero)
+    assert np.array_equal(inf_result["returns"], inf_returns.reshape(-1))
     assert validate_evaluation(inf_result, POP_SIZE) is None
+
+    # A genuinely wrong fitness is still rejected: a 1e-3 offset beyond the tolerance, and the value
+    # a NaN-only substitution produces, where the infinite episode saturates into the float32 maximum
+    # instead of counting as 0.
+    wrong_fitness = inf_result["fitness"].copy()
+    wrong_fitness[1] += np.float32(1e-3)
+    with pytest.raises(ValueError):
+        validate_evaluation(_evaluation(inf_returns, fitness=wrong_fitness), POP_SIZE)
+    nan_only_fitness = np.nan_to_num(inf_returns, nan=0.0).mean(axis=1)
+    assert (np.abs(nan_only_fitness[[1, 2]]) > np.float32(1e37)).all()
+    with pytest.raises(ValueError):
+        validate_evaluation(_evaluation(inf_returns, fitness=nan_only_fitness), POP_SIZE)
 
 
 # --- 2. The seed rules --------------------------------------------------------------
