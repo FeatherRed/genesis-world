@@ -1,7 +1,7 @@
 # examples/locomotion
 
 ## Intent
-RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose control and reward math run as compiled EvoX Compiler (`evoxc`) graphs, plus an rsl-rl PPO training/eval stack and playback of pre-trained backflip policies.
+RL locomotion stack for the Unitree Go2 in Genesis: a scripted-trot demo whose control and reward math run as compiled EvoX Compiler (`evoxc`) graphs, an independent TensorNEAT neuroevolution training entry for walking that sits on the same compiled-graph layer, plus an rsl-rl PPO training/eval stack and playback of pre-trained backflip policies.
 
 ## API Surface
 
