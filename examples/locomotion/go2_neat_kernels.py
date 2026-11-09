@@ -350,6 +350,11 @@ def _outputs(result) -> tuple:
     return (result,)
 
 
+def _contiguous(array: np.ndarray) -> np.ndarray:
+    """``np.ascontiguousarray`` that leaves 0-d leaves 0-d (it would promote to ``(1,)``)."""
+    return array if array.ndim == 0 else np.ascontiguousarray(array)
+
+
 def _spec_for(array, name: str) -> evoxc.TensorSpec:
     """A ``TensorSpec`` matching one payload leaf (shape + dtype + name)."""
     arr = _host(array)
@@ -930,7 +935,7 @@ def run_tell(executable, *, randkey, pop_arrays, generation, fitness, species_le
         *[_to_device_array(executable, np.ascontiguousarray(array)) for array in arrays],
         _to_device_array(executable, gen),
         _to_device_array(executable, np.ascontiguousarray(fit)),
-        *[_to_device_array(executable, np.ascontiguousarray(leaf)) for leaf in leaves],
+        *[_to_device_array(executable, _contiguous(leaf)) for leaf in leaves],
     )
     n_leaves = int(executable.species_leaf_count)
     flat = _outputs(outputs)
