@@ -22,8 +22,21 @@ Four things this script is for, all of them cheap enough for the example smoke s
 * **``--imports``** statically proves that the migrated stack stays free of ``torch``: an AST
   scan of ``hover_kernels.py``, ``hover_neat_env.py``, ``hover_neat_train.py`` (skipped with a
   note while it does not exist yet) and the six modules of the shared
-  ``examples/neuroevolution`` layer.  ``hover_device_rollout.py``, once it exists, exports to
-  Genesis through ``torch.from_dlpack`` and is therefore deliberately outside that list.
+  ``examples/neuroevolution`` layer.  ``hover_device_rollout.py`` exports to Genesis through
+  ``torch.from_dlpack`` and imports torch lazily inside its helpers, and is therefore
+  deliberately outside that list.
+* **``--residency``** selects the rollout residency of every env this script builds:
+  ``numpy`` (the default, host-staged) or ``device`` (the zero-copy device-resident rollout of
+  ``hover_device_rollout.py``, which needs a non-numpy graph backend, e.g.
+  ``--evoxc-backend iree --evoxc-device cpu:0``).  It applies to the default mode and to
+  ``--parity``.
+* **``--residency-parity``** scores generation 0 twice -- once with a numpy-residency env, once
+  with a device-residency env built from the same seed, population, horizon and perturbation --
+  and prints the disagreement as ``name<TAB>value`` lines: ``returns_max_abs_diff``,
+  ``fitness_max_abs_diff``, ``end_reasons_equal``, ``live_buffer_vs_getter`` (the live solver
+  buffers against ``drone.get_pos/get_quat/get_vel/get_ang``, which must be exactly 0.0) and
+  ``seeds_equal``, then ``residency_parity_ok<TAB>0|1``.  Both envs are closed before the next
+  one is built.
 
 The graph-vs-oracle part needs no simulator, so it prints before the scene is built.  The exit
 code is 0 when every number is within its tolerance, 1 otherwise (the tolerances are the
@@ -76,6 +89,16 @@ TOLERANCES = {
     "fingerprint_repeat": 0.0,
 }
 
+#: Largest accepted disagreement between the two rollout residencies (``--residency-parity``);
+#: the equality flags are exact (0/1) and the live-buffer read must be bit-identical.
+RESIDENCY_TOLERANCES = {
+    "returns_max_abs_diff": 1e-6,
+    "fitness_max_abs_diff": 1e-6,
+    "end_reasons_equal": 1,
+    "live_buffer_vs_getter": 0.0,
+    "seeds_equal": 1,
+}
+
 
 def _parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
@@ -96,6 +119,18 @@ def _parse_args(argv=None):
         "-g", "--gpu", action="store_true", help="initialize Genesis on the GPU and default the graphs to iree@rocm:0"
     )
     parser.add_argument("--parity", action="store_true", help="replay the fixed oracle trace instead of scoring")
+    parser.add_argument(
+        "--residency",
+        choices=("numpy", "device"),
+        default="numpy",
+        help="rollout residency of every env built here: numpy (default) or device "
+        "(the zero-copy rollout of hover_device_rollout.py, needs a non-numpy graph backend)",
+    )
+    parser.add_argument(
+        "--residency-parity",
+        action="store_true",
+        help="score generation 0 with both residencies and compare the results",
+    )
     parser.add_argument(
         "--perturb",
         nargs="*",
@@ -351,6 +386,7 @@ def _scene_parity(args, backend, device):
         backend=backend,
         device=device,
         perturbation=_perturbation(args),
+        residency=args.residency,
     )
     try:
         # (a) The analytic reset observation vs the observation of the same reset state.
@@ -410,6 +446,85 @@ def run_parity(args):
     print(f"parity_ok\t{int(not failed)}")
     for name in failed:
         print(f"parity_failed\t{name}")
+    return 0 if not failed else 1
+
+
+# --- Residency parity: numpy staging vs the device-resident rollout -----------------
+
+
+def _score_generation(args, backend, device, residency):
+    """Score generation 0 in one residency; returns ``(result, live_buffer_vs_getter)``.
+
+    The env owns the scene, so it is closed (and the scene destroyed) before the caller builds
+    the next one; ``live_buffer_vs_getter`` is only measured for the device residency, where the
+    live solver buffers are the rollout's own state source.
+    """
+    from hover_neat_env import HoverNeatEnv
+
+    env = HoverNeatEnv(
+        args.pop_size,
+        args.master_seed,
+        horizon=args.horizon,
+        episode_length_s=args.episode_length_s,
+        backend=backend,
+        device=device,
+        perturbation=_perturbation(args),
+        residency=residency,
+    )
+    live = None
+    try:
+        pop_arrays = env.initial_pop_arrays()
+        result = env.evaluate(pop_arrays, 0)
+        if residency == "device":
+            from hover_device_rollout import DeviceRollout
+
+            rollout = DeviceRollout(env)
+            try:
+                live = rollout.state_parity()
+            finally:
+                rollout.close()
+    finally:
+        env.close()
+    return result, live
+
+
+def run_residency_parity(args):
+    """Score one generation in both residencies and compare them; returns the exit code."""
+    backend, device = _resolve_targets(args)
+    if not args.quiet:
+        print(f"# residency parity: generation 0, evoxc={backend}@{device}", flush=True)
+
+    if args.gpu:
+        import genesis as gs
+
+        gs.init(backend=gs.gpu, precision="32", logging_level="warning")
+
+    staged_result, _ = _score_generation(args, backend, device, "numpy")
+    device_result, live = _score_generation(args, backend, device, "device")
+
+    values = {
+        "returns_max_abs_diff": float(np.abs(staged_result["returns"] - device_result["returns"]).max()),
+        "fitness_max_abs_diff": float(np.abs(staged_result["fitness"] - device_result["fitness"]).max()),
+        "end_reasons_equal": int(staged_result["end_reasons"] == device_result["end_reasons"]),
+        "live_buffer_vs_getter": float(live),
+        "seeds_equal": int(np.array_equal(staged_result["seeds"], device_result["seeds"])),
+    }
+    failed = []
+    for name, value in values.items():
+        if name in ("end_reasons_equal", "seeds_equal"):
+            print(f"{name}\t{int(value)}")
+            failed += [] if int(value) == RESIDENCY_TOLERANCES[name] else [name]
+        else:
+            print(f"{name}\t{value:.3e}")
+            failed += [] if value <= RESIDENCY_TOLERANCES[name] else [name]
+    if not args.quiet:
+        print(
+            f"# steps numpy={staged_result['steps']} device={device_result['steps']} "
+            f"end_reasons numpy={staged_result['end_reasons']} device={device_result['end_reasons']}"
+        )
+    print(f"residency_parity_ok\t{int(not failed)}")
+    for name in failed:
+        print(f"residency_parity_failed\t{name}")
     return 0 if not failed else 1
 
 
@@ -490,6 +605,7 @@ def run_default(args):
         backend=backend,
         device=device,
         perturbation=_perturbation(args),
+        residency=args.residency,
     )
     try:
         # No trainer here: every generation scores the same untouched population, so the seed
@@ -528,6 +644,8 @@ def main(argv=None):
     args = _parse_args(argv)
     if args.imports:
         return run_imports()
+    if args.residency_parity:
+        return run_residency_parity(args)
     return run_parity(args) if args.parity else run_default(args)
 
 

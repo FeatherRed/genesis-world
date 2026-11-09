@@ -2,6 +2,7 @@
 Demonstrates Crazyflie 2.X quadcopter simulation (`urdf/drones/cf2x.urdf`) across four interaction styles: keyboard teleop, scripted trajectory playback, PID point-to-point flight, and RL hover training.
 All four motors are driven via `Drone.set_propellers_rpm(...)` around a hover base RPM of `14468.429183500699`.
 The RL hover task also exists in an EvoX Compiler (`evoxc`) form used by the shared neuroevolution trainer: a pure-`evoxc` kernel module, a batched seeded evaluation environment, a NumPy parity oracle, and a smoke/parity CLI.
+The evaluation environment has two residencies: the default NumPy-staged one and an opt-in, zero-copy device-resident rollout (`hover_device_rollout.py`) that keeps the graphs' tensors in device memory between steps.
 The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays untouched as the reference baseline the EvoX Compiler port is validated against.
 
 # API Surface
@@ -15,7 +16,8 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - `hover_legacy_reference.py` — the parity oracle: the pre-migration maths of `hover_env.py` as pure NumPy functions (`quat_to_xyz` incl. the gimbal-lock branch, `inv_quat`/`quat_mul`/`transform_quat_by_quat`/`transform_by_quat`, `propeller_rpm`, `body_frame_velocities`, `observation`, `reset_observation`, `reward_terms`, `crash_mask`, `timeout_mask`, `resample_commands`, `step_maths`); imports neither genesis, torch, tensordict nor evoxc.
 - `hover_kernels.py` — pure `evoxc` task graphs (controls, obs, reset obs, advance) on top of the shared `examples/neuroevolution` runtime helpers; imports neither torch nor genesis.
 - `hover_neat_env.py` — `HoverNeatEnv`, the batched seeded evaluation environment implementing the shared neuroevolution-env contract (`rows`, `episodes_per_policy`, `max_episode_length`, `evaluate(pop_arrays, generation)`, `close()`).
-- `hover_neat_check.py` — smoke/parity/`--imports` CLI for the migrated stack; also the collected example smoke for it.
+- `hover_neat_check.py` — smoke/parity/`--imports`/`--residency-parity` CLI for the migrated stack; also the collected example smoke for it.
+- `hover_device_rollout.py` — `DeviceRollout`, the opt-in zero-copy device-resident rollout of `HoverNeatEnv` (`residency="device"`): it owns the per-step device tensors and the DLPack bridges in both directions, and imports torch lazily inside its export helper only.
 - `README.md` — run commands, control mappings, and installation notes.
 
 # HoverEnv Internals
@@ -56,7 +58,21 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - `scene.clear_errno()` runs once per generation reset and after any `get_error_envs_mask()` row, because a latched solver error re-raises on the next `scene.step()`.
 - The module never imports torch: reads go through `genesis.utils.misc.tensor_to_array`, and the Genesis setters accept NumPy `array_like` directly (including `envs_idx`), so no host->device helper is needed.
 - Remaining Genesis boundary per step: `get_pos`, `get_quat`, `get_vel`, `get_ang`, `get_error_envs_mask` (device -> host) and `set_propellers_rpm` (host -> device, NumPy accepted); per generation: `set_pos`/`set_quat`/`zero_all_dofs_velocity`.
-- NumPy staging is the correctness-first boundary; zero-copy DLPack is the next optimisation round.
+- NumPy staging is the correctness-first boundary; the zero-copy DLPack path is the opt-in `residency="device"` rollout below.
+
+## Device residency (`hover_device_rollout.py`)
+- `DeviceRollout(env)` is what `HoverNeatEnv(..., residency="device")` imports lazily and constructs; it rejects any backend but `iree`, because the zero-copy bridge is IREE's DLPack one.
+- `evaluate(pop_arrays, generation)` returns exactly the numpy path's mapping (validated with `env_base.validate_evaluation`) and keeps its loop order, command stream, rewards and terminations; only the storage location of the operands differs.
+- `state_parity()` is the max abs difference between the live-buffer reads and `drone.get_pos`/`get_quat`/`get_vel`/`get_ang` and must be exactly `0.0`; `invalidate()` drops the cached state views; `close()` is idempotent and never touches the env's scene.
+- Per generation: one `env.reset_generation(generation, rngs)` host call (reset semantics stay in `hover_neat_env.py`), one upload of its `commands`/`obs`, one upload of the four genome payload leaves (shapes checked against `policy_executable.pop_shapes`), and at the end only `returns`, `fitness`, `end_code` and `commands` are downloaded.
+- Per step: `policy` -> `controls` -> export `rpm` to Genesis -> `set_propellers_rpm` -> `scene.step()` -> live-buffer read -> the host command draws -> `error_mask` -> `advance`, carrying `obs`/`commands`/`episode_length`/`returns`/`alive`/`end_code`/`base_pos` as device tensors and setting `last_actions` to the clipped actions.
+- Quadrants -> IREE: `qd_to_torch(field, copy=False)` -> `torch.utils.dlpack.to_dlpack` -> `runtime_device.from_dlpack_capsule` -> `iree.runtime.DeviceArray(runtime_device, view)` -> `evoxc.Tensor(IreeDevicePayload(array, device))`.
+- IREE -> Genesis: `torch.from_dlpack(rpm)` on a CUDA/ROCm device (the payload exports the same HAL buffer), `torch.from_numpy(rpm.numpy())` on CPU, where `.numpy()` on a `local-task` payload already maps the buffer.
+- Solver fields: `dyn_state.links` sliced to `env.drone.base_link_idx` — `pos` and `quat` verbatim, `ang` = `cd_ang`, `vel` = `cd_vel + cd_ang x (pos - root_COM)` (the transport term of `RigidSolver.get_links_vel`; zero for the massless-propeller cf2x, computed anyway so the mapping stays exact for any model).
+- `DeviceRollout.runtime_device` is the HAL device of `advance_executable.backend_executable`, used for every imported operand: evoxc creates a HAL device per executable load (only Vulkan is cached), so the five are distinct objects, and buffers still cross executables because evoxc compares `core.Device` labels rather than HAL identity.
+- Exactly one synchronisation: a `torch.cuda.synchronize()` at the `rpm` export -> `set_propellers_rpm` hand-off, because the Quadrants kernel that consumes the buffer runs on torch's stream (`IreeExecutable.run` has already blocked on its own queue, so the buffer itself is complete).
+- `import torch` lives inside the staging/export helpers only, because torch is nothing but the Genesis boundary here; the graph path is `evoxc` all the way down, and `--imports` keeps this module outside the torch-free list for exactly that reason.
+- The two remaining host round-trips per step are documented in the module: `scene.get_error_envs_mask()` (the latch is host-only; a device-side latch in Genesis would remove it) and the command draws (host RNG by contract).
 
 ## Parity (`hover_neat_check.py --parity`)
 - `PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py --parity` prints one `name<TAB>max_abs_diff` line per gate and `parity_ok 1`.
@@ -64,7 +80,8 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - `reset_obs_vs_obs` (analytic reset observation vs the observation from the same live reset state) is exactly 0, and `policy_row_identity` (rows `3p..3p+2` answering to policy `p`) is exactly 0.
 - Deterministic replay: `--parity --pop-size 2 --horizon 30` prints a `fingerprint` line; two independent processes give the identical line `seeds=1454269175,757617120,1421746521 returns=0.045082949,-0.005940037,-0.015909065,-0.062878124,-0.002508280,0.017566836 sum=-0.024585718`.
 - `hover_kernels.py` also self-checks standalone (`PYTHONPATH=$PWD python examples/drone/hover_kernels.py`): yaw 1.526e-05 deg max, obs 0, fixed-state reward 7.451e-09, randomized reward 1.490e-08, masks agree on 200 states, the latched `end_code` matches a numpy replication of `_classify_endings`, the `base_pos` passthrough is the consumed position, and the reset observation follows the runtime init pose.
-- `PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py --imports` AST-scans `hover_kernels.py`, `hover_neat_env.py`, `hover_neat_train.py` (skipped while absent) and the six `examples/neuroevolution` modules, prints one `module<TAB>torch_free|torch_import` line each plus `imports_ok 1`; `hover_device_rollout.py` is deliberately excluded because it exports to Genesis via `torch.from_dlpack`.
+- `--residency {numpy,device}` selects the rollout of both envs, in the default run, the `--residency-parity` run and the `--parity` run alike.
+- `PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py --imports` AST-scans `hover_kernels.py`, `hover_neat_env.py`, `hover_neat_train.py` (skipped while absent) and the six `examples/neuroevolution` modules, prints one `module<TAB>torch_free|torch_import` line each plus `imports_ok 1`; `hover_device_rollout.py` is deliberately outside that list because it imports torch lazily inside its Genesis-boundary helpers.
 
 ## Reproduce
 - Smoke (defaults are small so the example harness stays fast): `PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py`.
@@ -107,13 +124,18 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - The policy graph is the shared width-generic `policy_graphs.build_policy`/`run_policy`, so the env passes `num_inputs=NUM_OBS` / `num_outputs=NUM_ACTIONS` explicitly; `go2_neat_kernels.build_policy`'s baked Go2 widths no longer apply here.
 - The parity table's yaw tolerance is 5e-4 deg: the residual is the float32 minimax `atan2` plus the opposite quaternion-composition side (`quat_mul(inv(q_init), q)` vs `quat_mul(q, inv(q_init))`, identity here), while `reward_yaw` itself agrees to 1.7e-10.
 - One ROCm run aborted after generation 0 with `HSA_STATUS_ERROR_INVALID_PACKET_FORMAT` / `hipErrorLaunchFailure` (exit 134), a pre-existing HIP/XLA coexistence limit on that host; it did not reproduce in the validation runs and must be reported rather than papered over if it returns.
-- `hover_kernels.py` and `hover_legacy_reference.py` are helper modules, but `tests/test_examples.py`'s `IGNORE_SCRIPT_PATTERNS` does not list them (it does list the three Go2 helpers), so the harness executes their `__main__` self-checks; adding them there is a sibling edit for the parent node.
+- `hover_kernels.py`, `hover_legacy_reference.py` and `hover_device_rollout.py` are helper modules, but `tests/test_examples.py`'s `IGNORE_SCRIPT_PATTERNS` does not list them (it does list the three Go2 helpers), so the harness executes their `__main__` self-checks (the device module has none, so it just imports and exits); adding them there is a sibling edit for the parent node.
+- The DLPack import needs the buffer pointer aligned to 64 bytes (`local-task`) or 256 (HIP), while a *link slice* of the solver state is misaligned (the drone's base link starts 12 bytes into the field on CPU), so `_read_state` `copy_`s each field into a persistent, aligned, device-side staging buffer and imports that; `state_parity()` proves the values are bit-identical to the entity getters.
+- Bool graph outputs cannot be DLPack-exported, so the leaves that leave the graphs are kept f32/i32 and the int8 `end_code` only ever travels host-ward (`.to(cpu)`/`.numpy()`), never through `torch.from_dlpack`.
 
 # Test Strategy
 - `tests/test_examples.py` (pytest `examples` marker) runs `interactive_drone.py`, `fly.py` and `fly_route.py`; `*_train.py`, `*_eval.py`, `*_env.py`, and `quadcopter_controller.py` are ignored by the example test filter.
 - `hover_neat_check.py` is collected by the same harness and therefore defaults to a small CPU run (`--pop-size 4 --generations 1 --horizon 20`, ~19 s including the genesis import) that exits 0 headless.
 - `hover_kernels.py` and `hover_legacy_reference.py` are collected too; both `__main__` blocks are fast self-checks (they need `evoxc` / nothing respectively).
-- Iteration loop for the migrated stack: `hover_kernels.py` self-check, then `hover_neat_check.py --imports` for the torch-free proof, then `hover_neat_check.py --parity` for the numerical gates, then the deterministic fingerprint twice in separate processes, then a full-length CPU run.
+- `hover_neat_check.py --residency-parity` builds a `numpy` env, evaluates generation 0 and closes, then a fresh `device` env on the same seed/`pop_size`/`horizon`/perturbation flags, evaluates the same generation and closes; it prints `returns_max_abs_diff`, `fitness_max_abs_diff`, `end_reasons_equal`, `live_buffer_vs_getter`, `seeds_equal` and `residency_parity_ok`, and exits 1 on any failure (tolerances: returns/fitness <= 1e-6, masks/seed tables exact).
+- Measured residency parity (`--pop-size 2 --horizon 30`, `--evoxc-backend iree`): on `cpu:0` and on `rocm:0` alike `returns_max_abs_diff 0.000e+00`, `fitness_max_abs_diff 0.000e+00`, `end_reasons_equal 1`, `live_buffer_vs_getter 0.000e+00`, `seeds_equal 1`, `residency_parity_ok 1`; at `--horizon 400` both residencies stop at the same 126 steps with `{crash: 6}`.
+- `hover_neat_check.py --residency device --evoxc-backend iree --evoxc-device cpu:0 --pop-size 2 --horizon 5` exercises the device path headless and exits 0; the flag defaults to `numpy` so the collected smoke stays on the numpy path.
+- Iteration loop for the migrated stack: `hover_kernels.py` self-check, then `hover_neat_check.py --imports` for the torch-free proof, then `hover_neat_check.py --parity` for the numerical gates, then `--residency-parity` for the zero-copy one, then the deterministic fingerprint twice in separate processes, then a full-length CPU run.
 - RL scripts of the baseline are exercised manually, not by the example suite.
 
 # See Also
