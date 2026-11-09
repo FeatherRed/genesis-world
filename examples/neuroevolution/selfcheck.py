@@ -13,7 +13,8 @@ What each check pins, in order:
     The documented seed constants bit for bit (``evolution_seed(0) == 3757552657``, the ``generation_seed_table(0, 3)`` table quoted from ``examples/locomotion/CONTEXT.md``), determinism, prefix stability, distinct seeds per row, dtype/shape, master-seed sensitivity, the independence of the evolution and env streams, and the perturbation draws (zero -> exact zeros, nonzero -> reproducible, bounded, ``num_dof``-sized, float32).
 
 ``env_base``
-    The ``evaluate`` result contract: a well-formed synthetic result is accepted, an off-by-1e-3 fitness, a wrong ``returns`` length, a wrong ``seeds`` shape, duplicate seeds and a missing required key are each rejected with ``ValueError``, while an off-by-1e-7 fitness is inside tolerance; plus ``rows_for`` and the runtime-checkable protocol.
+    The ``evaluate`` result contract: a well-formed synthetic result is accepted, an off-by-1e-3 fitness, a wrong ``returns`` length, a wrong ``seeds`` shape, duplicate seeds, an integer ``episode_returns`` and a missing required key are each rejected with ``ValueError``, while an off-by-1e-7 fitness is inside tolerance; plus ``rows_for`` and the runtime-checkable protocol.
+    The non-finite case is pinned too: a row holding ``inf``, ``-inf`` or ``NaN`` with a fitness that counts it as 0 validates, while a fitness that keeps the infinity is rejected, and the rule has a single owner (``env_base._fitness_from_episode_returns``) that ``trainer._aggregate`` imports instead of restating it.
 
 ``graphs``
     ``build_fitness`` / ``run_fitness`` (the reshape-mean, and a cache hit on the second lookup), ``build_tell`` / ``run_tell`` (payload round trip, generation increment, randkey advance, rebuilt ``SpeciesState``) and ``build_policy`` / ``run_policy`` for both real genome widths (shape, dtype, the policy-major row tiling, distinct policies, and the width/row mismatches).
@@ -329,6 +330,35 @@ def check_env_base():
     off_by_1e3 = dict(well_formed, fitness=well_formed["fitness"] + np.float32(1e-3))
     message = _expect_value_error(lambda: validate_evaluation(off_by_1e3, pop_size), "a fitness off by 1e-3")
     _require("fitness" in message, f"the rejection message must name the fitness, got {message}")
+
+    non_finite = np.array(episode_returns, dtype=np.float32)
+    non_finite[1, 2] = np.inf
+    non_finite[2, 0] = -np.inf
+    non_finite[3, 1] = np.nan
+    scored = dict(
+        well_formed,
+        episode_returns=non_finite,
+        returns=non_finite.reshape(-1),
+        fitness=np.array([1.0, 1.5, 8.5 / 3.0, 11.0 / 3.0], dtype=np.float32),
+    )
+    _require(
+        validate_evaluation(scored, pop_size) is None,
+        "a non-finite episode return with a fitness that counts it as 0 must be accepted",
+    )
+    unscored = dict(scored, fitness=np.array([1.0, np.inf, 8.5 / 3.0, 11.0 / 3.0], dtype=np.float32))
+    with np.errstate(invalid="ignore"):
+        message = _expect_value_error(
+            lambda: validate_evaluation(unscored, pop_size), "a fitness that keeps an infinite episode return"
+        )
+    _require("fitness" in message, f"the rejection message must name the fitness, got {message}")
+
+    integer_returns = episode_returns.astype(np.int32)
+    _expect_value_error(
+        lambda: validate_evaluation(
+            dict(well_formed, episode_returns=integer_returns, returns=integer_returns.reshape(-1)), pop_size
+        ),
+        "an integer episode_returns",
+    )
     _expect_value_error(
         lambda: validate_evaluation(dict(well_formed, returns=well_formed["returns"][:-1]), pop_size),
         "a wrong returns length",

@@ -7,7 +7,7 @@ Neither the protocol nor the validator imports evoxc, TensorNEAT, torch or genes
 The contract in one place: ``rows = rows_for(pop_size)`` rows are simulated per generation, policy-major, so policy ``p`` owns rows ``3p, 3p+1, 3p+2``.
 Every policy of a generation is scored on the same ordered triple of episode seeds (see :mod:`seeding`), and every generation gets a fresh triple.
 Rows run to ``max_episode_length`` or to their task-specific ending, whichever comes first; a row that ends early simply stops accumulating return.
-A task that ends some episodes without a score reports them as non-finite and counts them as 0 when it aggregates fitness.
+A task that ends some episodes without a score reports them as non-finite, and :func:`_fitness_from_episode_returns` is the layer's single rule that counts every such episode as 0 in the float32 mean.
 """
 
 from __future__ import annotations
@@ -89,11 +89,28 @@ def _numeric(value):
         return None
 
 
+def _fitness_from_episode_returns(episode_returns):
+    """Return the per-policy fitness of an ``(pop_size, episodes)`` episode-return array.
+
+    This is the layer's single aggregation rule: an episode that was not scored (NaN, +inf or -inf) counts as 0.
+    The mean is taken in float32 because that is the arithmetic of the compiled ``fitness_graph`` (``evoxc.reduce_mean``), and a float64 mean differs from that graph by more than the ``1e-6`` tolerance at episode-return magnitudes of ~100 (the Go2 pilot).
+    :func:`validate_evaluation` and ``trainer._aggregate`` both call this helper, so the validator and the trainer cannot disagree about what an env's fitness must be.
+
+    Args:
+        episode_returns (array_like): Episode returns, ``(pop_size, episodes)``, policy-major.
+
+    Returns:
+        numpy.ndarray: Fitness, ``(pop_size,)`` float32, the float32 mean of each row with every non-finite entry counted as 0.
+    """
+    episode_returns = np.asarray(episode_returns, dtype=np.float32)
+    return np.nan_to_num(episode_returns, nan=0.0, posinf=0.0, neginf=0.0).mean(axis=1).astype(np.float32)
+
+
 def validate_evaluation(result, pop_size, episodes=EPISODES_PER_POLICY):
     """Raise one ``ValueError`` listing every problem of an ``evaluate`` result, or return None.
 
     The check is deliberately total: it collects every violation instead of failing on the first one, so a broken task reports its whole contract violation in one message.
-    An unscored episode is allowed to be non-finite: the row-layout check matches NaN to NaN, and fitness must count it as 0.
+    An unscored episode is allowed to be non-finite: the row-layout check matches NaN to NaN, and fitness must count every non-finite episode (NaN, +inf or -inf) as 0 in the float32 mean that :func:`_fitness_from_episode_returns` owns.
 
     Args:
         result (Mapping): The mapping returned by :meth:`BatchedEpisodeEnv.evaluate`.
@@ -153,11 +170,11 @@ def validate_evaluation(result, pop_size, episodes=EPISODES_PER_POLICY):
         elif fitness.shape != (pop_size,):
             problems.append(f"fitness must have shape ({pop_size},), got {fitness.shape}")
         elif episode_returns is not None:
-            expected = np.nan_to_num(episode_returns, nan=0.0).mean(axis=1)
+            expected = _fitness_from_episode_returns(episode_returns)
             if not np.allclose(fitness, expected, atol=1e-6, rtol=0):
                 problems.append(
-                    "fitness must be the episode-mean of episode_returns with an unscored episode counted as 0, "
-                    f"got {fitness.tolist()} instead of {expected.tolist()}"
+                    "fitness must be the episode-mean of episode_returns with every non-finite episode (NaN, +inf "
+                    f"or -inf) counted as 0, got {fitness.tolist()} instead of {expected.tolist()}"
                 )
 
     for key in ("steps", "env_steps", "wall_time_s"):

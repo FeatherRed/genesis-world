@@ -6,7 +6,7 @@ Everything else -- the initial population, the NEAT ``tell`` transition, the fit
 The loop, per generation::
 
     result = env.evaluate(pop_arrays, generation)          # the task simulates the rows
-    fitness = mean(nan_to_num(result["episode_returns"]))  # the trainer owns the aggregation
+    fitness = _fitness_from_episode_returns(result["episode_returns"])  # env_base owns the rule
     tell = run_tell(randkey, pop, generation, fitness, species)
 
 Only ``numpy``, ``evoxc``, ``TensorNEAT`` and the sibling modules of this directory are imported: no ``torch``, no ``genesis``, no ``tensordict``, so the trainer is testable without a simulator.
@@ -30,7 +30,13 @@ import evoxc
 from tensorneat import Pipeline, algorithm, genome, problem
 from tensorneat.common.tools import to_numpy
 
-from env_base import OPTIONAL_KEYS, REQUIRED_KEYS, rows_for, validate_evaluation
+from env_base import (
+    OPTIONAL_KEYS,
+    REQUIRED_KEYS,
+    _fitness_from_episode_returns,
+    rows_for,
+    validate_evaluation,
+)
 from evolution_graphs import ExecutableCache, build_tell, run_tell
 from evox_runtime import resolve_backend_device
 from seeding import EPISODES_PER_POLICY, evolution_seed, generation_seed_table
@@ -387,8 +393,9 @@ class NeuroevolutionTrainer:
     def _aggregate(self, result):
         """Return ``(episode_returns, fitness)`` with the trainer's aggregation rule applied.
 
-        An unscored or otherwise non-finite episode counts as 0, and the mean is taken in float32 because that is the arithmetic of the compiled ``fitness_graph`` (``evoxc.reduce_mean``) the env reports.
-        A float64 mean differs from that graph's answer by more than the ``1e-6`` tolerance at episode-return magnitudes of ~100, so it would reject a legitimate env.
+        An unscored or otherwise non-finite episode (NaN or +/-inf) counts as 0, and the mean is taken in float32.
+        The rule itself is owned by ``env_base._fitness_from_episode_returns`` and imported here, so the trainer and ``env_base.validate_evaluation`` cannot disagree about an env's fitness.
+        The float32 arithmetic is what the compiled ``fitness_graph`` (``evoxc.reduce_mean``) the env reports uses; a float64 mean differs from that graph's answer by more than the ``1e-6`` tolerance at episode-return magnitudes of ~100, so it would reject a legitimate env.
         ``result["fitness"]`` must agree with that rule to ``1e-6``, otherwise the env is computing a second, possibly different fitness.
 
         Args:
@@ -398,7 +405,7 @@ class NeuroevolutionTrainer:
             tuple: ``episode_returns`` ``(pop_size, episodes)`` float32 and ``fitness`` ``(pop_size,)`` float32.
         """
         episode_returns = np.asarray(result["episode_returns"], dtype=np.float32)
-        fitness = np.nan_to_num(episode_returns, nan=0.0, posinf=0.0, neginf=0.0).mean(axis=1).astype(np.float32)
+        fitness = _fitness_from_episode_returns(episode_returns)
         reported = np.asarray(result["fitness"], dtype=np.float32)
         if reported.shape != fitness.shape or not np.allclose(reported, fitness, atol=1e-6, rtol=0):
             raise ValueError(
