@@ -49,7 +49,7 @@ Morphs are a solver-agnostic "geometry + pose" concept: `Morph` base (pos/euler/
 
 ## `surfaces.py`
 `Surface` base encapsulates the visual information of an entity/link/geom as `gs.textures.Texture` fields, with shortcut scalars (`color`, `opacity`, `roughness`, `metallic`, `emissive`) resolved to `ColorTexture`s in a before-validator.
-Subclasses: `BSDF` (→ `Default`, `Rough`, `Smooth`, `Reflective`, `Collision`, `Water`), `Metal` (→ `Iron`, `Aluminium`, `Copper`, `Gold`), `Glass`, `Plastic`, `Emission`.
+Direct subclasses: `Glass` (→ `Water`), `Metal` (→ `Iron`, `Aluminium`, `Copper`, `Gold`), `Plastic` (→ `Rough`, `Smooth`, `Reflective`, `Collision`), `BSDF` (→ `Default`), and `Emission`.
 `FoamOptions` (from `misc.py`) configures foam generation on particle surfaces.
 
 ## `textures.py`
