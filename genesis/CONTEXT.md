@@ -55,6 +55,13 @@ Run `pytest -m required` (minimal merge set); default addopts exclude `benchmark
 `assets/` is ~hundreds of binary files (meshes/textures/robot models) — treat as static data; do not refactor or split it.
 Each child directory's CONTEXT.md holds the detailed per-module API; drill down before re-investigating.
 
+### Device-memory interop (Quadrants ↔ torch)
+Solver state lives in Quadrants device buffers and reaches torch only through DLPack; there is no `__cuda_array_interface__` and no Python-level `data_ptr` on `qd.Tensor`.
+`genesis.utils.misc.qd_to_torch(field, copy=False)` returns a torch tensor that aliases the Quadrants buffer and caches it on the qd impl as `_tc`/`_T_tc`; entity/scene getters call it with `copy=True` (a fresh device clone — never a host copy).
+`Field`/`Ndarray` export DLPack via `to_dlpack()` / `to_torch(copy=False)`; the `qd.Tensor` wrapper does not itself implement `__dlpack__`, so call `to_dlpack()` or use the cached torch view.
+On ROCm (`qd.init(arch=qd.amdgpu)`) Quadrants memory appears to torch as `torch.device("cuda", 0)` and its DLPack device is `(kDLROCM=10, 0)`; `gs.device` is `torch.device("cuda", 0)` and `gs.use_zerocopy.is_supported` is True.
+`gs.tc_float`/`gs.tc_int`/`gs.tc_bool` are float32/int32/bool (Quadrants f32/i32/bool), while `gs.use_ndarray` defaults to True; recording (autodiff) disables zero-copy, so `copy=False` views are unavailable in a recording scene.
+
 ## See Also
 - `../README.md`, `../pyproject.toml`, `../CLAUDE.md`, `../CODING_GUIDELINES.md` — project overview and conventions.
 - `../tests/` — test suites (sibling, read-only).
