@@ -4,7 +4,7 @@ This is the entry point of the TensorNEAT/``evoxc`` walking stack.  Every tensor
 matters -- observation assembly, the genome forward pass, the reward/termination step, the
 episode-mean fitness and the NEAT ``tell`` transition -- runs as a compiled graph from
 ``go2_neat_kernels.py``.  Genesis owns the scene and the physics; this module owns only the
-async gym loop, the generation bookkeeping and the artifacts.
+CLI, the wiring and the artifacts.
 
 What is where
 -------------
@@ -14,26 +14,17 @@ What is where
                                     it raises at import time without ``rsl-rl-lib``.
 ``go2_neat_env.py``                 the batched seeded evaluation env (``Go2NeatEnv``).
 ``go2_neat_kernels.py``             the five compiled graphs and ``ExecutableCache``.
+``examples/neuroevolution/``        the shared layer: seeding, the env protocol, the graphs
+                                    and ``NeuroevolutionTrainer``, which runs the loop.
 
-Manual ask/tell loop
---------------------
-``tensorneat.pipeline.Pipeline`` owns a jit-compiled generation loop that calls
-``problem.evaluate``; the evaluation here is a simulator, so the pipeline is only used to
-supply its *statics*: ``pipe.setup()`` gives the initial population (``state.pop``), the
-species pytree (``state.species``), the RNG key (``state.randkey``) and the generation
-counter (``state.generation``), and ``pipe._static_config(state)`` gives the tensor-free
-config the graphs register their runtime state in.  The problem object passed to the
-pipeline is a stub (:class:`~go2_neat_env.TraceOnlyProblem`) whose ``evaluate`` raises:
-the fitness always comes from the simulation, never from TensorNEAT.
-
-The loop is therefore, per generation::
-
-    simulate (Go2NeatEnv.evaluate)  ->  fitness (pop_size,)
-    run_tell(randkey, pop, generation, fitness, species) -> next randkey/pop/generation/species
-
-``run_tell`` feeds ``state.randkey`` *as-is* (no ``eval_key``/``tell_key`` split), so the
-mutation stream is reproducible from ``evolution_seed(master_seed)`` but differs from the
-one ``Pipeline.step`` would consume.
+Loop
+----
+``NeuroevolutionTrainer`` owns the ask/tell loop: it traces the TensorNEAT pipeline only for
+its statics (the stub ``TraceOnlyProblem`` never evaluates a problem, the fitness always comes
+from the simulation) and per generation runs ``Go2NeatEnv.evaluate`` -> fitness -> ``run_tell``
+-> record.  ``Go2NeatEnv.__init__`` builds the four env graphs and ``trainer.setup()`` the
+``tell`` graph, all through the same ``ExecutableCache`` (``env.cache``), so every generation
+reuses all five executables and the per-generation ``cache`` counters stay at misses 0.
 
 Seeds -- two independent streams from one master seed
 ----------------------------------------------------
@@ -44,31 +35,25 @@ Seeds -- two independent streams from one master seed
   of a generation shares the generation's seed triple (its three rows use the three seeds),
   so a generation compares policies on the same three initial states.
 
-Compile once, reuse
--------------------
-All five executables go through one ``ExecutableCache`` (``env.cache``): the four
-``Go2NeatEnv`` graphs are built in its ``__init__`` and the ``tell`` graph here.  Each
-generation calls ``env.executables()`` and the ``tell`` lookup again, which must report
-hits -- that is the per-generation ``cache`` field of the log line.
+The table is built here and handed to both ``Go2NeatEnv`` (``seed_table=``) and the trainer,
+so the episodes the env runs are provably the ones the trainer records.
 
 Backends
 --------
-CPU/``numpy`` is the default. ``-g/--gpu`` runs Genesis on ``gs.gpu`` and the rollout and
-evolution graphs with IREE on ``cuda:0``. ``--tell-backend numpy`` explicitly runs
-evolution on CPU. On ROCm (``--evoxc-device rocm:0``) the rollout runs on IREE and the
-evolution defaults to XLA on ``rocm:0``, with an explicit ``--pjrt-plugin`` (or the
-``EVOXC_PJRT_PLUGIN`` environment variable) selecting the PJRT plugin, because IREE's ROCm
-compile of the ``tell`` graph does not terminate.
+CPU/``numpy`` is the default.  ``-g/--gpu`` runs Genesis on ``gs.gpu`` and the rollout graphs
+with IREE on ``cuda:0``.  ``--tell-backend numpy`` explicitly runs evolution on CPU.  On ROCm
+(``--evoxc-device rocm:0``) the rollout runs on IREE and the evolution defaults to XLA on
+``rocm:0``, with an explicit ``--pjrt-plugin`` (or the ``EVOXC_PJRT_PLUGIN`` environment
+variable) selecting the PJRT plugin, because IREE's ROCm compile of the ``tell`` graph does
+not terminate.  That resolution lives in ``NeuroevolutionTrainer``; this script only forwards
+the flags and reads back the resolved backend/device for the header and the teardown.
 
 On a ROCm host whose torch wheel bundles its own ``libhsa-runtime64`` that differs from the
-system ROCm one, the trainer re-executes itself with the system HSA runtime preloaded
-(``LD_PRELOAD``), because torch's bundled HSA build corrupts AQL packets on long GPU
-rollouts (``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``); ``GO2_NEAT_NO_HSA_REEXEC=1`` disables
-that.  A re-exec is needed because ``LD_PRELOAD`` must exist before the dynamic loader maps
-torch's HIP/HSA libraries, and a Python-side preload (``ctypes.CDLL(..., RTLD_GLOBAL)``) is
-insufficient: the symbols bind to the system library but the crash persists.  This only
-happens on the GPU/HIP path, and since the parent has already imported torch it costs one
-extra interpreter start.
+system ROCm one, long GPU rollouts abort (torch's bundled HSA build corrupts AQL packets,
+``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``).  That repair lives in ``gs.init``
+(``genesis/utils/hsa.py``), which re-executes the process with the system runtime preloaded;
+``GS_HSA_REEXEC=0`` opts out and ``GS_HSA_REEXEC_DONE=1`` is its one-shot sentinel.  Nothing
+trainer-specific is needed here.
 
 Artifacts (git-ignored, never committed)
 ----------------------------------------
@@ -76,26 +61,25 @@ Artifacts (git-ignored, never committed)
 ``<output-dir>/summary.json``   resolved config + every generation record + totals.
 ``-o`` defaults to ``out/go2_neat``; ``-e/--exp-name`` appends a subdirectory.
 
+Residency
+---------
+``--residency numpy`` (the default, the reference) stages every graph operand through host arrays.
+``--residency device`` keeps them all on the ``evoxc`` device (zero-copy DLPack bridge, see
+``go2_device_rollout.py``) and therefore needs a non-CPU ``--evoxc-device``; both residencies run the
+same graphs on the same values and are expected to agree bit-for-bit.
+
 Under ``PYTEST_VERSION`` the run shrinks to one generation of 20 steps unless the matching
-clicks are given explicitly, so a future smoke test cannot hang.
+flags are given explicitly, so a smoke test cannot hang.
 """
 
 from __future__ import annotations
 
 import argparse
-import importlib.util
 import json
 import logging
 import os
-import sys
 from pathlib import Path
-import time
-
-import numpy as np
-
-import evoxc
-from tensorneat import Pipeline, algorithm, genome
-from tensorneat.common.tools import to_numpy
+import sys
 
 import genesis as gs
 
@@ -104,166 +88,13 @@ from go2_neat_env import (
     MAX_NODES,
     SPECIES_SIZE,
     Go2NeatEnv,
-    TraceOnlyProblem,
-    evolution_seed,
     generation_seed_table,
 )
-from go2_neat_kernels import (
-    EPISODES_PER_POLICY,
-    NUM_ACTIONS,
-    NUM_OBS,
-    Perturbation,
-    build_tell,
-    run_tell,
-)
+from go2_neat_kernels import NUM_ACTIONS, NUM_OBS, Perturbation
 
-logger = logging.getLogger(__name__)
-
-
-# --- ROCm HSA runtime preload (stdlib only) -----------------------------------------
-
-
-HSA_REEXEC_GUARD = "_GO2_NEAT_HSA_REEXEC"
-HSA_REEXEC_DISABLE = "GO2_NEAT_NO_HSA_REEXEC"
-
-
-def _system_hsa_runtime_path():
-    """Return the system ROCm ``libhsa-runtime64`` to preload, or ``None``.
-
-    Only a Linux ROCm host whose torch wheel bundles its own HSA runtime needs the
-    workaround, so every other environment (already re-executed, explicitly disabled, no
-    torch, CPU-only torch, no ROCm install) returns ``None`` and the run is unchanged.
-
-    Returns:
-        Path | None: First system ``libhsa-runtime64.so.1.*`` whose real path differs from
-        the bundled one, or ``None`` when no re-exec is needed or possible.
-    """
-    if sys.platform != "linux":
-        return None
-    if os.environ.get(HSA_REEXEC_GUARD) or os.environ.get(HSA_REEXEC_DISABLE):
-        return None
-    spec = importlib.util.find_spec("torch")
-    if spec is None or spec.origin is None:
-        return None
-    torch_lib = Path(spec.origin).parent / "lib"
-    bundled = torch_lib / "libhsa-runtime64.so"
-    if not (torch_lib / "libamdhip64.so").is_file() or not bundled.is_file():
-        return None
-    bundled_real = os.path.realpath(bundled)
-    candidates = sorted(Path("/opt/rocm/lib").glob("libhsa-runtime64.so.1.*"))
-    for rocm_root in sorted(Path("/opt").glob("rocm-*")):
-        candidates += sorted(rocm_root.glob("lib/libhsa-runtime64.so.1.*"))
-    for candidate in candidates:
-        if candidate.is_file() and os.path.realpath(candidate) != bundled_real:
-            return candidate
-    return None
-
-
-def _reexec_with_system_hsa_runtime(argv):
-    """Re-exec the trainer with the system ROCm HSA runtime preloaded.
-
-    ``LD_PRELOAD`` has to be in place before the dynamic loader maps torch's HIP/HSA
-    libraries, so swapping the bundled runtime is only possible by starting a new process
-    image. Only the trainer running as its own entry point re-executes, so programmatic
-    ``main([...])`` calls and pytest imports are left alone.
-    """
-    runtime = _system_hsa_runtime_path()
-    if runtime is None:
-        return
-    if os.path.abspath(sys.argv[0]) != os.path.abspath(__file__):
-        return
-    env = dict(os.environ)
-    env[HSA_REEXEC_GUARD] = "1"
-    existing_preload = env.get("LD_PRELOAD")
-    env["LD_PRELOAD"] = str(runtime) if not existing_preload else f"{runtime}:{existing_preload}"
-    print(
-        f"INFO {Path(__file__).name}: re-executing with LD_PRELOAD={runtime} because torch's "
-        f"bundled libhsa-runtime64 corrupts AQL packets on long ROCm rollouts "
-        f"(set {HSA_REEXEC_DISABLE}=1 to disable)",
-        flush=True,
-    )
-    sys.stdout.flush()
-    sys.stderr.flush()
-    os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), *argv], env)
-
-
-# --- Genome pipeline ----------------------------------------------------------------
-
-
-def build_genome_pipeline(pop_size, master_seed):
-    """Create the NEAT algorithm and the static graph config of a ``Pipeline.setup()``.
-
-    The problem passed to the pipeline is never evaluated (see the module docstring): the
-    pipeline exists to produce the initial population, the species pytree and the statics.
-
-    Args:
-        pop_size (int): Population size, i.e. policies per generation.
-        master_seed (int): Seed of the run; the pipeline uses the evolution stream.
-
-    Returns:
-        tuple: ``(algo, config, state)`` -- the ``NEAT`` instance, the tensor-free
-        ``_static_config`` handed to every compiled graph, and the initial pipeline state.
-    """
-    gen = genome.DefaultGenome(
-        num_inputs=NUM_OBS,
-        num_outputs=NUM_ACTIONS,
-        max_nodes=MAX_NODES,
-        max_conns=MAX_CONNS,
-    )
-    algo = algorithm.NEAT(gen, pop_size=pop_size, species_size=min(SPECIES_SIZE, pop_size))
-    pipeline = Pipeline(
-        algo,
-        TraceOnlyProblem(),
-        seed=evolution_seed(master_seed),
-        backend="numpy",
-        is_detailed=False,
-    )
-    state = pipeline.setup()
-    return algo, pipeline._static_config(state), state
-
-
-def pop_arrays_of(state):
-    """Return the four genome payload arrays of a pipeline state as host numpy."""
-    return tuple(np.array(to_numpy(leaf)) for leaf in state.pop)
-
-
-def species_leaves_of(species):
-    """Return the species pytree leaves in ``evoxc`` pytree order."""
-    return tuple(evoxc.tree_leaves(species))
-
-
-# --- Artifacts ----------------------------------------------------------------------
-
-
-def _jsonable(value):
-    """Convert numpy scalars/arrays (and containers of them) to plain JSON values."""
-    if isinstance(value, dict):
-        return {str(key): _jsonable(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_jsonable(item) for item in value]
-    if isinstance(value, np.ndarray):
-        return value.tolist()
-    if isinstance(value, np.generic):
-        return value.item()
-    return value
-
-
-def _format_generation(record):
-    """One compact log line for a generation record."""
-    ends = record["end_reasons"]
-    best_index = int(np.argmax(record["fitness"]))
-    best_episodes = " ".join(f"{value:+.3f}" for value in record["episode_returns"][best_index])
-    return (
-        f"gen {record['generation']} | seeds {record['seeds']} | "
-        f"best {record['best_fitness']:+.4f} median {record['median_fitness']:+.4f} | "
-        f"best p{best_index} [{best_episodes}] | "
-        f"{record['steps']} steps {record['wall_time_s']:.3f} s "
-        f"({record['steps_per_s']:.1f} steps/s, {record['env_steps_per_s']:.0f} env-steps/s) | "
-        f"cache +{record['cache_hits_delta']} hits/+{record['cache_misses_delta']} misses "
-        f"(total {record['cache_hits']} hits/{record['cache_misses']} misses) | "
-        f"ends timeout={ends['timeout']} tilted={ends['tilted']} error={ends['error']} "
-        f"unfinished={ends['unfinished']}"
-    )
+# ``go2_neat_env`` imports ``go2_neat_kernels`` first, whose import-time shim puts
+# ``examples/neuroevolution`` on ``sys.path``, so the shared layer imports by bare name.
+from trainer import NeuroevolutionTrainer
 
 
 # --- CLI ----------------------------------------------------------------------------
@@ -315,6 +146,15 @@ def _parse_args(argv=None):
         default=True,
         help="Stop a generation as soon as every row has ended (disable to force the full horizon).",
     )
+    parser.add_argument(
+        "--residency",
+        choices=("numpy", "device"),
+        default="numpy",
+        help=(
+            "Where the values that cross a graph boundary live: numpy (host arrays, the reference) "
+            "or device (zero-copy, every operand stays on the evoxc device; needs a non-CPU device)."
+        ),
+    )
     parser.add_argument("-e", "--exp-name", type=str, default=None, help="Experiment name, a subdirectory of -o.")
     parser.add_argument("-o", "--output-dir", type=str, default="out/go2_neat", help="Directory of the artifacts.")
     parser.add_argument(
@@ -349,15 +189,11 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
-# --- Main loop ----------------------------------------------------------------------
+# --- Main ---------------------------------------------------------------------------
 
 
 def main(argv=None):
     args = _parse_args(argv)
-    if args.gpu or "rocm" in (args.evoxc_device or ""):
-        # Only the GPU/HIP path can hit torch's bundled HSA runtime; the CPU/numpy path
-        # must not pay for another interpreter start.
-        _reexec_with_system_hsa_runtime(list(argv) if argv is not None else sys.argv[1:])
     logging.basicConfig(
         level=logging.WARNING if args.quiet else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
@@ -400,11 +236,8 @@ def main(argv=None):
     output_dir = Path(args.output_dir)
     if args.exp_name:
         output_dir = output_dir / args.exp_name
-    output_dir.mkdir(parents=True, exist_ok=True)
-    history_path = output_dir / "history.jsonl"
-    summary_path = output_dir / "summary.json"
 
-    build_start = time.perf_counter()
+    seed_table = generation_seed_table(args.master_seed, generations)
     env = Go2NeatEnv(
         pop_size=args.pop_size,
         master_seed=args.master_seed,
@@ -415,123 +248,44 @@ def main(argv=None):
         show_viewer=show_viewer,
         episode_length_s=args.episode_length_s,
         stop_when_done=args.stop_when_done,
+        seed_table=seed_table,
+        residency=args.residency,
     )
-    algo, config, state = build_genome_pipeline(args.pop_size, args.master_seed)
-    pop_arrays = pop_arrays_of(state)
-    species_leaves = species_leaves_of(state.species)
-    randkey = state.randkey
-    generation_counter = state.generation
-    if args.tell_backend:
-        tell_backend = args.tell_backend
-    elif env.backend == "numpy":
-        tell_backend = "numpy"
-    elif env.device.kind in ("rocm", "hip"):
-        tell_backend = "xla"  # IREE/ROCm tell compilation does not terminate
-    else:
-        tell_backend = env.backend
-    tell_device = evoxc.Device("cpu", 0) if tell_backend == "numpy" else env.device
-    tell_device_name = f"{tell_device.kind}:{tell_device.index}"
-    tell_key = ("tell", args.pop_size, tell_backend, tell_device_name, args.pjrt_plugin)
-
-    def tell_executable():
-        """Look the tell executable up in the shared cache (compiled on the first call)."""
-        return env.cache.get(
-            tell_key,
-            lambda: build_tell(
-                algo,
-                config,
-                pop_arrays,
-                species_leaves,
-                args.pop_size,
-                backend=tell_backend,
-                device=tell_device,
-                plugin_path=args.pjrt_plugin,
-            ),
-        )
-
-    logger.info("Building TensorNEAT tell on %s@%s", tell_backend, tell_device_name)
-    tell_build_start = time.perf_counter()
-    tell_executable()
-    tell_build_time = time.perf_counter() - tell_build_start
-    build_time = time.perf_counter() - build_start
+    trainer = NeuroevolutionTrainer(
+        env,
+        pop_size=args.pop_size,
+        generations=generations,
+        master_seed=args.master_seed,
+        num_inputs=NUM_OBS,
+        num_outputs=NUM_ACTIONS,
+        max_nodes=MAX_NODES,
+        max_conns=MAX_CONNS,
+        species_size=SPECIES_SIZE,
+        tell_backend=args.tell_backend,
+        plugin_path=args.pjrt_plugin,
+        output_dir=output_dir,
+        seed_table=seed_table,
+    )
 
     if not args.quiet:
         print(
             f"Go2 NEAT walking: pop_size={args.pop_size} rows={env.rows} generations={generations} "
             f"horizon={env.horizon} max_episode_length={env.max_episode_length} "
             f"genesis={'gpu' if args.gpu else 'cpu'} evoxc={env.backend}@{env.device_name} "
-            f"tell={tell_backend}@{tell_device_name} "
-            f"master_seed={args.master_seed} evolution_seed={evolution_seed(args.master_seed)} "
-            f"perturbation={'zero' if perturbation.is_zero else 'nonzero'}"
-        )
-        print(
-            f"built 5 executables in {build_time:.3f} s (tell {tell_build_time:.3f} s) "
-            f"(cache {env.cache.hits} hits / {env.cache.misses} misses)"
+            f"tell={trainer.tell_backend}@{trainer.tell_device_name} "
+            f"master_seed={args.master_seed} evolution_seed={trainer.evolution_seed} "
+            f"perturbation={'zero' if perturbation.is_zero else 'nonzero'} residency={env.residency}"
         )
 
-    prev_hits, prev_misses = env.cache.hits, env.cache.misses
-    records = []
-    run_start = time.perf_counter()
-    with history_path.open("w", encoding="utf-8") as history:
-        for generation_index in range(generations):
-            env.executables()  # four cache hits: the env graphs are compiled only once
-            tell_executable()  # one more cache hit
-            result = env.evaluate(pop_arrays, generation_index)
-            fitness = np.asarray(result["fitness"], dtype=np.float32)
-            tell = run_tell(
-                tell_executable(),
-                randkey=randkey,
-                pop_arrays=pop_arrays,
-                generation=generation_counter,
-                fitness=fitness,
-                species_leaves=species_leaves,
-            )
-            hits, misses = env.cache.hits, env.cache.misses
-            record = {
-                "generation": generation_index,
-                "seeds": [int(seed) for seed in result["seeds"]],
-                "episode_returns": result["episode_returns"].tolist(),
-                "returns": result["returns"].tolist(),
-                "fitness": fitness.tolist(),
-                "best_fitness": float(fitness.max()),
-                "median_fitness": float(np.median(fitness)),
-                "wall_time_s": float(result["wall_time_s"]),
-                "steps": int(result["steps"]),
-                "env_steps": int(result["env_steps"]),
-                "steps_per_s": float(result["steps_per_s"]),
-                "env_steps_per_s": float(result["env_steps_per_s"]),
-                "cache_hits": int(hits),
-                "cache_misses": int(misses),
-                "cache_hits_delta": int(hits - prev_hits),
-                "cache_misses_delta": int(misses - prev_misses),
-                "end_reasons": {name: int(count) for name, count in result["end_reasons"].items()},
-                "init_qpos": result["init_qpos"].tolist(),
-            }
-            records.append(record)
-            history.write(json.dumps(_jsonable(record)) + "\n")
-            history.flush()
-            if not args.quiet:
-                print(_format_generation(record))
-            prev_hits, prev_misses = hits, misses
-            randkey = tell["randkey"]
-            generation_counter = tell["generation"]
-            pop_arrays = tuple(np.array(leaf, copy=True) for leaf in tell["pop"])
-            species_leaves = species_leaves_of(tell["species"])
-    wall_time_s = time.perf_counter() - run_start
+    trainer.setup()
+    summary = trainer.run()
 
-    fitness_history = [record["best_fitness"] for record in records]
-    summary = {
-        "config": {
-            "pop_size": args.pop_size,
-            "rows": env.rows,
-            "episodes_per_policy": EPISODES_PER_POLICY,
-            "generations": generations,
+    # The trainer owns the task-agnostic config keys; the Go2 run detail is merged into
+    # ``config`` here without removing or renaming anything the trainer wrote.
+    summary["config"].update(
+        {
             "horizon": int(env.horizon),
-            "max_episode_length": int(env.max_episode_length),
             "episode_length_s": float(args.episode_length_s),
-            "master_seed": args.master_seed,
-            "evolution_seed": evolution_seed(args.master_seed),
-            "seed_table": generation_seed_table(args.master_seed, generations).tolist(),
             "perturbation": {
                 "base_pos": float(perturbation.base_pos),
                 "base_rpy": float(perturbation.base_rpy),
@@ -541,43 +295,22 @@ def main(argv=None):
             "genesis_backend": "gpu" if args.gpu else "cpu",
             "evoxc_backend": env.backend,
             "evoxc_device": env.device_name,
-            "tell_backend": tell_backend,
-            "tell_device": tell_device_name,
             "show_viewer": show_viewer,
             "stop_when_done": bool(args.stop_when_done),
-            "genome": {
-                "num_inputs": NUM_OBS,
-                "num_outputs": NUM_ACTIONS,
-                "max_nodes": MAX_NODES,
-                "max_conns": MAX_CONNS,
-                "species_size": min(SPECIES_SIZE, args.pop_size),
-            },
-            "executable_build_time_s": build_time,
-            "tell_build_time_s": tell_build_time,
-        },
-        "generations": records,
-        "totals": {
-            "wall_time_s": wall_time_s,
-            "steps": sum(record["steps"] for record in records),
-            "env_steps": sum(record["env_steps"] for record in records),
-            "best_fitness": max(fitness_history) if fitness_history else None,
-            "final_best_fitness": fitness_history[-1] if fitness_history else None,
-            "fitness_history": fitness_history,
-            "cache_hits": int(env.cache.hits),
-            "cache_misses": int(env.cache.misses),
-        },
-    }
-    summary_path.write_text(json.dumps(_jsonable(summary), indent=2) + "\n", encoding="utf-8")
+            "residency": env.residency,
+        }
+    )
+    trainer.summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
 
     env.close()
     if not args.quiet:
-        best = summary["totals"]["best_fitness"]
         print(
             f"done: {generations} generations, {summary['totals']['steps']} steps, "
-            f"{wall_time_s:.1f} s total, best fitness {best:+.4f}; "
-            f"wrote {history_path} and {summary_path}"
+            f"{summary['totals']['wall_time_s']:.1f} s total, "
+            f"best fitness {summary['totals']['best_fitness']:+.4f}; "
+            f"wrote {trainer.history_path} and {trainer.summary_path}"
         )
-    if tell_backend == "xla" and tell_device.kind != "cpu":
+    if trainer.tell_backend == "xla" and trainer.tell_device.kind != "cpu":
         # A live PJRT client makes the ROCm plugin abort at interpreter exit (after the work
         # is done, so the artifacts above are already on disk); skip the destructor.
         sys.stdout.flush()

@@ -1,18 +1,29 @@
-"""Go2 Walking graphs for the TensorNEAT trainer, as EvoX Compiler (``evoxc``) graphs.
+"""Go2 walking graphs for the TensorNEAT trainer, as EvoX Compiler (``evoxc``) graphs.
 
-This module owns every compiled graph the TensorNEAT Go2-walking trainer asks for,
-so the environment and trainer modules stay thin: they read the simulator, hand
-the state to a graph, and write the policy targets back.  Nothing here imports
-``genesis`` or Torch, and nothing here simulates; the module speaks only
-``numpy``, ``evoxc`` and ``TensorNEAT``.
+This module owns the Go2 task graphs of the walking trainer -- the observation assembly and the
+one-step advance (reward, termination, episode bookkeeping) -- so the environment module stays
+thin: it reads the simulator, hands the state to a graph, and writes the policy targets back.
+Nothing here imports ``genesis`` or Torch, and nothing here simulates; the module speaks only
+``numpy`` and ``evoxc``.
 
-Graphs (each compiled once, then reused for every step and every generation)
---------------------------------------------------------------------------
+The task-agnostic half of the same stack lives in ``examples/neuroevolution``: the width-generic
+policy graph (``policy_graphs``), the fitness and ``tell`` graphs plus the shape-keyed
+``ExecutableCache`` (``evolution_graphs``), the seeding rules (``seeding``) and the plain
+``evoxc`` plumbing (``evox_runtime``).  This module imports them by bare module name;
+``_ensure_shared_layer_path()`` runs as the first import-time action and puts
+``<repo>/examples/neuroevolution`` on ``sys.path``, the bare-name convention the rest of
+``examples/`` uses.  The shim lives here and only here: every other module of this stack imports
+``go2_neat_kernels`` first, which is what makes the shared layer importable in them.
+
+Graphs owned here (each compiled once, then reused for every step and every generation)
+---------------------------------------------------------------------------------------
 ``go2_neat_obs``          state -> the 45-dim policy observation row of ``go2_env``.
-``go2_neat_policy``       genome payload + observation -> raw actions.
 ``go2_neat_advance``      one environment step: clip -> obs -> reward -> bookkeeping.
-``go2_neat_fitness``      per-episode returns -> per-policy fitness (episode mean).
-``go2_neat_tell``         TensorNEAT ``tell``: one full generation transition.
+
+The policy, fitness and tell graphs are the shared ones; ``build_policy`` here only binds the Go2
+widths (45 observations, 12 actions) around the shared builder, while ``run_policy``,
+``build_fitness``, ``run_fitness``, ``build_tell``, ``run_tell`` and ``ExecutableCache`` are the
+shared objects re-exported unchanged.
 
 The observation row, in this exact order, mirrors ``go2_env._update_observation``::
 
@@ -54,17 +65,51 @@ Frames and conventions the caller must honour
 
 from __future__ import annotations
 
-import logging
 import math
-from dataclasses import dataclass
+import sys
+from pathlib import Path
+
+#: Shared, task-agnostic neuroevolution layer: ``<repo>/examples/neuroevolution``.
+_SHARED_LAYER_DIR = Path(__file__).resolve().parents[1] / "neuroevolution"
+
+
+def _ensure_shared_layer_path():
+    """Put ``examples/neuroevolution`` on ``sys.path`` so its modules import by bare name.
+
+    The example tree is a set of plain scripts rather than a package, so a shared module is
+    imported by its file name; this shim is the single place that makes those names resolvable
+    for the Go2 stack (every other module here imports ``go2_neat_kernels`` first).
+
+    Returns:
+        str: The absolute path that is now on ``sys.path``.
+    """
+    shared = str(_SHARED_LAYER_DIR)
+    if shared not in sys.path:
+        sys.path.insert(0, shared)
+    return shared
+
+
+_ensure_shared_layer_path()
 
 import numpy as np
 
 import evoxc
 
-from tensorneat.algorithm.neat.species import SpeciesState
-from tensorneat.genome.utils import GenomeTensors
-
+from evolution_graphs import (
+    ExecutableCache,
+    build_fitness,
+    build_tell,
+    run_fitness,
+    run_tell,
+)
+from evox_runtime import (
+    _attach,
+    _device_name,
+    _outputs,
+    _positive_int,
+    _rows_of,
+    _staged,
+)
 from go2_evox_kernels import (
     DT,
     STANDING_FLAT,
@@ -73,15 +118,14 @@ from go2_evox_kernels import (
     _to_numpy,
     resolve_backend_device,
 )
+from policy_graphs import build_policy as _shared_build_policy, run_policy
+from seeding import EPISODES_PER_POLICY, Perturbation
 
-logger = logging.getLogger(__name__)
 
 # --- Task constants (``go2_train.get_cfgs()`` / ``go2_env``) ------------------------
 
 NUM_OBS = 45
 NUM_ACTIONS = 12
-#: Episodes one generation of policies is scored over; rows are policy-major.
-EPISODES_PER_POLICY = 3
 CLIP_ACTIONS = 100.0
 TERMINATION_LIMIT_DEG = 10.0
 #: ``obs_cfg["obs_scales"]``; ``lin_vel`` also scales the x/y velocity commands.
@@ -106,32 +150,6 @@ BASE_HEIGHT_TARGET = 0.3
 _COMMAND_OBS_SCALE = np.array(
     [OBS_SCALES["lin_vel"], OBS_SCALES["lin_vel"], OBS_SCALES["ang_vel"]], dtype=np.float32
 )
-
-
-# --- Reset perturbation -------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class Perturbation:
-    """Reset-time perturbation amplitudes for the env module to sample from.
-
-    Each field is the **maximum absolute offset**; the env module owns the RNG and
-    draws, e.g., ``uniform(-base_pos, +base_pos)`` per axis.  ``base_pos`` is in
-    metres, ``base_rpy`` in radians, ``joint_pos`` in radians.  The all-zero default
-    reproduces the original fixed-reset Go2 task, which is why ``is_zero`` exists.
-
-    ``perturbed_init_qpos`` deliberately does not live here: RNG semantics belong to
-    the environment, not to a compiled-graph module.
-    """
-
-    base_pos: float = 0.0
-    base_rpy: float = 0.0
-    joint_pos: float = 0.0
-
-    @property
-    def is_zero(self) -> bool:
-        """Whether every amplitude is zero (the unperturbed reset)."""
-        return self.base_pos == 0.0 and self.base_rpy == 0.0 and self.joint_pos == 0.0
 
 
 # --- Small graph helpers ------------------------------------------------------------
@@ -280,89 +298,6 @@ def _tile_scaled_commands(commands, rows: int) -> np.ndarray:
     return np.ascontiguousarray(np.tile(scaled, (rows, 1)))
 
 
-def _device_name(device) -> str:
-    """``"kind:index"`` of a resolved device, for cache keys and log lines."""
-    return f"{device.kind}:{device.index}"
-
-
-def _attach(executable, **metadata):
-    """Stash build-time metadata on an ``evoxc`` executable (it has a ``__dict__``).
-
-    ``Executable.backend`` / ``.device`` / ``.functions`` are read-only properties, so
-    the metadata names deliberately avoid them.
-    """
-    for name, value in metadata.items():
-        setattr(executable, name, value)
-    return executable
-
-
-def _positive_int(value, name: str) -> int:
-    """Validate a strict positive integer build argument."""
-    ivalue = int(value)
-    if ivalue != value or ivalue <= 0:
-        raise ValueError(f"{name} must be a positive integer, got {value!r}")
-    return ivalue
-
-
-def _rows_of(executable) -> int:
-    """The row count a graph was compiled for."""
-    rows = getattr(executable, "rows", None)
-    if rows is None:
-        raise TypeError(f"{executable!r} was not built by this module (no '.rows' metadata)")
-    return int(rows)
-
-
-def _staged(executable, name: str, value, width=None, *, dtype=np.float32) -> np.ndarray:
-    """Stage one runtime argument, checking its shape against the compiled graph."""
-    rows = _rows_of(executable)
-    expected = (rows,) if width is None else (rows, width)
-    arr = np.asarray(value, dtype=dtype)
-    if arr.shape != expected:
-        raise ValueError(f"{name} must have shape {expected} to match the compiled graph, got {arr.shape}")
-    return np.ascontiguousarray(arr)
-
-
-def _host(value) -> np.ndarray:
-    """Materialize one payload leaf as a host numpy array.
-
-    ``state.pop`` / ``evoxc.tree_leaves(state.species)`` hand back ``evoxc.Tensor``
-    leaves, and ``np.asarray`` on those yields a 0-d object array, so tensors are
-    routed through ``_to_numpy`` instead.
-    """
-    if isinstance(value, np.ndarray):
-        arr = value
-    elif hasattr(value, "numpy"):
-        arr = _to_numpy(value)
-    else:
-        arr = np.asarray(value)
-    if arr.dtype == object:
-        raise TypeError(
-            "payload leaf is a 0-d object array; materialize an evoxc tensor with `.numpy()` "
-            "(see go2_evox_kernels._to_numpy / this module's _host) before passing it in"
-        )
-    return arr
-
-
-def _outputs(result) -> tuple:
-    """Normalize a ``evoxc.run`` result: a single-leaf graph returns the tensor bare."""
-    if isinstance(result, tuple):
-        return result
-    if isinstance(result, list):
-        return tuple(result)
-    return (result,)
-
-
-def _contiguous(array: np.ndarray) -> np.ndarray:
-    """``np.ascontiguousarray`` that leaves 0-d leaves 0-d (it would promote to ``(1,)``)."""
-    return array if array.ndim == 0 else np.ascontiguousarray(array)
-
-
-def _spec_for(array, name: str) -> evoxc.TensorSpec:
-    """A ``TensorSpec`` matching one payload leaf (shape + dtype + name)."""
-    arr = _host(array)
-    return evoxc.TensorSpec(tuple(int(dim) for dim in arr.shape), evoxc.dtype(arr.dtype), name=name)
-
-
 # --- Observations -------------------------------------------------------------------
 
 
@@ -448,85 +383,6 @@ def run_obs(executable, *, base_ang_vel_world, base_quat, dof_pos, dof_vel, acti
         _to_device_array(executable, _staged(executable, "actions", actions, NUM_ACTIONS)),
         _tile_standing(executable.standing_flat, _rows_of(executable)),
         _tile_scaled_commands(commands, _rows_of(executable)),
-    )
-    return _to_numpy(_outputs(outputs)[0])
-
-
-# --- Policy -------------------------------------------------------------------------
-
-
-def _pop_specs(pop_arrays) -> list:
-    """``TensorSpec`` list for the four ``GenomeTensors`` payload arrays."""
-    arrays = tuple(pop_arrays)
-    if len(arrays) != 4:
-        raise ValueError(f"pop_arrays must hold the 4 GenomeTensors payloads, got {len(arrays)}")
-    names = ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
-    return [_spec_for(array, name) for array, name in zip(arrays, names)]
-
-
-def build_policy(algo, config, pop_arrays, rows, *, backend="numpy", device=None):
-    """Compile the genome-payload -> action graph for ``rows`` policy-episode rows.
-
-    ``rows`` must be ``algo.pop_size * EPISODES_PER_POLICY`` and the rows are
-    **policy-major**: rows ``3p, 3p+1, 3p+2`` are the ``EPISODES_PER_POLICY``
-    episodes of policy ``p`` (that is the tiling ``prepare_forward(samples=...)``
-    declares).  One trace only: ``transform``/``prepare_forward`` are trace-time
-    operations and cannot be called outside a build.
-
-    Args:
-        algo: a TensorNEAT ``NEAT`` algorithm instance.
-        config: the tensor-free ``pipe._static_config(state)`` captured at build time.
-        pop_arrays: the four genome payload arrays (``state.pop`` as numpy).
-        rows (int): ``NP * EPISODES_PER_POLICY``.
-        backend (str): ``evoxc`` backend name.
-        device (str | evoxc.Device | None): ``evoxc`` device.
-
-    Returns:
-        evoxc.Executable: bound executable; ``run_policy`` stages its operands.
-    """
-    n_policies = int(algo.pop_size)
-    rows = _positive_int(rows, "rows")
-    if rows != n_policies * EPISODES_PER_POLICY:
-        raise ValueError(
-            f"rows must be pop_size * EPISODES_PER_POLICY = {n_policies * EPISODES_PER_POLICY}, got {rows}"
-        )
-    resolved_backend, resolved_device = resolve_backend_device(backend, device)
-    specs = [
-        *_pop_specs(pop_arrays),
-        evoxc.TensorSpec((rows, NUM_OBS), evoxc.float32, name="obs"),
-    ]
-
-    def kernel(node_keys, node_attrs, conn_keys, conn_attrs, obs):
-        payload = GenomeTensors(node_keys, node_attrs, conn_keys, conn_attrs)
-        transformed = algo.transform(config, payload)
-        prepared = algo.prepare_forward(config, transformed, payload, samples=EPISODES_PER_POLICY)
-        return algo.forward_prepared(config, transformed, prepared, obs)
-
-    executable = evoxc.build(kernel, *specs, backend=resolved_backend, device=resolved_device)
-    return _attach(
-        executable,
-        graph="policy",
-        rows=rows,
-        n_policies=n_policies,
-        samples=EPISODES_PER_POLICY,
-        pop_shapes=tuple(_host(array).shape for array in pop_arrays),
-        device_name=_device_name(resolved_device),
-    )
-
-
-def run_policy(executable, pop_arrays, obs):
-    """Run the policy graph; returns raw (unclipped) actions ``(rows, 12)`` float32."""
-    arrays = tuple(_host(array) for array in pop_arrays)
-    if len(arrays) != 4:
-        raise ValueError(f"pop_arrays must hold the 4 GenomeTensors payloads, got {len(arrays)}")
-    rows = _rows_of(executable)
-    for array, shape in zip(arrays, executable.pop_shapes):
-        if array.shape != shape:
-            raise ValueError(f"pop_arrays leaf must keep the built shape {shape}, got {array.shape}")
-    outputs = evoxc.run(
-        executable,
-        *[_to_device_array(executable, np.ascontiguousarray(array)) for array in arrays],
-        _to_device_array(executable, _staged(executable, "obs", obs, NUM_OBS)),
     )
     return _to_numpy(_outputs(outputs)[0])
 
@@ -764,244 +620,41 @@ def run_advance(
     }
 
 
-# --- Fitness ------------------------------------------------------------------------
+# --- Policy (the Go2 widths around the shared graph) --------------------------------
 
 
-@evoxc.defn
-def go2_neat_fitness(returns, n_policies, episodes_per_policy):
-    """Episode returns ``(NP * episodes_per_policy,)`` -> fitness ``(NP,)`` float32."""
-    return evoxc.reduce_mean(
-        evoxc.reshape(returns, (n_policies, episodes_per_policy)),
-        axes=1,
-    )
+def build_policy(algo, config, pop_arrays, rows, *, backend="numpy", device=None):
+    """Compile the genome-payload -> action graph for the Go2 task, 45 observations -> 12 actions.
 
-
-def build_fitness(n_policies, *, episodes_per_policy=EPISODES_PER_POLICY, backend="numpy", device=None):
-    """Compile the fitness aggregation graph (mean of one policy's episode returns).
-
-    Args:
-        n_policies (int): Population size (``algo.pop_size``).
-        episodes_per_policy (int): Episodes per policy, ``EPISODES_PER_POLICY``.
-        backend (str): ``evoxc`` backend name.
-        device (str | evoxc.Device | None): ``evoxc`` device.
-
-    Returns:
-        evoxc.Executable: bound executable; ``run_fitness`` stages its operand.
-    """
-    n_policies = _positive_int(n_policies, "n_policies")
-    episodes_per_policy = _positive_int(episodes_per_policy, "episodes_per_policy")
-    resolved_backend, resolved_device = resolve_backend_device(backend, device)
-    rows = n_policies * episodes_per_policy
-    executable = evoxc.build(
-        go2_neat_fitness,
-        evoxc.TensorSpec((rows,), evoxc.float32, name="returns"),
-        n_policies,
-        episodes_per_policy,
-        backend=resolved_backend,
-        device=resolved_device,
-    )
-    return _attach(
-        executable,
-        graph="fitness",
-        rows=rows,
-        n_policies=n_policies,
-        episodes_per_policy=episodes_per_policy,
-        device_name=_device_name(resolved_device),
-    )
-
-
-def run_fitness(executable, returns):
-    """Run the fitness graph; ``returns`` is ``(NP * episodes, )``, result ``(NP,)``."""
-    outputs = evoxc.run(
-        executable,
-        _to_device_array(executable, _staged(executable, "returns", returns)),
-        executable.n_policies,
-        executable.episodes_per_policy,
-    )
-    return np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)
-
-
-# --- Tell (one generation transition) -----------------------------------------------
-
-
-def _species_specs(species_leaves) -> list:
-    """``TensorSpec`` list for the ``SpeciesState`` leaves, in leaf order."""
-    n_fields = len(SpeciesState.__dataclass_fields__)
-    leaves = tuple(species_leaves)
-    if len(leaves) != n_fields:
-        raise ValueError(f"species_leaves must hold the {n_fields} SpeciesState leaves, got {len(leaves)}")
-    return [_spec_for(leaf, f"species_{index}") for index, leaf in enumerate(leaves)]
-
-
-def build_tell(algo, config, pop_arrays, species_leaves, n_policies, *, backend="numpy", device=None, plugin_path=None):
-    """Compile the TensorNEAT ``tell`` graph: payload + fitness -> next generation.
-
-    The graph returns the flat list ``[randkey, generation, *pop, *species]``; the
-    ``SpeciesState`` pytree layout is captured during the trace and stored on the
-    executable, so ``run_tell`` can rebuild it without a ``state`` argument.
+    The graph is the shared one of ``examples/neuroevolution/policy_graphs.py``; this adapter
+    exists because the widths are a property of the task and the callers of this module (the env
+    and the graph tests) build it without naming ``num_inputs`` / ``num_outputs``.
 
     Args:
         algo: a TensorNEAT ``NEAT`` algorithm instance.
-        config: the tensor-free ``pipe._static_config(state)`` (must not already
-            register ``pop``/``generation``/``species``/``randkey``).
+        config: the tensor-free ``pipe._static_config(state)`` captured at build time.
         pop_arrays: the four genome payload arrays (``state.pop`` as numpy).
-        species_leaves: ``evoxc.tree_leaves(state.species)`` as numpy.
-        n_policies (int): Population size, the fitness vector length.
+        rows (int): ``NP * EPISODES_PER_POLICY``; the rows are policy-major.
         backend (str): ``evoxc`` backend name.
         device (str | evoxc.Device | None): ``evoxc`` device.
-        plugin_path (str | os.PathLike | None): XLA/PJRT plugin shared object; only used by
-            the ``xla`` backend.  ``None`` leaves evoxc's own discovery in charge
-            (``EVOXC_PJRT_PLUGIN`` or the installed ``jax_plugins/*/*.so``).
 
     Returns:
-        evoxc.Executable: bound executable; ``run_tell`` stages its operands.
+        evoxc.Executable: bound executable; ``run_policy`` stages its operands.
     """
-    n_policies = _positive_int(n_policies, "n_policies")
-    if n_policies != int(algo.pop_size):
-        raise ValueError(f"n_policies must be algo.pop_size = {int(algo.pop_size)}, got {n_policies}")
-    resolved_backend, resolved_device = resolve_backend_device(backend, device)
-    n_leaves = len(SpeciesState.__dataclass_fields__)
-    specs = [
-        evoxc.TensorSpec((), evoxc.int64, name="randkey"),
-        *_pop_specs(pop_arrays),
-        evoxc.TensorSpec((), evoxc.float32, name="generation"),
-        evoxc.TensorSpec((n_policies,), evoxc.float32, name="fitness"),
-        *_species_specs(species_leaves),
-    ]
-    captured = []
-
-    def kernel(randkey, node_keys, node_attrs, conn_keys, conn_attrs, generation, fitness, *species_values):
-        species_tree = evoxc.tree_structure(SpeciesState(*species_values))
-        if not captured:
-            captured.append(species_tree)
-        payload = GenomeTensors(node_keys, node_attrs, conn_keys, conn_attrs)
-        species = evoxc.tree_unflatten(list(species_values), species_tree)
-        current = config.register(pop=payload, generation=generation, species=species, randkey=randkey)
-        nxt = algo.tell(current, fitness)
-        next_species = evoxc.tree_leaves(nxt.species)
-        if len(next_species) != n_leaves:
-            raise ValueError(
-                f"algorithm.tell changed the species pytree: {n_leaves} leaves in, {len(next_species)} out"
-            )
-        return [nxt.randkey, nxt.generation, *nxt.pop, *next_species]
-
-    options = {}
-    if resolved_backend == "iree" and resolved_device.kind == "cuda":
-        # IREE 3.13's default CUDA reduction distribution rejects the tell graph.
-        options["iree_compile_args"] = ["--iree-codegen-llvmgpu-use-reduction-vector-distribution=false"]
-    if resolved_backend == "xla" and plugin_path is not None:
-        options["plugin_path"] = str(plugin_path)
-    executable = evoxc.build(kernel, *specs, backend=resolved_backend, device=resolved_device, **options)
-    return _attach(
-        executable,
-        graph="tell",
-        rows=n_policies,
-        n_policies=n_policies,
-        species_tree=captured[-1] if captured else None,
-        species_leaf_count=n_leaves,
-        pop_shapes=tuple(_host(array).shape for array in pop_arrays),
-        device_name=_device_name(resolved_device),
+    return _shared_build_policy(
+        algo,
+        config,
+        pop_arrays,
+        rows,
+        num_inputs=NUM_OBS,
+        num_outputs=NUM_ACTIONS,
+        episodes=EPISODES_PER_POLICY,
+        backend=backend,
+        device=device,
     )
 
 
-def run_tell(executable, *, randkey, pop_arrays, generation, fitness, species_leaves):
-    """Run the tell graph; returns the next ``randkey``/``generation``/``pop``/``species``.
-
-    Args:
-        executable: the bound graph from ``build_tell``.
-        randkey (array-like): 0-d int64 RNG key.
-        pop_arrays: the four genome payload arrays (same shapes as at build time).
-        generation (array-like): 0-d float32 generation counter.
-        fitness (array-like): ``(NP,)`` float32, maximized.
-        species_leaves: the ``SpeciesState`` leaves (same layout as at build time).
-
-    Returns:
-        dict: ``randkey`` (0-d int64), ``generation`` (0-d float32), ``pop`` (tuple of
-        the four payload arrays) and ``species`` (rebuilt ``SpeciesState``).
-    """
-    arrays = tuple(_host(array) for array in pop_arrays)
-    if len(arrays) != 4:
-        raise ValueError(f"pop_arrays must hold the 4 GenomeTensors payloads, got {len(arrays)}")
-    leaves = tuple(_host(leaf) for leaf in species_leaves)
-    if len(leaves) != executable.species_leaf_count:
-        raise ValueError(
-            f"species_leaves must hold {executable.species_leaf_count} leaves, got {len(leaves)}"
-        )
-    for array, shape in zip(arrays, executable.pop_shapes):
-        if array.shape != shape:
-            raise ValueError(f"pop_arrays leaf must keep the built shape {shape}, got {array.shape}")
-    n_policies = int(executable.n_policies)
-    key = _host(randkey).astype(np.int64, copy=False)
-    if key.shape != ():
-        raise ValueError(f"randkey must be a 0-d int64 key, got shape {key.shape}")
-    gen = _host(generation).astype(np.float32, copy=False)
-    if gen.shape != ():
-        raise ValueError(f"generation must be a 0-d float32 counter, got shape {gen.shape}")
-    fit = _host(fitness).astype(np.float32, copy=False)
-    if fit.shape != (n_policies,):
-        raise ValueError(f"fitness must have shape ({n_policies},), got {fit.shape}")
-    outputs = evoxc.run(
-        executable,
-        _to_device_array(executable, key),
-        *[_to_device_array(executable, np.ascontiguousarray(array)) for array in arrays],
-        _to_device_array(executable, gen),
-        _to_device_array(executable, np.ascontiguousarray(fit)),
-        *[_to_device_array(executable, _contiguous(leaf)) for leaf in leaves],
-    )
-    n_leaves = int(executable.species_leaf_count)
-    flat = _outputs(outputs)
-    next_pop = tuple(_to_numpy(flat[2 + index]) for index in range(4))
-    next_species = [_to_numpy(flat[6 + index]) for index in range(n_leaves)]
-    return {
-        "randkey": _to_numpy(flat[0]),
-        "generation": _to_numpy(flat[1]),
-        "pop": next_pop,
-        "species": evoxc.tree_unflatten(next_species, executable.species_tree),
-    }
-
-
-# --- Executable cache ---------------------------------------------------------------
-
-
-class ExecutableCache:
-    """Shape-keyed cache of bound executables, so a generation only builds once.
-
-    Keys are hashable tuples of the static dimensions that specialize a graph --
-    graph kind, row count, ``max_episode_length``, resolved backend, resolved device
-    name, thresholds -- e.g. ``("advance", rows, max_episode_length, backend, device_name)``.
-    Same key -> same executable; the next generation of the same shape hits the cache.
-    A hit/miss debug line is logged per call.
-    """
-
-    def __init__(self):
-        self._executables = {}
-        self.hits = 0
-        self.misses = 0
-
-    def get(self, key, builder):
-        """Return the executable for ``key``, building it with ``builder()`` on a miss.
-
-        Args:
-            key: hashable tuple of static dimensions.
-            builder: zero-argument callable returning a bound executable.
-
-        Returns:
-            evoxc.Executable: the cached (or freshly built) executable.
-        """
-        key = tuple(key)
-        cached = self._executables.get(key)
-        if cached is not None:
-            self.hits += 1
-            logger.debug("executable cache hit: %s", key)
-            return cached
-        self.misses += 1
-        logger.debug("executable cache miss: %s", key)
-        executable = builder()
-        self._executables[key] = executable
-        return executable
-
-    def clear(self):
-        """Drop every cached executable and reset the hit/miss counters."""
-        self._executables.clear()
-        self.hits = 0
-        self.misses = 0
+# --- Fitness, tell and cache (shared layer) -----------------------------------------
+# ``build_fitness`` / ``run_fitness`` / ``build_tell`` / ``run_tell`` / ``ExecutableCache`` are
+# imported from ``examples/neuroevolution`` at the top of this module and re-exported unchanged:
+# this module stays the single import surface the env and the trainer build against.
