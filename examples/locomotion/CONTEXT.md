@@ -13,6 +13,8 @@ Provides a vectorized training environment, rsl-rl PPO training/eval entry point
 - `go2_train.py` → PPO training entry point via `rsl_rl.runners.OnPolicyRunner`; default 4096 parallel envs on GPU, logs to `logs/<exp_name>/` (pickles `cfgs.pkl`, saves `model_<iter>.pt`).
 - `go2_eval.py` → loads a trained checkpoint (`logs/<exp_name>/model_<ckpt>.pt`) and runs the inference policy in a single viewer env on CPU; clears reward scales before building the env.
 - `go2_backflip.py` → defines `BackflipEnv(Go2Env)` (60-dim phase-augmented observation, no commands/rewards) and plays `single.pt`/`double.pt` checkpoints from `backflip/`.
+- `go2_evox_kernels.py` → EvoX Compiler (`evoxc`) tensor graphs for the scripted-trot gait (`GAIT`) and Go2 Walking reward (`REWARD`), built once via `build_gait`/`build_reward` and stepped via `run_gait`/`run_reward`; pure evoxc, no torch or genesis. `resolve_backend_device` honors explicit args plus `EVOXC_BACKEND`/`EVOXC_DEVICE` (default numpy/cpu).
+- `go2_legacy_reference.py` → the pre-migration `try1.py` math transcribed into pure functions (`gait_step`, `walking_reward_terms`); the parity oracle for the evoxc port, with no `genesis` import (numpy gait, torch reward).
 
 ## Constraints
 - Scripts are plain modules, not a package; run from the repo root, e.g. `python examples/locomotion/go2_train.py`.
