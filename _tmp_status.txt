@@ -1,0 +1,14 @@
+﻿0c6eb9c5 Merge the TensorNEAT walking graphs and stop tracking the scratch directory.
+fad2ecc2 Agent: auto-commit fallback
+?? .scratch/
+?? _tmp_status.txt
+go2_backflip.py
+go2_env.py
+go2_eval.py
+go2_evox_kernels.py
+go2_legacy_reference.py
+go2_neat_kernels.py
+go2_train.py
+try1.py
+_spike_ops.py
+_spike_tn.py

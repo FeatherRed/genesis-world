@@ -1,0 +1,38 @@
+﻿git : warning: unable to rmdir '.scratch/tensorneat': Directory not empty
+At line:1 char:63
++ ... ing]::UTF8; git merge --no-commit --no-ff fad2ecc26ba420dfebea6e2af31 ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (warning: unable...ctory not empty:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+Auto-merging .scratch/grep1.txt
+CONFLICT (add/add): Merge conflict in .scratch/grep1.txt
+Auto-merging .scratch/ls.txt
+CONFLICT (add/add): Merge conflict in .scratch/ls.txt
+Automatic merge failed; fix conflicts and then commit the result.
+D  .scratch/a.txt
+D  .scratch/actfn.txt
+D  .scratch/cfg1.txt
+D  .scratch/ctxlist.txt
+D  .scratch/evoxc_api.txt
+D  .scratch/evoxc_dir.txt
+D  .scratch/evoxc_sig.txt
+D  .scratch/genome_defs.txt
+D  .scratch/geom1.txt
+D  .scratch/geom2.txt
+D  .scratch/geom3.txt
+D  .scratch/grep1.txt
+D  .scratch/hits.txt
+D  .scratch/ls.txt
+D  .scratch/neat_defs.txt
+D  .scratch/ops2.txt
+D  .scratch/ops_out.txt
+D  .scratch/payload_defs.txt
+D  .scratch/pipe_defs.txt
+D  .scratch/root.txt
+D  .scratch/spike_out.txt
+D  .scratch/tensorneat
+D  .scratch/tree.txt
+M  examples/locomotion/CONTEXT.md
+A  examples/locomotion/go2_neat_kernels.py
+?? .scratch/

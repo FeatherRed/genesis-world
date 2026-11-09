@@ -1,0 +1,18 @@
+﻿fad2ecc2 Agent: auto-commit fallback
+a8b46ffe Update CONTEXT.md for ./examples/locomotion
+12763d84 Stop tracking the scratch directory.
+07e17f02 Update CONTEXT.md for ./examples/locomotion
+1d9b8c77 Agent: auto-commit fallback
+894645e0 Fix the roll termination predicate to compare against the unprojected roll cosine.
+8ddaf079 Merge commit '49618bda463a1994b7dfcb230b40001fe34fcc1c' into evogit-agent-T1-A3
+49618bda Agent: auto-commit fallback
+7c7aa335 Keep 0-d payload leaves 0-d when staging tell operands.
+ab25db3b Add the compiled Go2 walking graphs the TensorNEAT trainer needs.
+e2bb28af Agent: auto-commit fallback
+HEAD tracked scratch: 23
+THEIRS tracked scratch: 100
+ examples/locomotion/CONTEXT.md          |  19 +
+ examples/locomotion/_spike_ops.py       |  12 -
+ examples/locomotion/_spike_tn.py        | 123 ----
+ examples/locomotion/go2_neat_kernels.py | 996 ++++++++++++++++++++++++++++++++
+ 4 files changed, 1015 insertions(+), 135 deletions(-)
