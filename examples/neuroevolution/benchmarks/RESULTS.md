@@ -92,18 +92,18 @@ What installing `tensordict` would add: `go2_env` / `hover_env` would import (th
 
 ### T4 CPU NumPy-residency environment throughput (timed generations 1-3, horizon 200)
 
-Generation 0 is excluded everywhere (first-step JIT, empty caches). `residual` is the unmeasured share of the generation wall clock.
+Generation 0 is excluded everywhere (first-step JIT, empty caches). `generation wall s` is the per timed generation wall clock, median ± spread over generations 1-3. `residual` is the unmeasured share of the generation wall clock.
 
 | task | pop | rows | process | repeat | steps/s (median ± spread) | env-steps/s | generation wall s | first gen s | residual | record |
 |---|---|---|---|---|---|---|---|---|---|---|
-| go2 | 32 | 96 | cold | 0 | 87.638 ± 2.192 | 8413.230 ± 210.432 | n/a | 2.545 | 0.64% | env_go2_throughput_numpy_cpu_pop32 |
-| go2 | 32 | 96 | warm | 1 | 85.312 ± 1.112 | 8189.995 ± 106.751 | n/a | 2.619 | 0.62% | env_go2_throughput_numpy_cpu_pop32_r1 |
-| go2 | 8 | 24 | cold | 0 | 177.785 ± 1.819 | 4266.832 ± 43.667 | n/a | 1.387 | 1.19% | env_go2_throughput_numpy_cpu_pop8 |
-| go2 | 8 | 24 | warm | 1 | 176.062 ± 1.437 | 4225.481 ± 34.485 | n/a | 1.384 | 1.20% | env_go2_throughput_numpy_cpu_pop8_r1 |
-| hover | 32 | 96 | cold | 0 | 151.953 ± 1.349 | 14587.456 ± 129.531 | n/a | 1.393 | 2.42% | env_hover_throughput_numpy_cpu_pop32 |
-| hover | 32 | 96 | warm | 1 | 154.621 ± 1.100 | 14843.653 ± 105.620 | n/a | 1.358 | 2.41% | env_hover_throughput_numpy_cpu_pop32_r1 |
-| hover | 8 | 24 | cold | 0 | 234.457 ± 4.308 | 5626.976 ± 103.404 | n/a | 0.893 | 2.11% | env_hover_throughput_numpy_cpu_pop8 |
-| hover | 8 | 24 | warm | 1 | 237.065 ± 0.532 | 5689.569 ± 12.763 | n/a | 1.008 | 2.16% | env_hover_throughput_numpy_cpu_pop8_r1 |
+| go2 | 32 | 96 | cold | 0 | 87.638 ± 2.192 | 8413.230 ± 210.432 | 2.282 ± 0.057 | 2.545 | 0.64% | env_go2_throughput_numpy_cpu_pop32 |
+| go2 | 32 | 96 | warm | 1 | 85.312 ± 1.112 | 8189.995 ± 106.751 | 2.344 ± 0.030 | 2.619 | 0.62% | env_go2_throughput_numpy_cpu_pop32_r1 |
+| go2 | 8 | 24 | cold | 0 | 177.785 ± 1.819 | 4266.832 ± 43.667 | 1.125 ± 0.011 | 1.387 | 1.19% | env_go2_throughput_numpy_cpu_pop8 |
+| go2 | 8 | 24 | warm | 1 | 176.062 ± 1.437 | 4225.481 ± 34.485 | 1.136 ± 0.009 | 1.384 | 1.20% | env_go2_throughput_numpy_cpu_pop8_r1 |
+| hover | 32 | 96 | cold | 0 | 151.953 ± 1.349 | 14587.456 ± 129.531 | 1.316 ± 0.012 | 1.393 | 2.42% | env_hover_throughput_numpy_cpu_pop32 |
+| hover | 32 | 96 | warm | 1 | 154.621 ± 1.100 | 14843.653 ± 105.620 | 1.293 ± 0.009 | 1.358 | 2.41% | env_hover_throughput_numpy_cpu_pop32_r1 |
+| hover | 8 | 24 | cold | 0 | 234.457 ± 4.308 | 5626.976 ± 103.404 | 0.853 ± 0.016 | 0.893 | 2.11% | env_hover_throughput_numpy_cpu_pop8 |
+| hover | 8 | 24 | warm | 1 | 237.065 ± 0.532 | 5689.569 ± 12.763 | 0.844 ± 0.002 | 1.008 | 2.16% | env_hover_throughput_numpy_cpu_pop8_r1 |
 
 Sources: `env_go2_throughput_numpy_cpu_pop32.json`, `env_go2_throughput_numpy_cpu_pop32_r1.json`, `env_go2_throughput_numpy_cpu_pop8.json`, `env_go2_throughput_numpy_cpu_pop8_r1.json`, `env_hover_throughput_numpy_cpu_pop32.json`, `env_hover_throughput_numpy_cpu_pop32_r1.json`, `env_hover_throughput_numpy_cpu_pop8.json`, `env_hover_throughput_numpy_cpu_pop8_r1.json`
 

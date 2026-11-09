@@ -263,7 +263,7 @@ def _stats_view(block):
 def _throughput_block(block):
     """One throughput block: the two rates and the wall time as medians, plus the workload it covers."""
     block = block or {}
-    view = {key: _stats_view(block.get(key)) for key in ("steps_per_s", "env_steps_per_s")}
+    view = {key: _stats_view(block.get(key)) for key in ("steps_per_s", "env_steps_per_s", "wall_time_s")}
     view.update({key: block.get(key) for key in ("rows", "steps_total", "timed_generations")})
     return view
 

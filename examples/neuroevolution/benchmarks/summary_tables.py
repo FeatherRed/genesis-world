@@ -229,7 +229,7 @@ def _throughput_tables(summary):
             ["task", "pop", "rows", "process", "repeat", "steps/s (median ± spread)", "env-steps/s", "generation wall s", "first gen s", "residual", "record"],
             rows,
             [entry["record"] for entry in entries],
-            note="Generation 0 is excluded everywhere (first-step JIT, empty caches). `residual` is the unmeasured share of the generation wall clock.",
+            note="Generation 0 is excluded everywhere (first-step JIT, empty caches). `generation wall s` is the per timed generation wall clock, median ± spread over generations 1-3. `residual` is the unmeasured share of the generation wall clock.",
         )
     ]
     columns = ["task", "pop", "record"] + list(CHUNK_COLUMNS) + ["other", "residual"]
