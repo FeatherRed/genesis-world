@@ -15,6 +15,11 @@ Three things this script is for, all of them cheap enough for the example smoke 
   reset state of a live scene, the policy's policy-major row tiling, and prints a deterministic
   episode fingerprint (``fingerprint<TAB>...``) that two independent process invocations must
   reproduce byte for byte.
+* **``--imports``** statically proves that the migrated stack stays free of ``torch``: an AST
+  scan of ``hover_kernels.py``, ``hover_neat_env.py``, ``hover_neat_train.py`` (skipped with a
+  note while it does not exist yet) and the six modules of the shared
+  ``examples/neuroevolution`` layer.  ``hover_device_rollout.py``, once it exists, exports to
+  Genesis through ``torch.from_dlpack`` and is therefore deliberately outside that list.
 
 The graph-vs-oracle part needs no simulator, so it prints before the scene is built.  The exit
 code is 0 when every number is within its tolerance, 1 otherwise (the tolerances are the
@@ -24,6 +29,8 @@ targets of the migration: ~1e-5 per reward term, ~1e-6 on the observation, exact
 from __future__ import annotations
 
 import argparse
+import ast
+import os
 import sys
 
 import numpy as np
@@ -82,6 +89,9 @@ def _parse_args(argv=None):
         "-g", "--gpu", action="store_true", help="initialize Genesis on the GPU and default the graphs to iree@rocm:0"
     )
     parser.add_argument("--parity", action="store_true", help="replay the fixed oracle trace instead of scoring")
+    parser.add_argument(
+        "--imports", action="store_true", help="AST-scan the migrated stack for `import torch` and exit"
+    )
     parser.add_argument("--quiet", action="store_true", help="print only the summary lines")
     return parser.parse_args(argv)
 
@@ -300,8 +310,9 @@ def _graph_parity(backend, device):
 
 def _scene_parity(args, backend, device):
     """Compare the reset observation with a live scene's, check the policy tiling, fingerprint."""
-    from hover_kernels import NUM_ACTIONS, NUM_OBS, build_obs, run_obs, run_policy
+    from hover_kernels import NUM_ACTIONS, NUM_OBS, build_obs, run_obs
     from hover_neat_env import HoverNeatEnv
+    from policy_graphs import run_policy
 
     env = HoverNeatEnv(
         args.pop_size,
@@ -372,6 +383,62 @@ def run_parity(args):
     return 0 if not failed else 1
 
 
+# --- Torch-free import scan ---------------------------------------------------------
+
+#: ``examples/`` root, so the printed module labels stay relative to the example tree.
+_EXAMPLES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+#: Drone modules of the migrated stack; ``hover_neat_train.py`` may not exist yet.
+_HOVER_MODULES = ("hover_kernels.py", "hover_neat_env.py", "hover_neat_train.py")
+#: The shared layer's modules, which are torch-free by contract (see its CONTEXT.md).
+_SHARED_MODULES = (
+    "seeding.py",
+    "env_base.py",
+    "evox_runtime.py",
+    "evolution_graphs.py",
+    "policy_graphs.py",
+    "trainer.py",
+)
+
+
+def _torch_free_paths():
+    """The ``(label, path)`` pairs the import scan covers, in report order."""
+    paths = [(name, os.path.join(_EXAMPLES_DIR, "drone", name)) for name in _HOVER_MODULES]
+    paths += [
+        (os.path.join("neuroevolution", name), os.path.join(_EXAMPLES_DIR, "neuroevolution", name))
+        for name in _SHARED_MODULES
+    ]
+    return paths
+
+
+def _imports_torch(path):
+    """Whether ``path`` imports torch, in any form (``import torch``, ``from torch.x import y``)."""
+    with open(path, encoding="utf-8") as source:
+        tree = ast.parse(source.read(), filename=path)
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            if any(alias.name == "torch" or alias.name.startswith("torch.") for alias in node.names):
+                return True
+        elif isinstance(node, ast.ImportFrom):
+            # A relative import (``level > 0``) can never reach the installed torch package.
+            if node.level == 0 and node.module and (node.module == "torch" or node.module.startswith("torch.")):
+                return True
+    return False
+
+
+def run_imports():
+    """Print one ``module<TAB>torch_free|torch_import`` line per file; returns the exit code."""
+    failed = False
+    for label, path in _torch_free_paths():
+        if not os.path.exists(path):
+            print(f"# skipped\t{label}\tdoes not exist yet")
+            continue
+        imported = _imports_torch(path)
+        failed = failed or imported
+        print(f"{label}\t{'torch_import' if imported else 'torch_free'}")
+    print(f"imports_ok\t{int(not failed)}")
+    return 0 if not failed else 1
+
+
 # --- Default mode: score the trace population ---------------------------------------
 
 
@@ -428,6 +495,8 @@ def run_default(args):
 
 def main(argv=None):
     args = _parse_args(argv)
+    if args.imports:
+        return run_imports()
     return run_parity(args) if args.parity else run_default(args)
 
 

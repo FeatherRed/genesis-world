@@ -13,9 +13,9 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - `hover_train.py` — PPO training via `rsl_rl.runners.OnPolicyRunner` on the GPU backend; the reference baseline, not migrated.
 - `hover_eval.py` — loads a saved checkpoint, runs one inference rollout, optionally records to `out/hover.mp4`.
 - `hover_legacy_reference.py` — the parity oracle: the pre-migration maths of `hover_env.py` as pure NumPy functions (`quat_to_xyz` incl. the gimbal-lock branch, `inv_quat`/`quat_mul`/`transform_quat_by_quat`/`transform_by_quat`, `propeller_rpm`, `body_frame_velocities`, `observation`, `reset_observation`, `reward_terms`, `crash_mask`, `timeout_mask`, `resample_commands`, `step_maths`); imports neither genesis, torch, tensordict nor evoxc.
-- `hover_kernels.py` — pure `evoxc` graphs plus the batched build/run helpers and the two seeding helpers; imports neither torch nor genesis.
+- `hover_kernels.py` — pure `evoxc` task graphs (controls, obs, reset obs, advance) on top of the shared `examples/neuroevolution` runtime helpers; imports neither torch nor genesis.
 - `hover_neat_env.py` — `HoverNeatEnv`, the batched seeded evaluation environment implementing the shared neuroevolution-env contract (`rows`, `episodes_per_policy`, `max_episode_length`, `evaluate(pop_arrays, generation)`, `close()`).
-- `hover_neat_check.py` — smoke/parity CLI for the migrated stack; also the collected example smoke for it.
+- `hover_neat_check.py` — smoke/parity/`--imports` CLI for the migrated stack; also the collected example smoke for it.
 - `README.md` — run commands, control mappings, and installation notes.
 
 # HoverEnv Internals
@@ -35,12 +35,12 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - Constants mirror `hover_train.get_cfgs()`: `NUM_OBS=17`, `NUM_ACTIONS=4`, `NUM_COMMANDS=3`, `DT=0.01`, `EPISODES_PER_POLICY=3`, `MAX_EPISODE_LENGTH=1500`, `CLIP_ACTIONS=1.0`, `HOVER_RPM=14468.429183500699`, `ACTION_GAIN=0.8`, `AT_TARGET_THRESHOLD=0.1`, `OBS_SCALES`, `REWARD_SCALES` (pre-`dt`), `REWARD_TERM_NAMES`, `YAW_LAMBDA=-10`, `TERMINATION`, `BASE_INIT_POS`, `BASE_INIT_QUAT`, `QUAT_EPS=1.1920928955078125e-07` (the float32 `gs.EPS`), `END_REASONS`.
 - `hover_controls` / `build_controls(rows)` / `run_controls` — runtime raw `actions (rows,4)` -> clipped actions and `rpm (rows,4)`; separate from `hover_advance` because the RPM must be written before `scene.step()` while every other quantity is computed after it.
 - `hover_obs` / `build_obs` / `run_obs` — `commands`, `base_pos`, absolute `base_quat`, world-frame lin/ang velocity, `last_actions` -> `(rows,17)` observation; the body-frame rotation is `_rotate_rows(v, _inv_quat_rows(base_quat))` on the raw, unnormalized quaternion.
-- `hover_reset_obs` / `build_reset_obs` / `run_reset_obs` — `commands` -> the analytic post-reset observation, with no `scene.step()`.
-- `hover_advance` / `build_advance(rows, max_episode_length)` / `run_advance` — one post-step graph: episode counter, `rel_pos`/`last_rel_pos`, body velocities, yaw in degrees, `at_target`, next `commands`, the five `dt`-scaled reward terms, `crash`/`timeout`/`done`, next `obs`, `returns` and `alive`.
-- `hover_fitness` / `build_fitness(pop_size)` / `run_fitness` — per-episode returns -> per-policy fitness (mean of the three episodes).
-- `build_policy`/`run_policy` — width-generic TensorNEAT genome forward graph (17 -> 4), traced once from a `Pipeline` and reused every step.
-- `generation_seed_table(master_seed, num_generations)` and `evolution_seed(master_seed)` — the same seeding rules as the Go2 pilot: `SeedSequence(master_seed).spawn(2)` splits an independent evolution stream from the env stream, and each generation owns one ordered seed triple shared by every policy.
-- Static specializations: scales, thresholds, `dt`, init pose, `max_episode_length` and row count are baked into each graph; only the genuinely per-step values appear in a `run_*` signature.
+- `hover_reset_obs` / `build_reset_obs(rows)` / `run_reset_obs(executable, *, commands, base_init_pos, base_init_quat)` — `commands` plus the per-row init pose (`(rows,3)` / `(rows,4)`, runtime operands, so a perturbed reset is supported) -> the analytic post-reset observation, with no `scene.step()`.
+- `hover_advance` / `build_advance(rows, max_episode_length)` / `run_advance` — one post-step graph: episode counter, `rel_pos`/`last_rel_pos`, body velocities, yaw in degrees, `at_target`, next `commands`, the five `dt`-scaled reward terms, `crash`/`timeout`/`done`, next `obs`, `returns`, `alive`, the latched `end_code` (int8) and the consumed `base_pos` (`(rows,3)` float32 snapshot).
+- `run_advance` takes `end_code` (`(rows,)` int8, the last entry of `_ADVANCE_OPERANDS`, default all-unfinished) and latches the first ending as error > timeout > crash, exactly like the host-side `HoverNeatEnv._classify_endings`.
+- Fitness, policy and seeding are no longer task graphs: `evolution_graphs.build_fitness`/`run_fitness`, `policy_graphs.build_policy`/`run_policy` (width-generic genome forward, 17 -> 4) and `seeding.generation_seed_table`/`evolution_seed`/`EPISODES_PER_POLICY` are imported from `examples/neuroevolution`.
+- The module reaches that shared layer through a documented, idempotent `sys.path` shim (`_SHARED` = sibling `neuroevolution` directory); it no longer imports anything from `examples/locomotion`.
+- Static specializations: scales, thresholds, `dt`, `max_episode_length` and row count are baked into each graph; only the genuinely per-step values appear in a `run_*` signature, and the reset pose is a runtime operand.
 - `hover_advance` mirrors the baseline order, including that the target term uses the command resampled on arrival (against both `rel_pos` and `last_rel_pos`) and that the observation's last slot is the previous step's action.
 - Yaw is the `qd_atan2_fast` polynomial of `genesis/utils/geom.py` transcribed with `abs`/`min`/`max`/`sqrt`/`select` only (there is no `atan2` in `evoxc`), plus the `quat_to_xyz` gimbal-lock select; measured error is 1 float32 ulp (1.526e-05 deg near ±180°).
 - Dropped as unreachable, and documented as such: the roll/pitch 180° termination terms (roll ≤ 180°, pitch ≤ 90°) and `_reward_yaw`'s `yaw > 180` unwrap.
@@ -63,7 +63,8 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - Measured maxima (200 randomized plausible states plus a 200-step driven trace, `numpy`/`cpu:0`): `reward_target`, `reward_smooth`, `reward_angular`, `reward_crash` exactly 0; `reward_yaw` 1.673e-10; `reward_total` 3.576e-07; `returns` 5.960e-08; `observation`, `rpm`, `clipped_actions` exactly 0; `yaw_deg` 6.104e-05 deg; `crash`/`timeout`/`done`/`at_target`/`alive` masks exactly 0 difference.
 - `reset_obs_vs_obs` (analytic reset observation vs the observation from the same live reset state) is exactly 0, and `policy_row_identity` (rows `3p..3p+2` answering to policy `p`) is exactly 0.
 - Deterministic replay: `--parity --pop-size 2 --horizon 30` prints a `fingerprint` line; two independent processes give the identical line `seeds=1454269175,757617120,1421746521 returns=0.045082949,-0.005940037,-0.015909065,-0.062878124,-0.002508280,0.017566836 sum=-0.024585718`.
-- `hover_kernels.py` also self-checks standalone (`PYTHONPATH=$PWD python examples/drone/hover_kernels.py`): yaw 1.526e-05 deg max, obs 0, fixed-state reward 7.451e-09, randomized reward 1.490e-08, masks agree on 200 states.
+- `hover_kernels.py` also self-checks standalone (`PYTHONPATH=$PWD python examples/drone/hover_kernels.py`): yaw 1.526e-05 deg max, obs 0, fixed-state reward 7.451e-09, randomized reward 1.490e-08, masks agree on 200 states, the latched `end_code` matches a numpy replication of `_classify_endings`, the `base_pos` passthrough is the consumed position, and the reset observation follows the runtime init pose.
+- `PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py --imports` AST-scans `hover_kernels.py`, `hover_neat_env.py`, `hover_neat_train.py` (skipped while absent) and the six `examples/neuroevolution` modules, prints one `module<TAB>torch_free|torch_import` line each plus `imports_ok 1`; `hover_device_rollout.py` is deliberately excluded because it exports to Genesis via `torch.from_dlpack`.
 
 ## Reproduce
 - Smoke (defaults are small so the example harness stays fast): `PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py`.
@@ -82,7 +83,7 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - `interactive_drone.py`, `fly.py`, `fly_route.py`, and `hover_eval.py` run on `gs.cpu`; `hover_train.py` initializes `gs.gpu` and expects a GPU for its 8192 parallel environments.
 - `hover_env.py` simulates at `dt=0.01` (100 Hz) with rigid substeps at `dt/2` and Newton constraint solver.
 - `hover_env.py`, `hover_train.py` and `hover_eval.py` are the PPO/reference baseline and stay on torch + `tensordict`; the EvoX Compiler stack is additive and validated against them, not against a live import of them (the module cannot be imported where `tensordict` is absent, so `hover_legacy_reference.py` transcribes its maths).
-- `hover_kernels.py` must stay free of torch and genesis; every graph is one `evoxc.defn` with a `build_*` that bakes statics and a `run_*` that stages operands.
+- `hover_kernels.py` must stay free of torch and genesis; every graph is one `evoxc.defn` with a `build_*` that bakes statics and a `run_*` that stages operands, and the shared build/run helpers come from `examples/neuroevolution/evox_runtime.py`.
 - `hover_neat_env.py` must not import torch; only NumPy bookkeeping and the Genesis boundary are allowed outside the graphs.
 - `hover_train.py` and `hover_eval.py` enforce `rsl-rl-lib>=5.0.0` at import time and raise `ImportError` otherwise.
 - Scripts use the `gs.morphs.Drone` morph and expect the URDF/mesh assets to be resolvable relative to the repo root.
@@ -103,7 +104,7 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - PID gains in `fly_route.py` are "tuned such that the drone can fly, not optimized".
 - `hover_train.py` deletes any existing `logs/<exp-name>` directory before training.
 - `fly_route.py` and `hover_eval.py` write recordings under `out/`, which must exist or be creatable.
-- `go2_neat_kernels.build_policy` bakes the Go2 widths (45 obs, 12 actions) into its specs and raises `ShapeError: cannot broadcast incompatible dims 80 and 108` for a 17 -> 4 drone genome, which is why `hover_kernels.py` carries its own width-generic policy graph; extracting one shared policy graph is the follow-up, and the goal is not to grow a third copy.
+- The policy graph is the shared width-generic `policy_graphs.build_policy`/`run_policy`, so the env passes `num_inputs=NUM_OBS` / `num_outputs=NUM_ACTIONS` explicitly; `go2_neat_kernels.build_policy`'s baked Go2 widths no longer apply here.
 - The parity table's yaw tolerance is 5e-4 deg: the residual is the float32 minimax `atan2` plus the opposite quaternion-composition side (`quat_mul(inv(q_init), q)` vs `quat_mul(q, inv(q_init))`, identity here), while `reward_yaw` itself agrees to 1.7e-10.
 - One ROCm run aborted after generation 0 with `HSA_STATUS_ERROR_INVALID_PACKET_FORMAT` / `hipErrorLaunchFailure` (exit 134), a pre-existing HIP/XLA coexistence limit on that host; it did not reproduce in the validation runs and must be reported rather than papered over if it returns.
 - `hover_kernels.py` and `hover_legacy_reference.py` are helper modules, but `tests/test_examples.py`'s `IGNORE_SCRIPT_PATTERNS` does not list them (it does list the three Go2 helpers), so the harness executes their `__main__` self-checks; adding them there is a sibling edit for the parent node.
@@ -112,11 +113,11 @@ The torch/PPO path (`hover_env.py`, `hover_train.py`, `hover_eval.py`) stays unt
 - `tests/test_examples.py` (pytest `examples` marker) runs `interactive_drone.py`, `fly.py` and `fly_route.py`; `*_train.py`, `*_eval.py`, `*_env.py`, and `quadcopter_controller.py` are ignored by the example test filter.
 - `hover_neat_check.py` is collected by the same harness and therefore defaults to a small CPU run (`--pop-size 4 --generations 1 --horizon 20`, ~19 s including the genesis import) that exits 0 headless.
 - `hover_kernels.py` and `hover_legacy_reference.py` are collected too; both `__main__` blocks are fast self-checks (they need `evoxc` / nothing respectively).
-- Iteration loop for the migrated stack: `hover_kernels.py` self-check, then `hover_neat_check.py --parity` for the numerical gates, then the deterministic fingerprint twice in separate processes, then a full-length CPU run.
+- Iteration loop for the migrated stack: `hover_kernels.py` self-check, then `hover_neat_check.py --imports` for the torch-free proof, then `hover_neat_check.py --parity` for the numerical gates, then the deterministic fingerprint twice in separate processes, then a full-length CPU run.
 - RL scripts of the baseline are exercised manually, not by the example suite.
 
 # See Also
 - `urdf/drones/cf2x.urdf` — Crazyflie 2.X drone model asset used by all scripts here.
-- `../locomotion/go2_evox_kernels.py` — staging helpers (`resolve_backend_device`, `_constant`, `_to_device_array`, `_to_numpy`) imported by `hover_kernels.py` (sibling, read-only).
+- `../neuroevolution/` — the shared layer: `evox_runtime.py` (staging helpers, imported by `hover_kernels.py`), `seeding.py`/`policy_graphs.py`/`evolution_graphs.py` (imported by `hover_neat_env.py` and the self-check).
 - `../locomotion/go2_neat_kernels.py` — `ExecutableCache` and width-fixed policy graph imported by `hover_neat_env.py` (sibling, read-only).
 - `../` — sibling example groups and the shared `genesis` framework entry points.

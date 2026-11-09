@@ -4,19 +4,23 @@ This module owns every compiled graph the drone-hover *eval* environment asks fo
 the environment module stays thin: it reads the simulator, hands the measured state to
 a graph, and writes the policy targets (rotor RPMs) back.  Nothing here imports
 ``genesis`` or Torch, nothing here simulates, and nothing here trains; the module
-speaks ``numpy`` and ``evoxc`` (plus TensorNEAT, imported lazily by the policy builder
-that traces the genome).  The generic build/run helpers
-(``resolve_backend_device``, ``_constant``, ``_to_device_array``, ``_to_numpy``) are
-imported from the sibling Go2 example instead of being copied a third time.
+speaks ``numpy`` and ``evoxc``.  The generic build/run helpers
+(``resolve_backend_device``, ``_constant``, ``_staged``, ``_to_device_array``,
+``_to_numpy``, ...) are imported from the shared neuroevolution layer instead of being
+copied a third time.
 
 Graphs (each compiled once, then reused every step and every generation)
 -----------------------------------------------------------------------
 ``hover_controls``   raw actions -> ``(clipped actions, rotor RPMs)``.
 ``hover_obs``        measured base state -> the 17-dim policy observation row.
-``hover_reset_obs``  commands -> the analytic post-``reset()`` observation row.
+``hover_reset_obs``  commands + init pose -> the analytic post-``reset()`` observation row.
 ``hover_advance``    one environment step: geometry -> masks -> reward -> observation.
-``hover_fitness``    per-episode returns -> per-policy fitness (episode mean).
-``hover_policy``     genome payload + observations -> the raw actions of a generation.
+
+Seeding, fitness and the policy graph are **not** task graphs: they live in the shared
+layer (``examples/neuroevolution``) as ``seeding.generation_seed_table`` /
+``seeding.evolution_seed``, ``evolution_graphs.build_fitness`` / ``run_fitness`` and
+``policy_graphs.build_policy`` / ``run_policy``, and the environment module imports them
+from there.
 
 The baseline being migrated is ``examples/drone/hover_env.py`` (torch + genesis +
 tensordict), with its config in ``hover_train.get_cfgs()``; the parity oracle the graphs
@@ -28,7 +32,9 @@ Every ``build_*`` compiles for a fixed row count and stashes its static values o
 executable (``.rows``, ``.max_episode_length``, ...), so a ``run_*`` never guesses them.
 ``evoxc`` re-validates static operands with ``array_equal`` on every call, so a runner must
 pass back exactly what its builder was given.  Rows are **policy-major**: rows ``3p, 3p+1,
-3p+2`` are the ``EPISODES_PER_POLICY`` episodes of policy ``p``.
+3p+2`` are the ``EPISODES_PER_POLICY`` episodes of policy ``p``.  ``hover_advance`` also latches
+each row's first ending into an ``END_REASONS`` code and hands back the ``base_pos`` it consumed,
+so a device-resident caller can carry both across steps without a host round-trip.
 
 The baseline's step order, reproduced in ``hover_advance``
 -----------------------------------------------------------
@@ -74,11 +80,11 @@ Divergences from the baseline
   and reproducible; the distribution is unchanged from the baseline's iid draws.
   ``hover_advance`` selects the draw for the rows that reached their target this step.
 
-Seeding rules (shared with the Go2 pilot)
------------------------------------------
+Seeding rules (shared with the Go2 pilot, ``examples/neuroevolution``)
+---------------------------------------------------------------------
 ``generation_seed_table`` gives every policy in a generation the *same ordered triple* of
 episode seeds, a fresh triple per generation, and ``evolution_seed`` an independent evolution
-stream.
+stream; both live in ``seeding.py`` of the shared layer, not here.
 """
 
 from __future__ import annotations
@@ -91,15 +97,26 @@ import numpy as np
 
 import evoxc
 
-# The generic evoxc build/run helpers live in the sibling locomotion examples directory.
-sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "locomotion"))
+# The example stack resolves bare module names by putting sibling directories on ``sys.path``
+# (``examples/locomotion`` already does it for the Go2 helpers); this is the shared
+# neuroevolution layer, not a third copy of its seeding/graph modules.
+_SHARED = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "neuroevolution")
+if _SHARED not in sys.path:
+    sys.path.insert(0, _SHARED)
 
-from go2_evox_kernels import (  # noqa: E402  (path set up above, as a script would)
+from evox_runtime import (  # noqa: E402  (path set up above, as a script would)
+    POP_OPERANDS,
+    _attach,
     _constant,
+    _device_name,
+    _outputs,
+    _positive_int,
+    _staged,
     _to_device_array,
     _to_numpy,
     resolve_backend_device,
 )
+from seeding import EPISODES_PER_POLICY  # noqa: E402  (path set up above)
 
 # --- Task constants (``hover_train.get_cfgs()`` / ``hover_env.py``) ------------------
 
@@ -107,8 +124,6 @@ NUM_OBS = 17
 NUM_ACTIONS = 4
 NUM_COMMANDS = 3
 DT = 0.01
-#: Episodes one generation of policies is scored over; rows are policy-major.
-EPISODES_PER_POLICY = 3
 #: ``ceil(15 / 0.01)`` -- the timeout fires *above* this many steps.
 MAX_EPISODE_LENGTH = 1500
 CLIP_ACTIONS = 1.0
@@ -139,45 +154,6 @@ _ATAN2_ANGLE_NEG_X = float(np.nextafter(np.float32(math.pi), np.float32(0.0)))
 REWARD_TERM_NAMES = ("target", "smooth", "yaw", "angular", "crash")
 #: ``inv_quat(BASE_INIT_QUAT)`` as a ``(1, 4)`` row: the left factor of the relative rotation.
 _BASE_INIT_QUAT_INV = np.ascontiguousarray((BASE_INIT_QUAT * np.array([1.0, -1.0, -1.0, -1.0], np.float32))[None, :])
-
-
-# --- Seeding (shared rules with the Go2 pilot) --------------------------------------
-
-
-def generation_seed_table(master_seed, num_generations, episodes=EPISODES_PER_POLICY):
-    """Return the ``(num_generations, episodes)`` int64 table of episode seeds.
-
-    Every policy in one generation is scored over the *same ordered triple* of episode
-    seeds (row ``g``), a fresh triple is drawn for each generation, and the draws come
-    from the env stream of ``SeedSequence(master_seed).spawn(2)`` (the evolution stream
-    is :func:`evolution_seed`, so it is independent).  One row is drawn at a time with
-    ``rng.choice(2**31, size=episodes, replace=False)``: a row's seeds stay distinct and
-    the table stays **prefix-stable** -- ``table(seed, N)[i]`` is identical for every
-    ``N > i``.
-
-    Returns:
-        np.ndarray: ``(num_generations, episodes)`` int64, every row strictly distinct.
-    """
-    num_generations = int(num_generations)
-    episodes = int(episodes)
-    if num_generations < 0 or episodes < 1:
-        raise ValueError(f"num_generations must be >= 0 and episodes >= 1, got {num_generations} and {episodes}")
-    _, env_seq = np.random.SeedSequence(master_seed).spawn(2)
-    rng = np.random.default_rng(env_seq)
-    table = np.empty((num_generations, episodes), dtype=np.int64)
-    for generation in range(num_generations):
-        table[generation] = rng.choice(2**31, size=episodes, replace=False)
-    return table
-
-
-def evolution_seed(master_seed):
-    """Return the unsigned 32-bit seed of the evolution stream of ``master_seed``.
-
-    The sibling of the env stream :func:`generation_seed_table` draws from, so the
-    trainer's evolution RNG is independent of -- and unaffected by -- the episode seeds.
-    """
-    evolution_seq, _ = np.random.SeedSequence(master_seed).spawn(2)
-    return int(evolution_seq.generate_state(1, dtype=np.uint32)[0])
 
 
 # --- Small graph helpers ------------------------------------------------------------
@@ -328,54 +304,6 @@ def _obs_rows(rel_pos, base_quat, lin_vel_body, ang_vel_body, last_actions):
 
 # --- Static specialization arrays ---------------------------------------------------
 
-
-def _positive_int(value, name: str) -> int:
-    """Validate a strict positive integer build argument."""
-    ivalue = int(value)
-    if ivalue != value or ivalue <= 0:
-        raise ValueError(f"{name} must be a positive integer, got {value!r}")
-    return ivalue
-
-
-def _device_name(device) -> str:
-    """``"kind:index"`` of a resolved device, for cache keys and log lines."""
-    return f"{device.kind}:{device.index}"
-
-
-def _attach(executable, **metadata):
-    """Stash build-time metadata on an ``evoxc`` executable (it has a ``__dict__``)."""
-    for name, value in metadata.items():
-        setattr(executable, name, value)
-    return executable
-
-
-def _rows_of(executable) -> int:
-    """The row count a graph was compiled for."""
-    rows = getattr(executable, "rows", None)
-    if rows is None:
-        raise TypeError(f"{executable!r} was not built by this module (no '.rows' metadata)")
-    return int(rows)
-
-
-def _stage(executable, name: str, value, width=None, *, dtype=np.float32) -> np.ndarray:
-    """Stage one runtime argument, checking its shape against the compiled graph."""
-    rows = _rows_of(executable)
-    expected = (rows,) if width is None else (rows, width)
-    arr = np.asarray(value, dtype=dtype)
-    if arr.shape != expected:
-        raise ValueError(f"{name} must have shape {expected} to match the compiled graph, got {arr.shape}")
-    return np.ascontiguousarray(arr)
-
-
-def _outputs(result) -> tuple:
-    """Normalize an ``evoxc.run`` result: a single-leaf graph returns the tensor bare."""
-    if isinstance(result, tuple):
-        return result
-    if isinstance(result, list):
-        return tuple(result)
-    return (result,)
-
-
 #: ``(name, width, dtype)`` of every runtime operand of ``hover_advance``, in spec order.
 _ADVANCE_OPERANDS = (
     ("commands", NUM_COMMANDS, np.float32),
@@ -391,6 +319,9 @@ _ADVANCE_OPERANDS = (
     ("error_mask", None, bool),
     ("alive", None, bool),
     ("returns", None, np.float32),
+    # Appended last so the spec order of the older operands never moves: the latched
+    # ``END_REASONS`` code of the row (0 = unfinished) carried by a device-resident caller.
+    ("end_code", None, np.int8),
 )
 
 # --- Controls -----------------------------------------------------------------------
@@ -428,7 +359,7 @@ def run_controls(executable, actions):
     """Run the controls graph on ``(rows, 4)`` raw actions; returns clipped actions and RPMs."""
     outputs = evoxc.run(
         executable,
-        _to_device_array(executable, _stage(executable, "actions", actions, NUM_ACTIONS)),
+        _to_device_array(executable, _staged(executable, "actions", actions, NUM_ACTIONS)),
     )
     clipped, rpm = _outputs(outputs)
     return {
@@ -477,12 +408,12 @@ def run_obs(executable, *, commands, base_pos, base_quat, base_lin_vel_world, ba
     """
     outputs = evoxc.run(
         executable,
-        _to_device_array(executable, _stage(executable, "commands", commands, NUM_COMMANDS)),
-        _to_device_array(executable, _stage(executable, "base_pos", base_pos, 3)),
-        _to_device_array(executable, _stage(executable, "base_quat", base_quat, 4)),
-        _to_device_array(executable, _stage(executable, "base_lin_vel_world", base_lin_vel_world, 3)),
-        _to_device_array(executable, _stage(executable, "base_ang_vel_world", base_ang_vel_world, 3)),
-        _to_device_array(executable, _stage(executable, "last_actions", last_actions, NUM_ACTIONS)),
+        _to_device_array(executable, _staged(executable, "commands", commands, NUM_COMMANDS)),
+        _to_device_array(executable, _staged(executable, "base_pos", base_pos, 3)),
+        _to_device_array(executable, _staged(executable, "base_quat", base_quat, 4)),
+        _to_device_array(executable, _staged(executable, "base_lin_vel_world", base_lin_vel_world, 3)),
+        _to_device_array(executable, _staged(executable, "base_ang_vel_world", base_ang_vel_world, 3)),
+        _to_device_array(executable, _staged(executable, "last_actions", last_actions, NUM_ACTIONS)),
     )
     return {"obs": np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)}
 
@@ -491,22 +422,25 @@ def run_obs(executable, *, commands, base_pos, base_quat, base_lin_vel_world, ba
 
 
 @evoxc.defn
-def hover_reset_obs(commands, base_init_pos_tiled, base_init_quat_tiled):
+def hover_reset_obs(commands, base_init_pos, base_init_quat):
     """The analytic post-``reset()`` observation, with no ``scene.step()``.
 
-    ``reset_idx`` pins the base to ``BASE_INIT_POS`` / ``BASE_INIT_QUAT`` and zeroes the
-    velocities, ``last_actions`` and the counter, so the observation reduces to
-    ``[clip((commands - BASE_INIT_POS) / 3), init_quat, zeros(3), zeros(3), zeros(4)]`` --
-    the eval environment can start a generation without stepping the simulator.
+    ``reset_idx`` pins the base to the init pose and zeroes the velocities,
+    ``last_actions`` and the counter, so the observation reduces to
+    ``[clip((commands - base_init_pos) / 3), base_init_quat, zeros(3), zeros(3), zeros(4)]``
+    -- the eval environment can start a generation without stepping the simulator.
+
+    The pose is a **runtime operand** (one row per environment), not a baked constant, so a
+    perturbed reset pose is supported by the same graph.
     """
     rows = commands.shape[0]
-    rel_pos = commands - _constant(base_init_pos_tiled)
+    rel_pos = commands - base_init_pos
     zeros3 = evoxc.numpy.zeros((rows, 3), evoxc.float32)
     zeros4 = evoxc.numpy.zeros((rows, 4), evoxc.float32)
     return evoxc.concatenate(
         [
             evoxc.clamp(rel_pos * OBS_SCALES["rel_pos"], -1.0, 1.0),
-            _constant(base_init_quat_tiled),
+            base_init_quat,
             zeros3,
             zeros3,
             zeros4,
@@ -519,33 +453,28 @@ def build_reset_obs(rows, *, backend="numpy", device=None):
     """Compile the analytic reset-observation graph for ``rows`` environments."""
     rows = _positive_int(rows, "rows")
     resolved_backend, resolved_device = resolve_backend_device(backend, device)
-    base_init_pos_tiled = np.ascontiguousarray(np.tile(BASE_INIT_POS, (rows, 1)))
-    base_init_quat_tiled = np.ascontiguousarray(np.tile(BASE_INIT_QUAT, (rows, 1)))
     executable = evoxc.build(
         hover_reset_obs,
         evoxc.TensorSpec((rows, NUM_COMMANDS), evoxc.float32, name="commands"),
-        base_init_pos_tiled,
-        base_init_quat_tiled,
+        evoxc.TensorSpec((rows, 3), evoxc.float32, name="base_init_pos"),
+        evoxc.TensorSpec((rows, 4), evoxc.float32, name="base_init_quat"),
         backend=resolved_backend,
         device=resolved_device,
     )
-    return _attach(
-        executable,
-        graph="reset_obs",
-        rows=rows,
-        base_init_pos_tiled=base_init_pos_tiled,
-        base_init_quat_tiled=base_init_quat_tiled,
-        device_name=_device_name(resolved_device),
-    )
+    return _attach(executable, graph="reset_obs", rows=rows, device_name=_device_name(resolved_device))
 
 
-def run_reset_obs(executable, commands):
-    """Run the reset-observation graph; returns ``{"obs": (rows, 17)}``."""
+def run_reset_obs(executable, *, commands, base_init_pos, base_init_quat):
+    """Run the reset-observation graph; returns ``{"obs": (rows, 17)}``.
+
+    ``base_init_pos`` / ``base_init_quat`` are the per-row pose the rows were reset to (the
+    authored ``BASE_INIT_POS`` / ``BASE_INIT_QUAT``, or a perturbation of it).
+    """
     outputs = evoxc.run(
         executable,
-        _to_device_array(executable, _stage(executable, "commands", commands, NUM_COMMANDS)),
-        executable.base_init_pos_tiled,
-        executable.base_init_quat_tiled,
+        _to_device_array(executable, _staged(executable, "commands", commands, NUM_COMMANDS)),
+        _to_device_array(executable, _staged(executable, "base_init_pos", base_init_pos, 3)),
+        _to_device_array(executable, _staged(executable, "base_init_quat", base_init_quat, 4)),
     )
     return {"obs": np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)}
 
@@ -568,14 +497,16 @@ def hover_advance(
     error_mask,
     alive,
     returns,
+    end_code,
     max_episode_length,
 ):
     """One hover step on the state measured after ``scene.step()``.
 
     ``actions`` are the **clipped** actions from ``hover_controls``; ``resampled_commands``
     is this step's host draw, selected only for the rows whose ``norm(rel_pos)`` fell below
-    ``AT_TARGET_THRESHOLD``; ``error_mask`` is the external solver-failure signal.  Rows
-    that are already ``done`` still produce a consistent step; the caller stops crediting them.
+    ``AT_TARGET_THRESHOLD``; ``error_mask`` is the external solver-failure signal; ``end_code``
+    is the row's already-latched ``END_REASONS`` code (0 = unfinished).  Rows that are already
+    ``done`` still produce a consistent step; the caller stops crediting them.
     """
     rows = commands.shape[0]
     episode_length_next = evoxc.cast(episode_length + _int32(1), evoxc.int32)
@@ -643,11 +574,25 @@ def hover_advance(
     returns_next = returns + evoxc.select(credit, total, zero)
     alive_next = evoxc.logical_and(alive, evoxc.logical_not(done))
 
+    # The first ending is latched, exactly like ``HoverNeatEnv._classify_endings``:
+    # error wins over timeout wins over crash, and an already-tagged row is never re-armed.
+    code_this = evoxc.select(
+        error_mask,
+        _int32(END_REASONS["error"]),
+        evoxc.select(timeout, _int32(END_REASONS["timeout"]), _int32(END_REASONS["crash"])),
+    )
+    first = evoxc.logical_and(evoxc.equal(end_code, _constant(np.array(0, dtype=np.int8))), done)
+    end_code_next = evoxc.cast(evoxc.select(first, code_this, evoxc.cast(end_code, evoxc.int32)), evoxc.int8)
+    # A column stack, not the operand itself: the caller may keep this tensor while the next
+    # step overwrites the position it was read from.
+    base_pos_snapshot = evoxc.stack([base_pos[:, 0], base_pos[:, 1], base_pos[:, 2]], axis=-1)
+
     return [
         obs,
         target_rew, smooth_rew, yaw_rew, angular_rew, crash_rew, total,
         crash, timeout, done, at_target, commands_next,
         episode_length_next, returns_next, alive_next, yaw_deg,
+        end_code_next, base_pos_snapshot,
     ]
 
 
@@ -692,6 +637,7 @@ def run_advance(
     error_mask,
     alive,
     returns,
+    end_code=None,
 ):
     """Run one advance step: observation, six reward terms and bookkeeping.
 
@@ -700,10 +646,16 @@ def run_advance(
     (``drone.get_vel()`` / ``drone.get_ang()``); ``actions`` are the *clipped* actions from
     ``hover_controls``; ``episode_length`` is the pre-step int32 counter;
     ``resampled_commands`` is this step's host draw; ``error_mask`` flags external
-    failures; ``alive`` / ``returns`` are the pre-step bookkeeping.  Returns ``obs``
-    (rows, 17), ``reward_terms`` (five ``dt``-scaled terms plus ``total``), the
-    ``crash``/``timeout``/``done``/``at_target``/``alive`` bool masks, the next
-    ``commands`` (rows, 3), ``episode_length`` (int32), ``returns`` and ``yaw_deg``.
+    failures; ``alive`` / ``returns`` are the pre-step bookkeeping; ``end_code`` is the
+    row's latched ``END_REASONS`` code and defaults to all-unfinished, which reproduces the
+    pre-latch behaviour for a caller that re-derives the endings on the host.
+
+    Returns ``obs`` (rows, 17), ``reward_terms`` (five ``dt``-scaled terms plus ``total``),
+    the ``crash``/``timeout``/``done``/``at_target``/``alive`` bool masks, the next
+    ``commands`` (rows, 3), ``episode_length`` (int32), ``returns``, ``yaw_deg``, the next
+    latched ``end_code`` (int8) and the ``base_pos`` the step consumed (rows, 3, a fresh
+    buffer, so a device-resident caller can carry the previous position without a host
+    round-trip).
     """
     values = (
         commands,
@@ -719,11 +671,12 @@ def run_advance(
         error_mask,
         alive,
         returns,
+        np.zeros(np.shape(commands)[0], dtype=np.int8) if end_code is None else end_code,
     )
     outputs = evoxc.run(
         executable,
         *[
-            _to_device_array(executable, _stage(executable, name, value, width, dtype=dtype))
+            _to_device_array(executable, _staged(executable, name, value, width, dtype=dtype))
             for (name, width, dtype), value in zip(_ADVANCE_OPERANDS, values, strict=True)
         ],
         executable.max_episode_length,
@@ -745,155 +698,9 @@ def run_advance(
         "returns": flat[13].astype(np.float32),
         "alive": flat[14].astype(bool),
         "yaw_deg": flat[15].astype(np.float32),
+        "end_code": flat[16].astype(np.int8),
+        "base_pos": flat[17].astype(np.float32),
     }
-
-
-# --- Fitness ------------------------------------------------------------------------
-
-
-@evoxc.defn
-def hover_fitness(returns, pop_size, episodes_per_policy):
-    """Episode returns ``(pop_size * episodes_per_policy,)`` -> fitness ``(pop_size,)``."""
-    return evoxc.reduce_mean(
-        evoxc.reshape(returns, (pop_size, episodes_per_policy)),
-        axes=1,
-    )
-
-
-def build_fitness(pop_size, episodes_per_policy=EPISODES_PER_POLICY, *, backend="numpy", device=None):
-    """Compile the fitness graph (mean of one policy's episode returns), mirroring Go2.
-
-    Rows are policy-major, so the reshape groups the ``episodes_per_policy`` episodes of
-    every policy together.
-    """
-    pop_size = _positive_int(pop_size, "pop_size")
-    episodes_per_policy = _positive_int(episodes_per_policy, "episodes_per_policy")
-    resolved_backend, resolved_device = resolve_backend_device(backend, device)
-    rows = pop_size * episodes_per_policy
-    executable = evoxc.build(
-        hover_fitness,
-        evoxc.TensorSpec((rows,), evoxc.float32, name="returns"),
-        pop_size,
-        episodes_per_policy,
-        backend=resolved_backend,
-        device=resolved_device,
-    )
-    return _attach(
-        executable,
-        graph="fitness",
-        rows=rows,
-        pop_size=pop_size,
-        episodes_per_policy=episodes_per_policy,
-        device_name=_device_name(resolved_device),
-    )
-
-
-def run_fitness(executable, returns):
-    """Run the fitness graph; ``returns`` is ``(pop_size * episodes,)``, result ``(pop_size,)``."""
-    outputs = evoxc.run(
-        executable,
-        _to_device_array(executable, _stage(executable, "returns", returns)),
-        executable.pop_size,
-        executable.episodes_per_policy,
-    )
-    return np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)
-
-
-# --- Policy -------------------------------------------------------------------------
-
-#: ``(name, ...)`` of the four ``tensorneat.genome.utils.GenomeTensors`` payload leaves.
-POP_OPERANDS = ("node_keys", "node_attrs", "conn_keys", "conn_attrs")
-
-
-def _host(array) -> np.ndarray:
-    """Materialize one genome-payload leaf (host array or ``evoxc`` tensor) as numpy."""
-    if isinstance(array, np.ndarray):
-        return array
-    return np.asarray(_to_numpy(array))
-
-
-def _pop_specs(pop_arrays):
-    """``TensorSpec`` list for the four ``GenomeTensors`` payload arrays."""
-    arrays = tuple(pop_arrays)
-    if len(arrays) != len(POP_OPERANDS):
-        raise ValueError(f"pop_arrays must hold the {len(POP_OPERANDS)} GenomeTensors payloads, got {len(arrays)}")
-    specs = []
-    for array, name in zip(arrays, POP_OPERANDS, strict=True):
-        arr = _host(array)
-        specs.append(evoxc.TensorSpec(tuple(int(dim) for dim in arr.shape), evoxc.dtype(arr.dtype), name=name))
-    return specs
-
-
-def build_policy(algo, config, pop_arrays, rows, *, backend="numpy", device=None):
-    """Compile the genome-payload + observation -> raw-action graph for ``rows`` rows.
-
-    ``rows`` must be ``algo.pop_size * EPISODES_PER_POLICY`` and the rows are
-    **policy-major**: rows ``3p, 3p+1, 3p+2`` are the three episodes of policy ``p``.
-    ``prepare_forward(samples=EPISODES_PER_POLICY)`` tiles the *genome statics* of
-    individual ``p`` to its three rows, so each row carries its own observation: the
-    three episodes of a policy are independent and need not share a state.
-
-    The observation and action widths come from the traced genome
-    (``algo.genome.num_inputs`` / ``num_outputs``), not from a task constant -- the
-    sibling ``go2_neat_kernels.build_policy`` bakes the Go2 widths (45 obs, 12 actions)
-    into its spec and the staging check of its runner, so it cannot trace the drone's
-    17 -> 4 genome.
-
-    Args:
-        algo: a TensorNEAT ``NEAT`` algorithm instance.
-        config: the tensor-free ``pipeline._static_config(state)`` captured at build time.
-        pop_arrays: the four genome payload arrays (``state.pop`` as numpy).
-        rows (int): ``pop_size * EPISODES_PER_POLICY``.
-        backend (str): ``evoxc`` backend name.
-        device (str | evoxc.Device | None): ``evoxc`` device.
-
-    Returns:
-        evoxc.Executable: bound executable; ``run_policy`` stages its operands.
-    """
-    from tensorneat.genome.utils import GenomeTensors
-
-    n_policies = int(algo.pop_size)
-    rows = _positive_int(rows, "rows")
-    if rows != n_policies * EPISODES_PER_POLICY:
-        raise ValueError(
-            f"rows must be pop_size * EPISODES_PER_POLICY = {n_policies * EPISODES_PER_POLICY}, got {rows}"
-        )
-    num_obs = int(algo.genome.num_inputs)
-    resolved_backend, resolved_device = resolve_backend_device(backend, device)
-    specs = [*_pop_specs(pop_arrays), evoxc.TensorSpec((rows, num_obs), evoxc.float32, name="obs")]
-
-    def kernel(node_keys, node_attrs, conn_keys, conn_attrs, obs):
-        payload = GenomeTensors(node_keys, node_attrs, conn_keys, conn_attrs)
-        transformed = algo.transform(config, payload)
-        prepared = algo.prepare_forward(config, transformed, payload, samples=EPISODES_PER_POLICY)
-        return algo.forward_prepared(config, transformed, prepared, obs)
-
-    executable = evoxc.build(kernel, *specs, backend=resolved_backend, device=resolved_device)
-    return _attach(
-        executable,
-        graph="policy",
-        rows=rows,
-        n_policies=n_policies,
-        num_obs=num_obs,
-        pop_shapes=tuple(_host(array).shape for array in pop_arrays),
-        device_name=_device_name(resolved_device),
-    )
-
-
-def run_policy(executable, pop_arrays, obs):
-    """Run the policy graph; returns raw (unclipped) actions ``(rows, num_actions)`` float32."""
-    arrays = tuple(_host(array) for array in pop_arrays)
-    if len(arrays) != len(POP_OPERANDS):
-        raise ValueError(f"pop_arrays must hold the {len(POP_OPERANDS)} GenomeTensors payloads, got {len(arrays)}")
-    for array, shape in zip(arrays, executable.pop_shapes, strict=True):
-        if array.shape != shape:
-            raise ValueError(f"pop_arrays leaf must keep the built shape {shape}, got {array.shape}")
-    outputs = evoxc.run(
-        executable,
-        *[_to_device_array(executable, np.ascontiguousarray(array)) for array in arrays],
-        _to_device_array(executable, _stage(executable, "obs", obs, executable.num_obs)),
-    )
-    return np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)
 
 
 # --- Self-check ---------------------------------------------------------------------
@@ -939,8 +746,19 @@ def _neutral_state(rows):
         commands=zero3, base_pos=zero3, last_base_pos=zero3, resampled_commands=zero3,
         base_quat=np.tile(BASE_INIT_QUAT, (rows, 1)), base_lin_vel_world=zero3, base_ang_vel_world=zero3,
         actions=zero4, last_actions=zero4, episode_length=np.zeros((rows,), dtype=np.int32),
-        error_mask=np.zeros((rows,), dtype=bool),
+        error_mask=np.zeros((rows,), dtype=bool), end_code=np.zeros((rows,), dtype=np.int8),
     )
+
+
+def _latched_end_codes(end_code, done, timeout, error_mask):
+    """Numpy replication of the graph's first-ending latch (error > timeout > crash, once)."""
+    code_this = np.where(
+        error_mask,
+        END_REASONS["error"],
+        np.where(timeout, END_REASONS["timeout"], END_REASONS["crash"]),
+    )
+    first = (np.asarray(end_code) == END_REASONS["unfinished"]) & done
+    return np.where(first, code_this, end_code).astype(np.int8)
 
 
 def _max_term_error(ref, stepped, reference):
@@ -951,8 +769,15 @@ def _max_term_error(ref, stepped, reference):
 
 
 def _self_check():
-    """Parity check of every graph against ``hover_legacy_reference`` (fast, no genesis)."""
+    """Parity check of every graph against ``hover_legacy_reference`` (fast, no genesis).
+
+    The fitness/seeding assertions at the end use the shared layer's builders (imported here,
+    not copied) so the drone task keeps validating the exact graphs it runs with.
+    """
     import hover_legacy_reference as ref
+
+    from evolution_graphs import build_fitness, run_fitness
+    from seeding import evolution_seed, generation_seed_table
 
     rng = np.random.default_rng(20241109)
 
@@ -990,7 +815,8 @@ def _self_check():
 
     # (c) Fixed-state parity for the step, observation and reset graphs.  Row 2 crashes
     # on ``|rel_pos.x| > 3``, row 3 is at its target (so the resampled draw wins), and
-    # rows 1/2 also exercise the error mask and the timeout.
+    # rows 1/2 also exercise the error mask and the timeout; row 3 is already tagged as
+    # crashed, so its code must stay latched instead of being re-armed.
     fixed_rows = 4
     commands = _f32([0.2, -0.1, 1.0], [-0.4, 0.3, 1.0], [3.5, 0.0, 1.0], [0.05, 0.05, 1.0])
     base_pos = commands - _f32([0.05, 0.02, 0.3], [-0.5, 0.4, -0.6], [0.0, 0.0, 0.0], [0.02, -0.03, 0.04])
@@ -1008,12 +834,14 @@ def _self_check():
         "resampled_commands": _f32([0.5, -0.5, 1.0], [0.1, 0.2, 1.0], [-0.7, 0.8, 1.0], [0.9, 0.9, 1.0]),
         "error_mask": np.array([False, False, True, False]),
     }
+    end_code = np.array([0, 0, 0, END_REASONS["crash"]], dtype=np.int8)
     reference = ref.step_maths(**state)
     stepped = run_advance(
         build_advance(fixed_rows, max_episode_length=ref.MAX_EPISODE_LENGTH),
         **state,
         alive=np.array([True, True, True, False]),
         returns=np.array([0.5, -0.25, 1.0, 2.0], dtype=np.float32),
+        end_code=end_code,
     )
     obs_err = np.abs(stepped["obs"] - reference["obs"]).max()
     term_err = _max_term_error(ref, stepped, reference)
@@ -1024,6 +852,12 @@ def _self_check():
     assert np.array_equal(stepped["commands"], reference["commands"])
     assert np.allclose(stepped["yaw_deg"], reference["yaw_deg"], atol=1e-4)
     assert np.array_equal(stepped["episode_length"], state["episode_length"] + 1)
+    # The endings are latched here and never re-armed; the returned position is the consumed one.
+    expected_codes = _latched_end_codes(end_code, reference["done"], reference["timeout"], state["error_mask"])
+    assert np.array_equal(stepped["end_code"], expected_codes), (
+        f"end_code latch failed: {stepped['end_code'].tolist()} vs {expected_codes.tolist()}"
+    )
+    assert np.array_equal(stepped["base_pos"], base_pos), "base_pos passthrough is not the consumed position"
 
     carried = {key: state[key] for key in ("base_quat", "base_lin_vel_world", "base_ang_vel_world", "last_actions")}
     obs_only = run_obs(build_obs(fixed_rows), commands=commands, base_pos=base_pos, **carried)
@@ -1032,9 +866,29 @@ def _self_check():
     obs_ref = ref.observation(commands - base_pos, quat, v_body, w_body, carried["last_actions"])
     obs_only_err = np.abs(obs_only["obs"] - obs_ref).max()
     assert obs_only_err <= 1e-6, f"hover_obs parity failed: {obs_only_err:.3e}"
-    reset = run_reset_obs(build_reset_obs(fixed_rows), commands)
+
+    # The reset pose is a runtime operand: the authored pose reproduces the oracle, and a
+    # perturbed one lands directly in the observation.
+    init_pos = np.ascontiguousarray(np.tile(BASE_INIT_POS, (fixed_rows, 1)))
+    init_quat = np.ascontiguousarray(np.tile(BASE_INIT_QUAT, (fixed_rows, 1)))
+    reset_executable = build_reset_obs(fixed_rows)
+    reset = run_reset_obs(reset_executable, commands=commands, base_init_pos=init_pos, base_init_quat=init_quat)
     reset_err = np.abs(reset["obs"] - ref.reset_observation(commands)).max()
     assert reset_err <= 1e-6, f"hover_reset_obs parity failed: {reset_err:.3e}"
+    moved_quat = _rpy_quat(np.full(fixed_rows, 0.05), np.full(fixed_rows, -0.02), np.full(fixed_rows, 0.4))
+    moved_pos = base_pos + np.float32(0.25)
+    moved = run_reset_obs(
+        reset_executable, commands=commands, base_init_pos=moved_pos, base_init_quat=moved_quat
+    )["obs"]
+    expected_reset = np.concatenate(
+        [
+            np.clip((commands - moved_pos) * OBS_SCALES["rel_pos"], -1.0, 1.0),
+            moved_quat,
+            np.zeros((fixed_rows, 10), np.float32),
+        ],
+        axis=1,
+    ).astype(np.float32)
+    assert np.array_equal(moved, expected_reset), "the reset observation ignored the runtime init pose"
 
     # (d) Mask agreement on ~200 randomized plausible states.
     n_cases = 200
@@ -1064,11 +918,18 @@ def _self_check():
         "error_mask": rng.random(n_cases) < 0.05,
     }
     rand_reference = ref.step_maths(**rand_state)
+    # A third of the rows already carry an ending; only the unfinished ones may latch a new one.
+    rand_end_code = np.where(
+        rng.random(n_cases) < 1.0 / 3.0,
+        rng.choice(np.array(list(END_REASONS.values()), dtype=np.int8), n_cases),
+        np.int8(END_REASONS["unfinished"]),
+    ).astype(np.int8)
     rand_out = run_advance(
         build_advance(n_cases),
         **rand_state,
         alive=rng.random(n_cases) < 0.9,
         returns=rng.uniform(-5.0, 5.0, n_cases).astype(np.float32),
+        end_code=rand_end_code,
     )
     for name in ("crash", "timeout", "done", "at_target", "commands"):
         assert np.array_equal(rand_out[name], rand_reference[name]), f"{name} disagrees"
@@ -1076,6 +937,12 @@ def _self_check():
     rand_term_err = _max_term_error(ref, rand_out, rand_reference)
     assert rand_obs_err <= 1e-6, f"randomized observation parity failed: {rand_obs_err:.3e}"
     assert rand_term_err <= 1e-5, f"randomized reward parity failed: {rand_term_err:.3e}"
+    rand_codes = _latched_end_codes(
+        rand_end_code, rand_reference["done"], rand_reference["timeout"], rand_state["error_mask"]
+    )
+    assert np.array_equal(rand_out["end_code"], rand_codes), "randomized end_code latch disagrees"
+    assert np.count_nonzero(rand_end_code) > 0, "the randomized states never exercise a latched ending"
+    assert np.array_equal(rand_out["base_pos"], rand_state["base_pos"]), "randomized base_pos passthrough disagrees"
 
     # Fitness: the mean of each policy's three episode returns, and the shared seeds.
     fitness = run_fitness(build_fitness(2), np.array([1.0, 2.0, 3.0, -1.0, 0.0, 4.0], dtype=np.float32))

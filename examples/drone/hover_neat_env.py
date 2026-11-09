@@ -28,8 +28,8 @@ replaces:
 Seeding (shared with the Go2 pilot, ``examples/locomotion/go2_neat_env.py``)
 --------------------------------------------------------------------------
 ``np.random.SeedSequence(master_seed).spawn(2)`` splits the master seed into an independent
-evolution stream (:func:`hover_kernels.evolution_seed`, for the trainer's own RNG) and an env
-stream (:func:`hover_kernels.generation_seed_table`).  Every *generation* owns one ordered triple
+evolution stream (:func:`seeding.evolution_seed`, for the trainer's own RNG) and an env
+stream (:func:`seeding.generation_seed_table`).  Every *generation* owns one ordered triple
 of episode seeds, and the **same triple** scores every policy of that generation, so a fitness
 comparison is fair; a fresh triple is drawn per generation.  Row ``3p + e`` (episode slot ``e``)
 draws its per-step command stream from its own ``np.random.Generator``, seeded from that slot's
@@ -89,16 +89,17 @@ from hover_kernels import (
     NUM_OBS,
     build_advance,
     build_controls,
-    build_fitness,
-    build_policy,
     build_reset_obs,
-    generation_seed_table,
     run_advance,
     run_controls,
-    run_fitness,
-    run_policy,
     run_reset_obs,
 )
+
+# Importing ``hover_kernels`` also puts the shared ``examples/neuroevolution`` layer on
+# ``sys.path``; the fitness, policy and seeding graphs live there now, not in the task module.
+from evolution_graphs import build_fitness, run_fitness  # noqa: E402  (path set up above)
+from policy_graphs import build_policy, run_policy  # noqa: E402  (path set up above)
+from seeding import generation_seed_table  # noqa: E402  (path set up above)
 
 # The generic evoxc build helpers and the executable cache live in the sibling locomotion examples.
 sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "locomotion"))
@@ -148,7 +149,7 @@ class HoverNeatEnv:
         device (str | evoxc.Device | None): ``evoxc`` device of the compiled graphs.
         show_viewer (bool): Open the Genesis viewer.
         seed_table (array-like | None): ``(num_generations, EPISODES_PER_POLICY)`` int table; when
-            given it replaces the table :func:`hover_kernels.generation_seed_table` would draw.
+            given it replaces the table :func:`seeding.generation_seed_table` would draw.
         stop_when_done (bool): Stop a generation as soon as every row has ended.
 
     Attributes:
@@ -298,6 +299,9 @@ class HoverNeatEnv:
                 self._policy_config,
                 self._trace_pop,
                 self.rows,
+                num_inputs=NUM_OBS,
+                num_outputs=NUM_ACTIONS,
+                episodes=EPISODES_PER_POLICY,
                 backend=self.backend,
                 device=self.device,
             ),
@@ -366,7 +370,12 @@ class HoverNeatEnv:
         self.drone.set_quat(self._reset_quat, zero_velocity=True, envs_idx=None)
         self.drone.zero_all_dofs_velocity()
         self.scene.clear_errno()  # drop any flag the previous generation left behind
-        obs = run_reset_obs(self.reset_obs_executable, commands=commands)["obs"]
+        obs = run_reset_obs(
+            self.reset_obs_executable,
+            commands=commands,
+            base_init_pos=self._reset_pos,
+            base_init_quat=self._reset_quat,
+        )["obs"]
         return commands, obs
 
     def read_state(self):
