@@ -15,6 +15,7 @@ Authoring rules live in `.github/contributing/EXAMPLES.md`; read it before addin
 - `kinematic/` — `KinematicEntity` as a visualization-only ghost reference motion.
 - `locomotion/` — Go2 quadruped: rsl-rl PPO train/eval (`go2_train.py`/`go2_eval.py`), independent TensorNEAT neuroevolution walking trainer (`go2_neat_train.py` + `go2_neat_env.py` + `go2_neat_kernels.py`), scripted-trot EvoX demo (`try1.py`), backflip playback.
 - `manipulation/` — Franka grasping RL env + train/eval + behavior cloning.
+- `neuroevolution/` — task-agnostic TensorNEAT/evoxc layer shared by the Go2 and drone pilots: env contract, seed rules, evolution graphs, width-generic policy graph, `NeuroevolutionTrainer`, and `benchmarks/` (Stage-3 harness, raw records, `RESULTS.md`).
 - `rendering/` — photorealistic RayTracer (LuisaRender), camera control, async render, speed test.
 - `rigid/` — the largest group: Franka control, IK, terrain, domain randomization, multi-GPU, convex decomposition, constraints.
 - `sap_coupling/` — built-in SAP (Semi-Analytic Primal) rigid/FEM coupler.
@@ -42,8 +43,9 @@ Authoring rules live in `.github/contributing/EXAMPLES.md`; read it before addin
 
 - Core package covers most examples; extras used: `usd` (`usd-core`/`pxr`, `filelock`), `render` (`imgui-bundle`, `open3d`, `pybind11`), `dev` (`tensordict`, `matplotlib`, `huggingface_hub`, etc.).
 - Not in `pyproject.toml` (install separately): `pyuipc` (IPC demos), `rsl-rl-lib>=5.0.0` + `tensorboard` (drone/manipulation RL, and the locomotion PPO path `go2_train.py`/`go2_eval.py` only).
-- Also not in `pyproject.toml`: `evoxc` (EvoX Compiler, 0.1.0) is required by the locomotion scripted-trot demo `locomotion/try1.py` and by the TensorNEAT trainer `locomotion/go2_neat_train.py`; `tensorneat` 0.2.0 from its `evoxc` branch is required by the TensorNEAT trainer only.
-- Optional `iree-base-compiler`/`iree-base-runtime` adapters are what enable non-CPU `evoxc` targets; see `locomotion/CONTEXT.md` for the stack's dependency detail.
+- Also not in `pyproject.toml`: `evoxc` (EvoX Compiler, 0.1.0) is required by the locomotion scripted-trot demo `locomotion/try1.py`, by both neuroevolution trainers (`locomotion/go2_neat_train.py`, `drone/hover_neat_train.py`) and by the whole `neuroevolution/` layer; `tensorneat` 0.2.0 from its `evoxc` branch is required by the two trainers and the `neuroevolution/` layer.
+- Optional `iree-base-compiler`/`iree-base-runtime` adapters are what enable non-CPU `evoxc` targets; ROCm `tell()` additionally needs a `jax_rocm7_pjrt` PJRT plugin. See `locomotion/CONTEXT.md` (AMD Instinct MI300X VF / ROCm), `drone/CONTEXT.md` and `neuroevolution/CONTEXT.md` for the detail.
+- `examples/neuroevolution/benchmarks/RESULTS.md` is the Stage-3 measurement record (PyTorch env vs evoxc env replay parity, environment/TensorNEAT timings, initial-port vs device-resident rollout, unmatched baselines).
 - Optional backends: `LuisaRenderPy` (RayTracer; lives in the `genesis/ext/LuisaRender` git submodule), `gs_madrona` (Linux x86_64 native batch renderer, a core dep on that platform).
 - `pysplashsurf` (core dep) backs SPH surface reconstruction (e.g. `coupling/water_wheel.py --recon`).
 - Network-dependent scripts download assets from Hugging Face (`Genesis-Intelligence/assets`) at runtime.
@@ -63,7 +65,8 @@ Authoring rules live in `.github/contributing/EXAMPLES.md`; read it before addin
 - `gui/` -> ImGui viewer overlay
 - `ipc/` -> external IPC coupler (`pyuipc`)
 - `kinematic/` -> kinematic ghost entities
-- `locomotion/` -> Go2 PPO train/eval (`go2_*`), TensorNEAT neuroevolution walking trainer (`go2_neat_*`), scripted trot (`try1.py`), backflip (checkpoints in `locomotion/backflip/`)
+- `locomotion/` -> Go2 PPO train/eval (`go2_*`), TensorNEAT neuroevolution walking trainer (`go2_neat_*` + `go2_device_rollout.py`), scripted trot (`try1.py`), backflip (checkpoints in `locomotion/backflip/`)
+- `neuroevolution/` -> shared neuroevolution env contract, seeding rules, evolution/policy graphs, `NeuroevolutionTrainer`, benchmark harness + `benchmarks/RESULTS.md`
 - `manipulation/` -> grasping RL + behavior cloning
 - `rendering/` -> RayTracer (LuisaRender), cameras, async render
 - `rigid/` -> rigid-body control/IK/terrain/DR/multi-GPU/constraints
