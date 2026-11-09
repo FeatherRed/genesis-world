@@ -14,7 +14,7 @@ Each script is a self-contained `main()` using the standard `gs.init` -> `gs.Sce
 
 - Pure rigid-body examples; no soft-body, FEM, or coupling solvers involved.
 - Standard CLI conventions: `-v/--vis` opens the viewer, `-g/--gpu` (where present) switches to `gs.gpu`.
-- Under pytest (`PYTEST_VERSION` set) step budgets shrink drastically (e.g. `tower.py` runs 20 vs. 10000 steps, `contact_manifold.py` runs 8).
+- When `PYTEST_VERSION` is present in `os.environ` (a `.github/contributing/EXAMPLES.md` convention), step budgets shrink drastically (e.g. `tower.py` runs 20 vs. 10000 steps, `contact_manifold.py` runs 8).
 
 # Gotchas
 
