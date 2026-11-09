@@ -1,18 +1,31 @@
 # examples/neuroevolution/benchmarks/results
 
-Committed raw records of the Stage-3 benchmark harness: one JSON file per measurement, written through `common.write_record` (sorted keys, sample lists capped so a file stays below ~150 KB).
-`env_<task>_replay_seed<seed>[_r<repeat>].json` (`kind="env_replay"`, `bench_envs.py replay`) is the pre-migration parity run: per-step oracle deviations, named timings and a determinism fingerprint.
-`env_<task>_throughput_<residency>_<physics>_pop<n>[_r<repeat>].json` (`kind="env_throughput"`, `bench_runtime.py throughput`) carries `workload` (pop/rows/horizon/residency/backend/device/physics/variant), `phases` (`build_s`, per-graph `graph_build_s`, `first_generation_s`, `steady_generation_median_s`, `close_s`), `measurements.generations[*]` (one row per generation with a `warmup` flag, steps, steps_per_s, env_steps_per_s, `timings.groups`, `traffic`), `measurements.throughput` (median/spread over the three timed generations), `per_step_means`, `cache`, `checks` and the `host_calls_per_step`/`host_bytes_per_step`/`sync_calls_per_step` counters.
-`residency_<task>_gpu|device_cpu[_r<repeat>].json` (`kind="env_residency"`, `bench_runtime.py residency-parity`) carries `measurements.parity` (per-array max abs diffs, bit-identical flags and both fingerprints for generation 0), `measurements.sides.numpy|device` (each a throughput block, `traffic` counters, `host_calls_per_step`/`host_bytes_per_step`/`sync_calls_per_step`, `device_resident_intermediates` and go2's `state_read_parity`) and `measurements.comparison` (steps/s ratio plus the same three per-step counters).
-`neat_<task>_seed<n>[_gpu][_<residency>][_<tell>_tell][_r<repeat>].json` (`kind="neat_train"`, `bench_neat.py train`) is one full TensorNEAT training run (pop 8, 3 generations, horizon 200): `measurements.generations[*]` carries a generation's fitness vector, seeds, end_reasons and cache counters plus the harness timings `evaluate_s` (env.evaluate incl. the fitness graph), `env_wall_s` (the env's own counter), `tell_s` (the compiled NEAT transition) and `generation_s` (with `bookkeeping_s` the residual between the regions).
-`phases` of a `neat_train` record holds `import_s`, `build_s`, per-graph `graph_build_s` (`obs`/`policy`/`advance`/`fitness`/`controls`/`reset_obs`/`tell`), `setup_s`, `tell_build_s`, `first_generation_s`, `steady_generation_median_s`, `holdout_s`, `close_s` and `totals_s`; `measurements.totals` holds the per-generation medians and spreads (evaluate/generation/tell/steps-per-s), `measurements.learning_curve` the per-generation best/median fitness with cumulative env steps and cumulative loop seconds, and `measurements.config` the trainer's own summary config.
-`measurements.holdout` scores the initial (generation-0) and trained (last-generation) population on one fresh triple, `seeding.generation_seed_table(master_seed + 1000, 1)`, that no training generation used, with the best policy's train-vs-held-out fitness and the per-policy deltas; `env.seed_table` is restored afterwards.
-`measurements.checks.determinism_fingerprint` is the sha256 over the seed table, the per-generation seeds, the per-generation fitness and the held-out fitness (6 dp): a second process running the same command must reproduce it exactly.
-`neat_determinism_<task>.json` (`kind="neat_determinism"`, `bench_neat.py check-determinism`) compares two `neat_train` records of the same task/seed and carries `measurements.checks` (match flags and max abs diffs for the seed table, seeds, fitness and held-out fitness, plus both fingerprints) and `measurements.verdict`; its `status` is `ok` only when every one of them is identical.
-`unmatched_baselines.json` (`kind="probe_unmatched_baselines"`, `bench_probe.py unmatched`) records the torch baselines that could not be driven: `measurements.imports` and `measurements.adapter_attempts` carry each case's command, returncode, exception type/message and stdout/stderr tails, `measurements.interface_mismatch` the per-task source facts and the missing row/seed/episode-return/evaluate contract, `measurements.ppo` the unmatched algorithm baseline, `measurements.install_attempt` the single offline pip/uv attempt, and `measurements.verdict` the "no environment measured" outcome.
-`tell_backend_rocm.json` (`kind="probe_tell_backend"`, `bench_probe.py tell-backend --all`) carries one `measurements.entries[<backend>@<device>]` per backend with `status` (`ok`/`timeout`/`failed`/`skipped`), `timeout_s`, `elapsed_s`, `phases_reached`/`last_phase`, stdout/stderr tails and the worker's `result` (build/run seconds); `measurements.gpu_after` and `measurements.verdict` prove the GPU was free and no worker was left running.
-`torch_cpu_boundary.json` (`kind="probe_torch_cpu_boundary"`, `bench_probe.py torch-cpu`) carries `measurements.ast_scan` (per-file torch/genesis/tensordict imports with line and scope), `measurements.runtime_probe` (a fresh subprocess: whether `import genesis` pulls torch, torch/HIP versions) and `measurements.measured_boundary` (the committed per-step `state_read` share, throughput timer means and residency host calls/bytes/syncs, each with its `source` file and `git_head`).
-Probe records are written by `common.write_record` like every other record, and their only own timings are subprocess `elapsed_s`/`timeout_s`; every other number is either a subprocess fact or a citation of an earlier record.
-Every record carries `kind`, exact `command`, `git` head/baseline, `packages`, `host` (loadavg plus rocm-smi PIDs, with this process' own PIDs filtered out into `rocm_pids_all`/`owned_gpu_pids`), `gpu`, `genesis_init`, `contended`/`contention_reasons`, `phases`, `status` and `error`.
-`_r<repeat>` is an independent process running the same command with `--process-role warm`, so per-graph build and first-generation latency can be compared cold against warm.
-Records are never edited by hand — rerun the command named in `command` to regenerate one, and read `host`/`contended` before trusting a timing.
+## Intent
+The committed raw records of the Stage-3 measurement harness, one JSON file per measurement, plus the two generated artifacts `summary.json` and `tables.md`.
+Each record is self-describing: `command`, `git` (head, baseline and `baseline_env_diff_empty`), `packages`, `host`, `gpu`, `workload`, `phases`, `measurements`, `status`.
+Nothing in this directory is edited by hand except `CONTEXT.md`; a new measurement adds a new file.
+
+## API Surface
+- `env_<task>_replay_seed<seed>[_r<repeat>].json` — `env_replay` (4): oracle parity, 100 steps, pop 8.
+- `env_<task>_throughput_<residency>_<physics>_pop<n>[_r<n>].json` — `env_throughput` (8): CPU throughput at pop 8 and 32, cold/warm.
+- `residency_<task>_<gpu|device_cpu>[_r<n>].json` — `env_residency` (6): NumPy vs device residency, parity, host traffic, per-graph builds.
+- `neat_<task>_<variant>[_r<n>].json` — `neat_train` (15): 3-generation trainer runs (CPU NumPy residency, GPU device residency, GPU NumPy residency, XLA tell, seeds 0-2).
+- `neat_determinism_go2.json` — `neat_determinism` (1): cross-process verdict.
+- `unmatched_baselines.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json` — the three Phase-4 probes.
+- `summary.json` — generated by `summarize.py`: `validation`, `environment`, `families` (entries + aggregates), `sources`.
+- `tables.md` — generated by `summarize.py --markdown`: tables T1-T20 embedded verbatim in `../RESULTS.md`.
+
+## Constraints
+Records are immutable evidence: never edit a raw record to make the report agree with it — record the discrepancy in `RESULTS.md` and in the execution report instead.
+`summary.json` is compact JSON under 200 KB; `tables.md` is the readable rendering of the same payload.
+37 records exist; the 38th file in this directory is `CONTEXT.md`.
+
+## Known Issues
+A stale `summary.json`/`tables.md` is a review defect: regenerate with `python examples/neuroevolution/benchmarks/summarize.py --markdown examples/neuroevolution/benchmarks/results/tables.md`.
+33 of the 37 records were taken with `git.dirty=true` (harness files and sibling records only; the pilots are proven unchanged by `baseline_env_diff_empty`).
+
+## Routing Table
+- `../summarize.py` -> validation, aggregation and both generated artifacts.
+- `../summary_tables.py` -> the markdown tables.
+- `../RESULTS.md` -> the published report that embeds these tables.
+- `../common.py` -> the schema these records follow.

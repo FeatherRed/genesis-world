@@ -1,67 +1,80 @@
 # examples/neuroevolution/benchmarks
 
 ## Intent
-The Stage-3 measurement harness of the PyTorch -> EvoX Compiler migration: it answers, per pilot, whether the migrated evaluation environment still computes the pre-migration maths and how fast it runs.
+The measurement harness of the PyTorch -> EvoX Compiler migration: it answers, per pilot, whether the migrated evaluation environment still computes the pre-migration maths, how fast it runs, and how the trainer behaves end to end.
 Every measurement is a committed JSON record under `results/`, reproducible from the exact `command` it stores.
-Phase 1 (`bench_envs.py`) implements `replay`; Phase 2 (`bench_runtime.py`) implements `throughput` and `residency-parity`, which add the steps-per-second matrix and the NumPy-vs-device residency comparison (parity, per-step host traffic, per-graph compile times).
-Phase 3 (`bench_neat.py`) implements `train` (one full `trainer.NeuroevolutionTrainer` run with `env.evaluate` and the tell graph timed separately, plus a held-out score) and `check-determinism` (two records of the same seed must be identical).
-Still later phases: the `batch` pop-size/horizon sweep and the IREE/ROCm tell timeout, documented in the CLI help text instead of being stubbed.
+`summarize.py` validates and aggregates those records into `results/summary.json` plus `results/tables.md`, and `RESULTS.md` is the published Stage-3 report that embeds those tables.
 Nothing here is imported by the trainer or by the pilot envs: the dependency arrow points one way, from the harness into the siblings.
 
 ## API Surface
-- `common.py` — record schema and provenance (`new_record`, `write_record`, `git_info`, `packages`, `host_info`, `gpu_info`), `stats`, `Timer`, `wrap_function`/`wrap_method`, `wrap_traffic`/`Counter` (per-call and per-byte traffic aggregation), `sync`, `run_guarded`, `setup_paths`, `BASELINE_COMMIT = "ad2f07e5"`.
-- `oracle.py` — independent reimplementations: `go2_observations` (transcribed from `tests/test_go2_neat_kernels.py`), `go2_reward` (via `go2_legacy_reference.walking_reward_terms`), `go2_done`, `hover_oracle_step`/`hover_graph_terms`/`hover_reset_obs` (via `hover_legacy_reference`).
-- `bench_envs.py` — the Phase-1 CLI `replay --task {go2,hover} --pop-size 8 --horizon 100 --master-seed 0 --repeat 0 --process-role only [--generations 2] [--out PATH]` plus the reusable helpers Phase 2 imports: `_load_task`, `_build_env(env_cls, pop_size, master_seed, horizon, *, residency, backend, device, stop_when_done, perturbation)`, `_instrument`, `_go2_parity`/`_hover_parity`, `_generation_entry`, `_merge_parity`, `_fingerprint`, `StepCapture`, `CallCapture`.
-- `runtime_probes.py` — the measurement vocabulary (timer groups, traffic tags, region descriptions, `DEVICE_RESIDENT_INTERMEDIATES`) and the patches that produce the numbers: per-graph build timer, host/device transfer and rollout-entry wrappers for both residencies, the `RigidOptions` runtime override, the getter-vs-live-buffer state probe; every probe returns its own `restore` callable.
-- `runtime_measure.py` — `_measure_env` (build, warm up on generation 0, time generations 1-3, restore every patch), the per-generation record entry, per-step means, traffic totals, GPU-init/provenance helpers (`_ensure_gs_init`, `_filter_own_gpu_pids`, `_process_tree`) and `_consistency_checks`.
-- `bench_runtime.py` — the Phase-2 CLI: `throughput --task {go2,hover} --pop-size {8,32} --horizon 200 --residency {numpy,device} --backend numpy|iree --device cpu:0|rocm:0 [--gpu] [--repeat N] [--process-role cold|warm|only] [--collision-cap N] [--out PATH]` and `residency-parity --task ... --pop-size 8 --horizon 200 [--gpu]`, plus the record builders, parity comparison, workload description and summary printer; both subcommands build once, run generation 0 as an untimed warm-up, then generations 1-3 as the timed set.
-- `bench_neat.py` — the Phase-3 CLI: `train --task {go2,hover} --master-seed N --pop-size 8 --generations 3 --horizon 200 --residency {numpy,device} --backend {numpy,iree} --device cpu:0|rocm:0 [--tell-backend {numpy,xla}] [--pjrt-plugin PATH] [--gpu] [--repeat N] [--process-role cold|warm|only] [--out PATH]` and `check-determinism A.json B.json [--out PATH]`, plus the workload block, the default record name and the two summary printers.
-- `bench_neat_measure.py` — the Phase-3 measurement: `measure(args)` (build env, build trainer, `setup()`, run with `env.evaluate` and `trainer.run_tell` timed separately via `RegionProbe`, restore every patch, held-out score, close), `holdout`, `generation_entry`, `fingerprint`/`fingerprint_payload`, `perturbation_for`, `genome_of`, `PopulationCapture` and the per-task genome/budget constants.
-- `bench_probe.py` — the Phase-4 CLI: `unmatched` (torch baseline imports/adapters/install, PPO), `tell-backend` (one worker run per backend, NumPy/XLA expected ok, IREE/ROCm expected timeout) and `torch-cpu` (AST boundary scan + `import genesis` probe + cited committed boundary numbers).
-- `probe_sources.py` — the read-only source facts of the probe: the AST import/function scanner, the per-baseline `interface_mismatch`, `torch_scan`, and the extraction of committed `state_read`/throughput/residency boundary blocks with their source file and git head.
-- `probe_runtime.py` — the probe's process transport: hard-timeout session subprocesses (`run_capture`), baseline `import_case`, the one `install_attempt` (pip then uv, `$TMPDIR` target only), `run_tell_entry` for `_tell_worker.py`, and the `gpu_after`/`tell_worker_processes` cleanup proof.
-- `_tell_worker.py` — the tell-graph worker: smallest honest TensorNEAT pipeline (45->12, pop 4), `build_tell` + one `run_tell` on the requested backend, printing a `PHASE` marker before every step so a killed build still reports how far it got.
-- `results/` — the committed records (`env_<task>_replay_seed<seed>[_r<repeat>].json`, `env_<task>_throughput_<residency>_<physics>_pop<n>[_r<repeat>].json`, `residency_<task>_<gpu|device_cpu>[_r<repeat>].json`, `unmatched_baselines.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json`).
+- `common.py` — record schema and provenance (`new_record`, `write_record`, `git_info`, `packages`, `host_info`, `gpu_info`), `stats`, `Timer`, `wrap_function`/`wrap_method`, `wrap_traffic`/`Counter`, `sync`, `run_guarded`, `setup_paths`, `BASELINE_COMMIT = "ad2f07e5"`.
+- `oracle.py` — independent reimplementations: `go2_observations`, `go2_reward` (via `go2_legacy_reference.walking_reward_terms`), `go2_done`, `hover_oracle_step`/`hover_graph_terms`/`hover_reset_obs` (via `hover_legacy_reference`).
+- `bench_envs.py` — Phase 1 CLI `replay --task {go2,hover} --pop-size 8 --horizon 100 --master-seed 0 --repeat 0 --process-role only [--generations 2] [--out PATH]` plus the reusable helpers (`_load_task`, `_build_env`, `_instrument`, `_go2_parity`/`_hover_parity`, `_generation_entry`, `_merge_parity`, `_fingerprint`, `StepCapture`, `CallCapture`).
+- `runtime_probes.py` — the measurement vocabulary (timer groups, traffic tags, `DEVICE_RESIDENT_INTERMEDIATES`) and the monkey-patches that produce the numbers, each returning its own `restore` callable.
+- `runtime_measure.py` — `_measure_env` (build, untimed generation 0, timed generations 1-3, restore), per-step means, traffic totals and the GPU/provenance helpers.
+- `bench_runtime.py` — Phase 2 CLI: `throughput --task {go2,hover} --pop-size {8,32} --horizon 200 --residency {numpy,device} --backend numpy|iree --device cpu:0|rocm:0 [--gpu] [--repeat N] [--process-role cold|warm|only] [--collision-cap N] [--out PATH]` and `residency-parity --task … --pop-size 8 --horizon 200 [--backend …] [--device …] [--gpu]`.
+- `bench_neat.py` — Phase 3 CLI: `train --task --master-seed --pop-size 8 --generations 3 --horizon 200 --residency {numpy,device} --backend {numpy,iree} --device cpu:0|rocm:0 [--tell-backend {numpy,xla}] [--pjrt-plugin PATH] [--gpu] [--repeat N] [--process-role …] [--out PATH]` and `check-determinism A.json B.json [--out PATH]`.
+- `bench_neat_measure.py` — one training run: `measure`, the region probes, `holdout`, `generation_entry`, `fingerprint`/`fingerprint_payload`, `perturbation_for`, `genome_of`, `PopulationCapture`.
+- `bench_probe.py` — Phase 4 CLI: `unmatched`, `tell-backend --all`, `torch-cpu`, each writing one record and a printed summary.
+- `probe_sources.py` — AST import/function scanning, per-baseline `interface_mismatch`, `torch_scan`, and the extraction of committed boundary blocks with source file and git head.
+- `probe_runtime.py` — hard-timeout session subprocesses (`run_capture`), `import_case`, the one `install_attempt`, `run_tell_entry`, and the GPU cleanup snapshot.
+- `_tell_worker.py` — the phase-marked tell-graph worker (45 -> 12, pop 4) that proves which backends build and which hang.
+- `summarize.py` — Phase 5 CLI: `summarize.py [build|check] [--results DIR] [--out PATH] [--markdown PATH] [--print-tables] [--quiet]`; validates every record (`BASELINE_SHA`, `REQUIRED_KEYS`), extracts per-record entries, aggregates by (kind, task, workload signature), writes `results/summary.json` (`serialize_summary`, compact) and `results/tables.md` (`markdown_document`), and `check` runs its own `_selfcheck`.
+- `summary_tables.py` — the presentation half of `summarize.py`: `CHUNK_COLUMNS`, `_entries`, `_table_block`, one builder per family (`_inventory_table` T1, `_replay_tables` T2-T3, `_throughput_tables` T4-T7, `_residency_tables` T8-T11, `_neat_tables` T12-T15, `_probe_tables` T16-T20) and `markdown_document`.
+- `RESULTS.md` — the published report: scope/verdict, pins, method, the two comparisons, residency, batches, unmatched baselines, the torch/CPU boundary, limitations, reproduction commands and the record index.
+- `results/` — 37 committed records; `results/summary.json` and `results/tables.md` are generated, never hand-edited.
+
+## Record schema and families
+Every record carries `schema="neuroevolution-benchmark/1"`, `kind`, `command`, `git`, `packages`, `host`, `gpu`, `contended`, `task`, `seed`, `repeat`, `process_role`, `workload`, `phases`, `timings`, `measurements`, `status`, `error`.
+Families: `env_replay` (4: oracle parity), `env_throughput` (8: pop 8/32, cold/warm), `env_residency` (6: NumPy vs device, incl. the `iree@cpu:0` noise pair), `neat_train` (15: 3-generation trainer runs), `neat_determinism` (1), `probe_unmatched_baselines` (1), `probe_tell_backend` (1), `probe_torch_cpu_boundary` (1).
+Record naming: `env_<task>_replay_seed<seed>[_r<repeat>].json`, `env_<task>_throughput_<residency>_<physics>_pop<n>[_r<n>].json`, `residency_<task>_<gpu|device_cpu>[_r<n>].json`, `neat_<task>_<variant>[_r<n>].json`, `neat_determinism_go2.json`, `unmatched_baselines.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json`.
+
+## How to re-run
+Put `examples/neuroevolution` on `PYTHONPATH` (bare-name sibling imports), set `MPLCONFIGDIR=$TMPDIR/mpl`, and use the project venv.
+`--process-role cold` = first process of a command (fresh interpreter, first HIP context, HSA re-exec); `warm` = the second process; `only` = a single process with no pair. "Cold" is NOT cache-cold.
+Every run builds once, runs generation 0 as an untimed warm-up, then times generations 1-3; pass `--repeat 1` with `--process-role warm` for the second process of a pair.
+GPU runs need `--gpu` (and `gs.init` before any `torch.cuda` call, which `bench_runtime._ensure_gs_init` handles); `xla` additionally needs `--pjrt-plugin <xla_rocm_plugin.so>`.
+After any measurement run: `python examples/neuroevolution/benchmarks/summarize.py --markdown examples/neuroevolution/benchmarks/results/tables.md`, which rewrites `results/summary.json` and `results/tables.md`.
+
+## What is comparable vs not
+NumPy vs device residency is comparable because both sides run the same physics backend with the same seed and perturbation; only the location of the graph operands differs.
+CPU vs GPU *physics* is a different physics backend and must not be read as a residency win.
+Go2 replay parity is aggregate-reward-only (`run_advance` returns the sum); hover parity is oracle-complete (terms, total, masks, reset obs, commands, yaw).
+The torch environments were never measured (they cannot be imported), so there is no torch-vs-migrated number anywhere in `results/`.
+`residency_hover_device_cpu*` is noise (both sides CPU) and `iree@rocm:0` tells time out rather than running slowly.
 
 ## Constraints
-- No module imports `genesis`, `torch`, `tensordict` or `evoxc` at module level; `common.py` imports none of them at all, the oracles import their siblings inside the functions, and `bench_runtime.py` imports genesis lazily inside its GPU path.
-- The pilot environments, kernels, oracles and the tests are read-only siblings: the harness instruments them by runtime monkey-patching (`wrap_function`/`wrap_method`/`wrap_traffic`, class-level for the lazily built device rollouts) and restores every patch when a generation loop ends, so a `--collision-cap` override is a runtime patch of `gs.options.RigidOptions`, never a source edit.
-- Genesis must be initialised before any `torch.cuda`/HIP call: `bench_runtime._ensure_gs_init` runs `gs.init(backend=gs.gpu, precision="32", logging_level="warning")` BEFORE the provenance block touches `torch.cuda`, otherwise the HSA re-exec repair is skipped and the process dies with `HSA_STATUS_ERROR_INVALID_PACKET_FORMAT`.
-- Records are the deliverable: a failed run still writes `status="failed"` plus the error block, and `contended` records a busy GPU or a 1-minute load average above 4 (this process' own `rocm-smi` PIDs are filtered out into `host.rocm_pids_all`/`owned_gpu_pids`).
-- Timings are host wall clock with `common.sync()` before and after each generation; a record states which regions were synchronized (a no-op on CPU-resident runs), what the unmeasured `residual` is, and reports median plus spread over the three timed generations rather than a single number.
-- Traffic counters stay mutually exclusive (bytes are counted only on the primitive transport functions, outer wrappers count calls only) so `residual_s` cannot go negative.
-- Files stay well under ~1000 lines, one module per concern, and never write outside this directory.
-- Every Phase-4 foreign-process measurement runs in its own session with a hard timeout and a process-group kill: `probe_runtime.run_capture` redirects the child's output to temp files (a full pipe would block before the timeout), kills the group on expiry and returns the tail, and `_tell_worker.py` prints a `PHASE` marker before every step so a timeout still records the phase it reached.
-- A timeout is recorded as `status="timeout"` with its wall time and last phase, never substituted by a CPU result; `probe_sources.py` only parses the modules it scans, and `_tell_worker.py` imports no `genesis` or `torch`.
+Nothing may be edited outside this directory; the pilots, kernels, oracles and tests are read-only siblings instrumented only by runtime monkey-patching that restores itself.
+No venv installs and no network: the Phase-4 install attempt must stay an `unavailable` outcome.
+Every foreign-process measurement runs in its own session with a hard timeout and a process-group kill; a timeout is recorded as `status="timeout"` with its wall time and last phase, never replaced by a CPU result.
+One shared GPU: no parallel measurement, and a run is flagged `contended` when the GPU is busy or the 1-minute load average exceeds `common.CONTENTION_LOADAVG = 4.0`.
+Files stay well under ~1000 lines, one module per concern, and every module imports `genesis`/`torch`/`evoxc` lazily or not at all.
+`summary.json` is written compact on purpose (`MAX_SUMMARY_BYTES = 200_000`) and `tables.md` is the readable rendering of the same payload.
 
 ## Routing Table
-- `common.py` -> record schema, host/git/package provenance, statistics and timing wrappers.
+- `common.py` -> record schema, provenance, statistics and timing wrappers.
 - `oracle.py` -> the independent per-step maths the parity check compares against.
-- `bench_envs.py` -> the `replay` measurement, the CLI entry point and the shared env/instrumentation helpers.
-- `runtime_probes.py` -> timer groups, traffic tags and the monkey-patches that measure one environment.
-- `runtime_measure.py` -> `_measure_env` and the per-generation record entries it produces.
-- `bench_runtime.py` -> the `throughput` and `residency-parity` measurements (timed generations, per-graph builds, host traffic, NumPy-vs-device parity) and their CLI.
-- `bench_neat.py` -> the `train` and `check-determinism` subcommands, the record blocks and the summary printers.
-- `bench_neat_measure.py` -> one training run: `measure`, the region probes, the held-out score and the determinism fingerprint.
-- `bench_probe.py` -> the Phase-4 `unmatched` / `tell-backend` / `torch-cpu` probes and their printers.
-- `probe_sources.py` -> AST source facts, `interface_mismatch` and the committed-boundary extraction.
-- `probe_runtime.py` -> hard-timeout subprocesses, the install attempt, the tell-worker runner and the GPU cleanup snapshot.
-- `_tell_worker.py` -> the phase-marked tell-graph worker subprocess.
-- `results/` -> committed raw records, one file per measurement.
-- `../../locomotion/go2_neat_env.py`, `../../drone/hover_neat_env.py` -> the instrumented pilot envs (siblings — read-only, escalate writes to parent).
-- `../trainer.py`, `../seeding.py` -> the shared layer the pilots are built on (siblings — read-only).
+- `bench_envs.py` -> the `replay` measurement and the shared env/instrumentation helpers.
+- `runtime_probes.py`, `runtime_measure.py` -> timer groups, traffic tags, patches, and one measured environment.
+- `bench_runtime.py` -> `throughput` and `residency-parity`.
+- `bench_neat.py`, `bench_neat_measure.py` -> `train`, `check-determinism`, the held-out score and the fingerprint.
+- `bench_probe.py`, `probe_sources.py`, `probe_runtime.py`, `_tell_worker.py` -> the Phase-4 probes.
+- `summarize.py`, `summary_tables.py` -> validation, aggregation, `summary.json`, `tables.md`.
+- `RESULTS.md` -> the published report.
+- `results/` -> the raw records and the two generated artifacts.
+- `../../locomotion/go2_neat_env.py`, `../../drone/hover_neat_env.py`, `../trainer.py`, `../seeding.py` -> the pilots and the shared layer (siblings — read-only, escalate writes to parent).
 
-## Gotchas
-- `go2_neat_kernels.run_advance` returns only the aggregate reward, so a Go2 per-term deviation cannot be measured; the record sets `reward.per_term_available = false` with the reason and compares the total instead.
-- `hover_legacy_reference` reports reward terms pre-scale while `hover_kernels` reports them `dt`-scaled, so `oracle.hover_graph_terms` applies the one documented rescale (`total` agrees on both sides).
-- `Go2NeatEnv.evaluate` draws the per-generation seed perturbation outside its own `wall_time_s`, so `generation_total` and the env's counter differ; `phases.generation_total_scope` says so, and that draw has been observed to cost seconds once (torch geometry warm-up) before settling at ~10 ms, so compare `host_rng` across records instead of assuming it is free.
-- The pilot builds dominate a run (`build_s` 5-40 s, quadrants disk-cache dependent), which is why every record reports `phases.build_s` separately from the generations.
-- Go2 residency parity is NOT bit-identical by construction: NumPy residency reads state through the entity getters while device residency reads the live solver `rigid_info.qpos`, so `base_quat` differs by 1.19e-07 and horizon-200 returns by 3.05e-05 (`state_read_parity` in the record measures exactly that getter-vs-buffer gap); Hover parity IS bit-identical because both sides read `links.quat`.
-- The generation-0 warm-up is untimed for a reason: a Go2 GPU NumPy-side first generation runs at 23.7 steps/s (62.6% residual, torch geometry warm-up) against a steady 122, and the device-side Hover run degrades 168 -> 160 steps/s across generations, so never quote a single generation.
-- `go2_neat_env.__init__` hardcodes `RigidOptions(max_collision_pairs=20)`; pop 32 (96 rows) does NOT exceed it, so `--collision-cap` was not needed at any measured size and no `variant="collision_cap_200"` record exists.
-- Phase 3 numbers at pop 8 (24 rows, horizon 200): CPU/NumPy residency steady generation 1.26-1.31 s for Go2 and 0.89-0.95 s for hover; Go2 GPU device residency is faster than Go2 GPU NumPy residency (1.33 s vs 1.71 s per generation, identical fitness) but still slower than CPU, and hover's GPU device rollout (1.24 s) is slower than its CPU one too, so at this batch size the accelerator does not pay off end-to-end.
-- A GPU process' generation 0 is first-touch dominated (Go2 8.0-8.5 s against a 1.3 s steady generation, hover 1.9-2.0 s against 1.25 s), which is why `phases.first_generation_s` and `phases.steady_generation_median_s` are reported separately and the record never quotes a single generation.
-- The xla tell matches the numpy tell in steady state (~6 ms) but costs an 11.8 s build and a 1.8 s first tell against 0.26-0.40 s and 0.01 s, and it changes the generation-1+ genomes: fitness drifts by 1.5e-05 and the held-out trained fitness by 7.6e-06 (fingerprints differ), so an xla-tell record is comparable in trend but not bit-identical to a numpy-tell one.
-- `--process-role cold` and `warm` produced identical build times here (26.5-27.4 s Go2, 23.9-24.0 s hover) because the quadrants/IREE disk caches were already warm; the pair still isolates process-level variance, and the Go2 CPU seed-0 pair reproduced fingerprint, fitness and held-out fitness exactly.
-- A bare `bench_envs.py`, `bench_runtime.py`, `bench_probe.py` or `_tell_worker.py` prints usage and exits 0 so the `examples/**/*.py` smoke harness does not treat the CLI as a failing example; naming a subcommand parses strictly.
-- The Phase-4 probes record what was NOT measured: both torch baselines are unmatched at import (`tensordict`/`rsl_rl`/`rsl-rl-lib` absent) and PPO is an unmatched algorithm baseline; `iree@rocm:0` tells time out inside `build_tell` while `numpy@cpu:0` and `xla@rocm:0` build, and `torch_cpu_boundary.json` cites the committed per-step boundary numbers instead of re-measuring them.
+## Known Issues / Gotchas
+"Cold" is not cache-cold: the quadrants/IREE disk caches were warm, so cold and warm build times differ by well under a second (Go2 26.72 vs 26.53 s, hover 24.00 vs 23.87 s).
+Go2 residency is not bit-identical by construction (getter vs live-solver-buffer read: `base_quat` 1.19e-07, `returns` 3.05e-05, `fitness` 6.10e-05); hover is bit-identical because both sides read `links.quat`.
+`residency_hover_device_cpu*` ratios (0.951x / 1.154x) are noise, and a GPU process' generation 0 is first-touch dominated (Go2 8.23 s against 1.35 s steady).
+`iree@rocm:0` tell compilation does not terminate (killed at 240 s inside `build_tell`), so ROCm tells use `xla` with a PJRT plugin, which costs an ~11.8 s build and changes the fingerprint.
+`import genesis` pulls `torch` into the process (`torch 2.13.0+rocm7.1`) even though `examples/neuroevolution/*` imports none.
+`tests/test_examples.py` collects every `examples/**/*.py`; the CLIs print usage and exit 0 when invoked bare, and the shared helper modules (`common.py`, `oracle.py`, `summary_tables.py`, `runtime_*.py`, `probe_*.py`, `bench_*_measure.py`, `_tell_worker.py`) should be added to `IGNORE_SCRIPT_PATTERNS` by the tests node.
+Three records point at other workers' absolute paths in `command` (the harness ran in per-task worktrees); the commands are otherwise identical to the documented invocations.
+
+## Test Strategy
+`summarize.py check` is the node's executable check: it asserts the record count equals the number of sources, every group is non-empty, the aggregate counts match, the payload round-trips and is deterministic, it is under `MAX_SUMMARY_BYTES` (194 KB), `tables.md` has >= 18 tables each with a `Sources:` footnote and cites every record, and it pins three numbers by hand-checked value (Go2 replay observation 4.76837158203e-07, Go2 residency speedup 1.33579939608, Go2 seed-0 final best fitness -6.03994607925415).
+`bench_neat.py check-determinism` is the reproducibility test of the trainer: two processes of one command must agree exactly on seed table, seeds, fitness, held-out fitness and fingerprint.
+`results/tables.md` is regenerated by `summarize.py --markdown` and diffs cleanly, so a stale aggregate is visible in review.
+No `tests/` file lives here; the natural follow-up owned by the tests node is a `tests/test_neuroevolution_bench_*.py` covering `summarize.py` and the `IGNORE_SCRIPT_PATTERNS` entries.
