@@ -60,6 +60,16 @@ evolution defaults to XLA on ``rocm:0``, with an explicit ``--pjrt-plugin`` (or 
 ``EVOXC_PJRT_PLUGIN`` environment variable) selecting the PJRT plugin, because IREE's ROCm
 compile of the ``tell`` graph does not terminate.
 
+On a ROCm host whose torch wheel bundles its own ``libhsa-runtime64`` that differs from the
+system ROCm one, the trainer re-executes itself with the system HSA runtime preloaded
+(``LD_PRELOAD``), because torch's bundled HSA build corrupts AQL packets on long GPU
+rollouts (``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``); ``GO2_NEAT_NO_HSA_REEXEC=1`` disables
+that.  A re-exec is needed because ``LD_PRELOAD`` must exist before the dynamic loader maps
+torch's HIP/HSA libraries, and a Python-side preload (``ctypes.CDLL(..., RTLD_GLOBAL)``) is
+insufficient: the symbols bind to the system library but the crash persists.  This only
+happens on the GPU/HIP path, and since the parent has already imported torch it costs one
+extra interpreter start.
+
 Artifacts (git-ignored, never committed)
 ----------------------------------------
 ``<output-dir>/history.jsonl``  one JSON object per generation.
@@ -73,6 +83,7 @@ clicks are given explicitly, so a future smoke test cannot hang.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import json
 import logging
 import os
@@ -107,6 +118,73 @@ from go2_neat_kernels import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+# --- ROCm HSA runtime preload (stdlib only) -----------------------------------------
+
+
+HSA_REEXEC_GUARD = "_GO2_NEAT_HSA_REEXEC"
+HSA_REEXEC_DISABLE = "GO2_NEAT_NO_HSA_REEXEC"
+
+
+def _system_hsa_runtime_path():
+    """Return the system ROCm ``libhsa-runtime64`` to preload, or ``None``.
+
+    Only a Linux ROCm host whose torch wheel bundles its own HSA runtime needs the
+    workaround, so every other environment (already re-executed, explicitly disabled, no
+    torch, CPU-only torch, no ROCm install) returns ``None`` and the run is unchanged.
+
+    Returns:
+        Path | None: First system ``libhsa-runtime64.so.1.*`` whose real path differs from
+        the bundled one, or ``None`` when no re-exec is needed or possible.
+    """
+    if sys.platform != "linux":
+        return None
+    if os.environ.get(HSA_REEXEC_GUARD) or os.environ.get(HSA_REEXEC_DISABLE):
+        return None
+    spec = importlib.util.find_spec("torch")
+    if spec is None or spec.origin is None:
+        return None
+    torch_lib = Path(spec.origin).parent / "lib"
+    bundled = torch_lib / "libhsa-runtime64.so"
+    if not (torch_lib / "libamdhip64.so").is_file() or not bundled.is_file():
+        return None
+    bundled_real = os.path.realpath(bundled)
+    candidates = sorted(Path("/opt/rocm/lib").glob("libhsa-runtime64.so.1.*"))
+    for rocm_root in sorted(Path("/opt").glob("rocm-*")):
+        candidates += sorted(rocm_root.glob("lib/libhsa-runtime64.so.1.*"))
+    for candidate in candidates:
+        if candidate.is_file() and os.path.realpath(candidate) != bundled_real:
+            return candidate
+    return None
+
+
+def _reexec_with_system_hsa_runtime(argv):
+    """Re-exec the trainer with the system ROCm HSA runtime preloaded.
+
+    ``LD_PRELOAD`` has to be in place before the dynamic loader maps torch's HIP/HSA
+    libraries, so swapping the bundled runtime is only possible by starting a new process
+    image. Only the trainer running as its own entry point re-executes, so programmatic
+    ``main([...])`` calls and pytest imports are left alone.
+    """
+    runtime = _system_hsa_runtime_path()
+    if runtime is None:
+        return
+    if os.path.abspath(sys.argv[0]) != os.path.abspath(__file__):
+        return
+    env = dict(os.environ)
+    env[HSA_REEXEC_GUARD] = "1"
+    existing_preload = env.get("LD_PRELOAD")
+    env["LD_PRELOAD"] = str(runtime) if not existing_preload else f"{runtime}:{existing_preload}"
+    print(
+        f"INFO {Path(__file__).name}: re-executing with LD_PRELOAD={runtime} because torch's "
+        f"bundled libhsa-runtime64 corrupts AQL packets on long ROCm rollouts "
+        f"(set {HSA_REEXEC_DISABLE}=1 to disable)",
+        flush=True,
+    )
+    sys.stdout.flush()
+    sys.stderr.flush()
+    os.execve(sys.executable, [sys.executable, os.path.abspath(__file__), *argv], env)
 
 
 # --- Genome pipeline ----------------------------------------------------------------
@@ -276,6 +354,10 @@ def _parse_args(argv=None):
 
 def main(argv=None):
     args = _parse_args(argv)
+    if args.gpu or "rocm" in (args.evoxc_device or ""):
+        # Only the GPU/HIP path can hit torch's bundled HSA runtime; the CPU/numpy path
+        # must not pay for another interpreter start.
+        _reexec_with_system_hsa_runtime(list(argv) if argv is not None else sys.argv[1:])
     logging.basicConfig(
         level=logging.WARNING if args.quiet else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
