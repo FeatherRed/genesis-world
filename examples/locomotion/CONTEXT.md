@@ -29,6 +29,7 @@ The TensorNEAT stack (`go2_neat_kernels.py`, `go2_neat_env.py`, `go2_neat_train.
 - `build_advance(rows, *, max_episode_length, ...)` / `run_advance(...)` → `{"obs","reward","returns","alive","done","episode_length"}`: clips raw actions to ±100, the six dt-scaled `go2_env` reward terms, `alive`/`done`/`returns` masking, int32 episode counter, arctan2-free roll/pitch termination.
 - `build_fitness(n_policies, ...)` / `run_fitness(exe, returns)` → per-policy episode mean `(NP,)`; episodes that were never scored count as 0 before the mean.
 - `build_tell(algo, config, pop_arrays, species_leaves, n_policies, ...)` / `run_tell(...)` → `{"randkey","generation","pop","species"}`, species rebuilt with the pytree captured during the trace.
+  `build_tell` takes a keyword-only `plugin_path` (forwarded as the `xla` backend's `plugin_path` compile/load option; `None` leaves evoxc's own PJRT discovery in charge), and keeps the CUDA-only IREE reduction-distribution workaround scoped to `iree`+`cuda`.
 - `ExecutableCache.get(key, builder)` / `hits` / `misses` / `clear()`: shape-keyed reuse, so generation N+1 runs on generation N's executables (each call logged as `hit`/`miss` + key).
 
 ### TensorNEAT Go2 walking trainer (`go2_neat_env.py` + `go2_neat_train.py`)
@@ -41,7 +42,7 @@ The TensorNEAT stack (`go2_neat_kernels.py`, `go2_neat_env.py`, `go2_neat_train.
 - `horizon` = steps per episode; default = the full episode (`episode_length_s / dt` = 1000) and it is the `max_episode_length` baked into `build_advance`.
 - `end_reasons` buckets every row at the end of the generation with the exact keys `END_REASONS = {"unfinished": 0, "timeout": 1, "tilted": 2, "error": 3}`: `error` is the genesis `scene.get_error_envs_mask()` flag, `tilted` is a roll/pitch beyond `termination_if_*_greater_than` in the `quat_to_xyz` convention, `timeout` is any other `done`, and `unfinished` means the row was still alive when the horizon or the early stop ended the generation.
 - `stop_when_done=True` (default) ends the generation as soon as every row's `alive` is False; `stop_when_done=False` always simulates the full horizon (needed for throughput measurements and to exercise auto-reset/timeout).
-- `go2_neat_train.py` CLI: `--pop-size` (8), `--generations` (2; 1 under pytest), `--horizon` (full 1000; 20 under pytest), `--episode-length-s` (20.0), `--master-seed` (0), `--perturb-base-pos` / `--perturb-base-rpy` / `--perturb-joint-pos` (0.05 each), `--no-perturbation`, `--stop-when-done` / `--no-stop-when-done`, `-e/--exp-name`, `-o/--output-dir` (`out/go2_neat`), `-g/--gpu`, `--evoxc-backend` and `--evoxc-device` (rollout), `--tell-backend` (inherits the rollout backend), `-v/--vis`, `--quiet`.
+- `go2_neat_train.py` CLI: `--pop-size` (8), `--generations` (2; 1 under pytest), `--horizon` (full 1000; 20 under pytest), `--episode-length-s` (20.0), `--master-seed` (0), `--perturb-base-pos` / `--perturb-base-rpy` / `--perturb-joint-pos` (0.05 each), `--no-perturbation`, `--stop-when-done` / `--no-stop-when-done`, `-e/--exp-name`, `-o/--output-dir` (`out/go2_neat`), `-g/--gpu`, `--evoxc-backend` and `--evoxc-device` (rollout), `--tell-backend {numpy,iree,xla}` (inherits the rollout backend, except on ROCm where it defaults to `xla`), `--pjrt-plugin` (PJRT plugin `.so` for the `xla` backend; also exported as `EVOXC_PJRT_PLUGIN` when that variable is unset), `-v/--vis`, `--quiet`.
 - Trainer loop: `DefaultGenome(num_inputs=45, num_outputs=12, max_nodes=80, max_conns=640)` -> `NEAT(gen, pop_size=NP, species_size=3)` -> `Pipeline(algo, TraceOnlyProblem(), seed=evolution_seed(master_seed), backend="numpy", is_detailed=False)` -> `state = pipe.setup()` -> `config = pipe._static_config(state)`; then per generation ask (`pop` leaves) -> `env.evaluate` -> `run_fitness` -> `run_tell`.
 - `TraceOnlyProblem(tensorneat.problem.BaseProblem)` only declares `input_shape=(45,)` / `output_shape=(12,)`; its `evaluate` raises `NotImplementedError` because all real evaluation happens in the host loop.
 - All five graphs (obs, policy, advance, fitness, tell) are built once through `ExecutableCache` and reused for every generation; each generation logs `+6 hits/+0 misses` and the trainer prints the total `built 5 executables in ... (cache 0 hits / 5 misses)` line.
@@ -75,7 +76,7 @@ The TensorNEAT stack (`go2_neat_kernels.py`, `go2_neat_env.py`, `go2_neat_train.
 - evoxc 0.1.0 is a VCS install from `https://github.com/EMI-Group/evoxc` at commit `fe85a534192f749a97b2f6e3b13b0800f69b8d90` (recorded in its `direct_url.json`); reproduce with `uv pip install --python <venv>\Scripts\python.exe "evoxc @ git+https://github.com/EMI-Group/evoxc@fe85a534192f749a97b2f6e3b13b0800f69b8d90"`.
 - Optional accelerators: `uv pip install iree-base-compiler iree-base-runtime` (3.13.0 measured, only needed for the `iree` backend).
 - Neither `evoxc` nor `tensorneat` is declared in `pyproject.toml`; the rest of the stack is project core (`genesis-world` 1.4.6, `quadrants` 1.4.0, `torch`, `numpy`).
-- Machine of every measurement: Intel Core Ultra 7 265KF, 31.7 GB RAM, Windows 11 (build 26200), NVIDIA GeForce RTX 5070 (driver 617.42, CUDA UMD 13.4, sm_120), torch 2.14.1+cu130.
+- Machine of the CPU/CUDA measurements below: Intel Core Ultra 7 265KF, 31.7 GB RAM, Windows 11 (build 26200), NVIDIA GeForce RTX 5070 (driver 617.42, CUDA UMD 13.4, sm_120), torch 2.14.1+cu130; the MI300X/ROCm measurements are recorded separately in "AMD Instinct MI300X VF / ROCm (measured)".
 
 ## Run commands
 Run from the repo root; the script's own directory lands on `sys.path`, so `go2_neat_env` / `go2_neat_kernels` import by bare module name.
@@ -87,6 +88,8 @@ Run from the repo root; the script's own directory lands on `sys.path`, so `go2_
 - Reproduction check: run the smoke command twice with the same `--master-seed 0` into two `--output-dir`s and compare `history.jsonl` (seed table + fitness) — both runs must be identical.
 - Timeout/auto-reset probe (`max_episode_length=5`): `python examples\locomotion\go2_neat_train.py --pop-size 8 --generations 1 --episode-length-s 0.1 --horizon 40 --output-dir out\neat_timeout` → `timeout=12 tilted=12`.
 - NVIDIA GPU training: add `-g` for Genesis `gs.gpu` and IREE on `cuda:0` for rollout and `tell()`. Use `--tell-backend numpy` to explicitly run evolution on CPU.
+- ROCm training on the MI300X (Genesis `gs.gpu` + IREE rollout + XLA `tell()`, all on `rocm:0`): `PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/locomotion/go2_neat_train.py -g --evoxc-backend iree --evoxc-device rocm:0 --tell-backend xla --pjrt-plugin <xla_rocm_plugin.so> --pop-size 8 --generations 2 --horizon 25 --output-dir out/neat_amd_xla`; see "AMD Instinct MI300X VF / ROCm (measured)" for the numbers and the stability envelope.
+- ROCm all-XLA variant: replace `--evoxc-backend iree` with `--evoxc-backend xla` so rollout and evolution both run on XLA/`rocm:0`.
 - Every run writes `<output-dir>/history.jsonl` and `<output-dir>/summary.json`; the per-generation stdout line carries `seeds [...]`, best fitness, steps and `ends ...`.
 
 ## Measured numbers (TensorNEAT trainer)
@@ -105,8 +108,25 @@ Run from the repo root; the script's own directory lands on `sys.path`, so `go2_
 - IREE 3.13's default CUDA reduction distribution rejects a `stablehlo.reduce` in TensorNEAT's `tell()` graph. The CUDA `build_tell` disables that compiler path with `--iree-codegen-llvmgpu-use-reduction-vector-distribution=false`. The runner logs the `tell()` backend, device, and compilation time separately.
 - RTX 5070 smoke with `-g --pop-size 8 --generations 2 --horizon 25`: rollout and `tell()` both ran on `iree@cuda:0`. The `tell()` build took 4.58 s and each generation reused the five compiled graphs. In a separate three-generation `tell()` comparison with fixed fitness inputs, CUDA matched NumPy's integer outputs exactly and the largest finite floating-point difference was 4.77e-07.
 - Adapter availability as measured: `iree` works with `iree-base-compiler` / `iree-base-runtime` 3.13.0; `xla` fails without a PJRT C-API plugin; `tvm` fails without `jaxlib`; `iree` on `cpu:0` fails on Windows (`No Windows linker tool specified or discovered ... vcvarsall`).
-- For ROCm rollout with CPU evolution use `-g --evoxc-backend iree --evoxc-device rocm:0 --tell-backend numpy`. The ROCm `tell()` compiler run took over ten minutes without completing. The CUDA compiler workaround is scoped to CUDA.
+- On ROCm, `tell()` defaults to `xla` on `rocm:0` while rollout stays IREE (`-g --evoxc-device rocm:0`); `--tell-backend numpy` forces CPU evolution and `--evoxc-backend xla --tell-backend xla` runs the whole stack on XLA.
+  The CUDA tell path keeps IREE plus `--iree-codegen-llvmgpu-use-reduction-vector-distribution=false` (no NVIDIA GPU on the MI300X host, so it was not re-run there).
 - Nothing falls back silently: an unusable backend/device raises the adapter's error.
+
+### AMD Instinct MI300X VF / ROCm (measured)
+- Environment: AMD Instinct MI300X VF (gfx942, Card SKU M3000100), ROCm 7.1.0 (`/opt/rocm/.info/version`), driver 6.16.6 (`rocm-smi --showdriverversion`), HIP runtime 7.1.52802; Python 3.12.3 in `/root/evox-robotics/.venv`; evoxc 0.1.0 (`fe85a534192f749a97b2f6e3b13b0800f69b8d90`), tensorneat 0.2.0 editable (`/root/evox-robotics/tensorneat` @ `74f3a032818c7f40fd17e52f9d2cb62b522df54e`), iree-base-compiler/runtime 3.13.0, torch 2.13.0+rocm7.1, quadrants 1.4.0, genesis-world 1.4.6, numpy 2.5.4.
+- XLA/ROCm needs a PJRT plugin: `jax-rocm7-pjrt` 0.10.2 is not installed in that venv, so the measured runs pass `--pjrt-plugin /tmp/xla_rocm_whl/x/jax_plugins/xla_rocm7/xla_rocm_plugin.so` (plugin sha256 `8e8319b48fcc771b5221771dc3da0d24bc6950c872ee07ac6f5200743b3b4fa7`).
+  The wheel `jax_rocm7_pjrt-0.10.2-py3-none-manylinux_2_27_x86_64_real.whl` (sha256 `2e61678a00bfb72a616c555f1acabccc7cd8e64bb36b90b09d6f991c426b24f0`) works through evoxc's `jax_plugins/*/*.so` discovery when installed; `EVOXC_PJRT_PLUGIN` is equivalent.
+  That host's shared venv has a read-only `site-packages`, so the plugin was unpacked from the wheel and loaded from the unpacked path via `--pjrt-plugin` instead of being installed.
+- Required end-to-end smoke (pop 8 = 24 rows, 3 episodes per policy, 2 generations, horizon 25): the ROCm run command above exits 0 with `genesis=gpu evoxc=iree@rocm:0 tell=xla@rocm:0`, 31 steps (21 then 10) in ~10.5 s.
+- Four-generation confirmation (same command, `--generations 4`): 21/10/13/13 steps; generation 0 takes 8.46 s (it includes the first XLA `tell()` run and its HSACO codegen), then 135.4 / 132.7 / 146.9 steps/s (3249 / 3185 / 3525 env-steps/s).
+  The fitness history is `[-7.3784708976745605, -7.318042278289795, -6.03994607925415, -6.132152557373047]`; generations 0-2 reproduce the CPU baseline (-7.3785 / -7.3180 / -6.0399) and the documented seed triples.
+- Per-graph compile on MI300X: IREE/`rocm:0` obs 0.571 s, policy 2.061 s, advance 1.013 s, fitness 0.257 s; XLA/`rocm:0` tell 4.848 s.
+  The five graphs sum to 8.75 s while the whole `Go2NeatEnv` + graph build is 47-65 s (Genesis scene / quadrants compilation dominates; the spread is scene-compile warm state), so reaching the first generation costs ~55-92 s including interpreter import.
+- A `tell`-only probe (separate processes, fixed inputs against a numpy-backend reference) compiled on `xla`/`rocm:0` in 4.53-4.59 s, ran the first transition (including HSACO codegen) in 6.19-6.24 s, and was green 3/3: `node_keys`/`conn_keys` bit-identical, `node_attrs`/`conn_attrs` max abs diff 1.19e-7 / 2.38e-7, NaN masks identical, and the two floating species leaves differ by 1.19e-7.
+- IREE/ROCm cannot compile the tell graph: with `--tell-backend iree` the fifth `iree-compile` invocation (the tell graph) never returns (hard-killed at 180 s; an abandoned run was still in `R` state after 17.5 min CPU at 17.5 GB RSS). StableHLO export and runtime load are never reached, which is why ROCm's `tell()` defaults to `xla`.
+- The instability that remains is HIP-runtime coexistence, not `tell()` itself: with the XLA client loaded, long/cumulative Genesis rollouts abort with `HSA_STATUS_ERROR_INVALID_PACKET_FORMAT: The AQL packet is malformed` then `hipErrorLaunchFailure` in quadrants' `hipStreamSynchronize` (`scene.step()`), sometimes followed by SIGSEGV.
+  Measured envelope: 2-4 generations at `--horizon 25` are clean (the smoke above); `--horizon 200` is clean for one generation with numpy tell or all-XLA tell; 3 generations x 100 steps, 3 generations with `--episode-length-s 0.5 --horizon 200`, and `--horizon 1000 --no-stop-when-done` abort (the last also with `--tell-backend numpy`, i.e. no XLA in the process), so long-horizon ROCm training is not stable yet.
+  `XLA_FLAGS=--xla_gpu_enable_command_buffer=` (disable HIP command graphs) did not change the long-rollout abort.
 
 ## Simulation boundary and data paths
 This section covers `go2_neat_env.py`; `try1.py`'s own boundary is described under "Parity (measured)".
@@ -119,6 +139,8 @@ This section covers `go2_neat_env.py`; `try1.py`'s own boundary is described und
 - `motors_dof_idx` / `actions_dof_idx` / `_control_dof_slice` are built once in `__init__`; only their numpy copies index host arrays.
 - The observation of a fresh reset needs no simulation step: it is computed by `run_obs` from the known reset values (zero base angular velocity, identity orientation relative to the init pose, the init joint positions, zero joint velocities and actions), exactly like `go2_env.reset()`.
 - Handover cost is not instrumented separately for the neat env; at NP=8 the whole generation runs 172–176 steps/s for 24 rows (≈5.7–5.8 ms per `scene.step()` plus the graph calls), so no boundary measurement is claimed beyond that.
+- The device backends do not remove that staging: `run_obs` / `run_policy` / `run_advance` / `run_fitness` copy every input to the device (`evoxc.from_numpy(...).to(device)`) and materialize every output back on the host, so each step still performs a handful of small host<->device transfers (state, observation, actions, targets) of at most a few KB.
+- With 24 rows the GPU rollout is therefore not faster than CPU (132.7–146.9 steps/s on MI300X/`iree@rocm:0` vs 172.1–176.0 steps/s on the CPU/numpy baseline); the GPU pays off in `tell()`, which cannot run on IREE/ROCm at all.
 
 ## Parity (measured)
 - Gait vs `go2_legacy_reference.py`, 250 chained steps: max abs diff targets 2.6e-6, action 1.0e-5, action_change 1.3e-5 (float32 phase argument up to ~56 rad).
@@ -145,9 +167,14 @@ This section covers `go2_neat_env.py`; `try1.py`'s own boundary is described und
 - `RigidOptions(enable_self_collision=False, max_collision_pairs=20, tolerance=1e-5)` is tuned for a locomotion policy with few contact pairs (saves memory).
 - One scene with `3 * pop_size` rows (rather than 3 sequential episodes per policy) keeps every policy on identical reset perturbations and amortizes one `scene.step()` across all rows.
 - Backflip policies use a phase clock (`sin`/`cos` of `episode_length_buf`) in the observation instead of velocity commands.
+- `tell()` backend selection is device-gated: ROCm defaults to `xla` (IREE cannot compile that graph there), CUDA keeps `iree` plus `--iree-codegen-llvmgpu-use-reduction-vector-distribution=false`, CPU keeps `numpy`, and an explicit `--tell-backend` always wins.
+- The PJRT plugin is passed explicitly instead of being discovered: `--pjrt-plugin` forwards a `plugin_path` compile option to `build_tell` and fills `EVOXC_PJRT_PLUGIN` only when that variable is unset, so the plugin choice is visible on the command line and nothing global changes for the CUDA/CPU paths.
+- ROCm-specific workarounds stay device-gated: the `xla`-on-ROCm `tell()` default, the `plugin_path` option and the teardown `os._exit(0)` (see Gotchas) only take effect when the resolved `tell()` device is a non-CPU ROCm device.
 
 ## Dependencies
 - `evoxc` 0.1.0 (VCS install, not declared in `pyproject.toml`), with optional `iree-base-compiler` / `iree-base-runtime` adapters for CUDA/ROCm targets.
+- `jax-rocm7-pjrt` 0.10.2 (PJRT C-API plugin, not declared in `pyproject.toml`) is what makes the `xla` backend usable on ROCm; pass it with `--pjrt-plugin <plugin.so>` or install the wheel and let evoxc's `jax_plugins/*/*.so` discovery find it.
+  On CUDA no `xla` plugin is installed, so `xla` stays unavailable there and `tell()` uses IREE; `tvm` needs `jaxlib` and is not available in either environment.
 - `tensorneat` 0.2.0 (editable from the local `evoxc` branch clone, not declared in `pyproject.toml`).
 - `tensordict` (installed via the `dev` extra of `pyproject.toml`).
 - `rsl-rl-lib>=5.0.0` (installed separately; not declared in `pyproject.toml`).
@@ -171,6 +198,11 @@ This section covers `go2_neat_env.py`; `try1.py`'s own boundary is described und
 - `--stop-when-done` (the default) truncates a full-horizon run as soon as every row has tilted, so quote throughput from `--no-stop-when-done` runs; short-horizon generation 0 is warm-up dominated either way.
 - Backflip `.pt` checkpoints are data (torch `state_dict`s), not code; they are loaded with `torch.load(..., weights_only=True)`.
 - `go2_train.py` expects a GPU for the 4096-env throughput; `go2_eval.py`/`go2_backflip.py`/`try1.py`/`go2_neat_train.py` run on CPU or GPU.
+- A mixed IREE-rollout + XLA-`tell()` process must re-select the executable's own backend before staging: `evoxc.backends.get(name)` sets a per-device-kind "preferred transfer backend" (last lookup wins), so `_to_device_array` calls `evoxc.backends.get(executable.backend)` before `evoxc.from_numpy(...).to(device)`; otherwise IREE rollout operands are staged by the XLA provider and fail with "the xla adapter requires a PJRT C API plugin" (or `DeviceError` when both are on `rocm:0`).
+- Pass `evoxc.Device("rocm", 0)` (or go through `resolve_backend_device`): the string `"rocm:0"` handed straight to `evoxc.build` is mis-parsed as `Device(kind="rocm:0")`.
+- On ROCm the XLA client reserves a 143.77 GiB BFC pool plus up to 51.5 GB in its Collective allocator at creation time, so it needs an otherwise idle GPU; it also warns `TF_XLA_HSACO_CACHE_DIR is not set`, meaning kernels are re-compiled (and cached only in memory) on every process start.
+- The XLA/ROCm client can abort during interpreter teardown (HIP/HSA shutdown), so `go2_neat_train.py` flushes stdout/stderr and then `os._exit(0)` once a device-resident XLA `tell()` run has finished; this only applies when `--tell-backend xla` targets a non-CPU device.
+- On ROCm the tell graph never finishes `iree-compile` (the process stays `R` indefinitely), so never wait on `--tell-backend iree` there; the trainer defaults ROCm `tell()` to `xla` for that reason.
 
 ## Test Strategy
 - `tests/test_examples.py` smoke-tests `try1.py` as a subprocess: no viewer, 5 steps under `PYTEST_VERSION`, and skipped where `evoxc` is missing via the `EXAMPLE_DEPENDENCIES` entry for `try1.py`.
