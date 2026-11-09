@@ -22,6 +22,7 @@ IGNORE_SCRIPT_PATTERNS = {
     # shared helper modules, not runnable demos
     "go2_evox_kernels.py",
     "go2_legacy_reference.py",
+    "go2_neat_kernels.py",
 }
 
 # Map example scripts or directories to their required optional dependencies.
