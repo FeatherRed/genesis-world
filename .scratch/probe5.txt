@@ -1,0 +1,7 @@
+﻿460     def setup(self, state: Optional[State] = None) -> State:
+885         species_tree: Any,
+894             species_tree (Any): ``evoxc.TreeSpec`` of the ``SpeciesState``
+908         species_leaves = int(species_tree.num_leaves)
+942             species = evoxc.tree_unflatten(list(species_values), species_tree)
+1059     def step(
+1159     def auto_run(self, state: State) -> tuple[State, Optional[GenomeTensors]]:

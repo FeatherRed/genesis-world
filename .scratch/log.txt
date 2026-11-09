@@ -1,0 +1,5 @@
+﻿12763d84 Stop tracking the scratch directory.
+07e17f02 Update CONTEXT.md for ./examples/locomotion
+1d9b8c77 Agent: auto-commit fallback
+894645e0 Fix the roll termination predicate to compare against the unprojected roll cosine.
+8ddaf079 Merge commit '49618bda463a1994b7dfcb230b40001fe34fcc1c' into evogit-agent-T1-A3

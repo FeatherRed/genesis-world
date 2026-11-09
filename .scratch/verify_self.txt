@@ -1,0 +1,42 @@
+﻿building pipelines ...
+pipeline pop shapes: [(8, 80), (8, 80, 4), (8, 640, 2), (8, 640, 1)]
+[PASS] 1 obs parity: worst abs diff 1.237e-07
+[PASS] 2 reward parity: in-range worst 3.725e-09; clipped worst 1.907e-06; tracking_lin_vel: d=-6.046474e-03 (legacy term 6.976763e-01, err 0.00e+00); tracking_ang_vel: d=-1.209294e-03 (legacy term 6.976763e-01, err 0.00e+00); lin_vel_z: d=-3.199998e-03 (legacy term 1.600000e-01, err 0.00e+00); base_height: d=-2.499998e-03 (legacy term 2.499998e-03, err 0.00e+00); action_rate: d=-1.399964e-05 (legacy term 1.400000e-01, err 0.00e+00); similar_to_default: d=-8.999985e-04 (legacy term 4.500000e-01, err 0.00e+00)
+[PASS] 3 termination parity: 10000 quats, 0 mismatches, closest-to-boundary margin 3.204e-04 deg
+[PASS] 4 first-done/return/mask: done_count=[0, 1, 1], rowA return=0.144000
+[PASS] 5 fitness: random err 5.960e-08, extreme rel err 4.482e-08
+python.exe : C:\04_Study\github\EvoxC-Robotic\.venv\Lib\site-packages\evoxc\numpy\creation.py:80: UserWarning: Embeddin
+g a tensor of 4147216 bytes as a graph constant (threshold 1048576 bytes, set via EVOXC_LARGE_CONSTANT_BYTES); prefer p
+assing it as an explicit input instead.
+At line:1 char:256
++ ... ocomotion"; & "C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python. ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\04_Study\git... input instead.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  return ops.constant(core.tensor(np.full(s, fill_value, dtype=dtype)))
+C:\04_Study\github\EvoxC-Robotic\.venv\Lib\site-packages\evoxc\backends\numpy\kernels\elementwise.py:145: RuntimeWarnin
+g: overflow encountered in exp
+  return core.Tensor(np.asarray(np_fn(x_arr)))
+[PASS] 6 two generations: cache hits 0->0->5, misses 0->5->5; generations [0.0, 1.0, 2.0]; fitness1[:3]=[-0.05387531593441963, -0.0761336162686348, -0.04360317066311836]
+[PASS] 7 timings: 
+    compile(rows=24/NP=8 ms): obs 9.7 policy 46.8 advance 152.8 fitness 0.6 tell 185.8
+    warm/step(rows=24/NP=8 ms): obs 0.174 policy 1.913 advance 0.578 fitness 0.013
+    compile(rows=48/NP=16 ms): obs 10.8 policy 56.8 advance 31.7 fitness 0.6
+    warm/step(rows=48/NP=16 ms): obs 0.185 policy 3.299 advance 0.524 fitness 0.013
+[PASS] 8 row tiling: identical within triples; untouched-row max delta 0; perturbed-row max delta 7.936972
+
+===== SUMMARY =====
+PASS 1 obs parity: worst abs diff 1.237e-07
+PASS 2 reward parity: in-range worst 3.725e-09; clipped worst 1.907e-06; tracking_lin_vel: d=-6.046474e-03 (legacy term 6.976763e-01, err 0.00e+00); tracking_ang_vel: d=-1.209294e-03 (legacy term 6.976763e-01, err 0.00e+00); lin_vel_z: d=-3.199998e-03 (legacy term 1.600000e-01, err 0.00e+00); base_height: d=-2.499998e-03 (legacy term 2.499998e-03, err 0.00e+00); action_rate: d=-1.399964e-05 (legacy term 1.400000e-01, err 0.00e+00); similar_to_default: d=-8.999985e-04 (legacy term 4.500000e-01, err 0.00e+00)
+PASS 3 termination parity: 10000 quats, 0 mismatches, closest-to-boundary margin 3.204e-04 deg
+PASS 4 first-done/return/mask: done_count=[0, 1, 1], rowA return=0.144000
+PASS 5 fitness: random err 5.960e-08, extreme rel err 4.482e-08
+PASS 6 two generations: cache hits 0->0->5, misses 0->5->5; generations [0.0, 1.0, 2.0]; fitness1[:3]=[-0.05387531593441963, -0.0761336162686348, -0.04360317066311836]
+PASS 7 timings: 
+    compile(rows=24/NP=8 ms): obs 9.7 policy 46.8 advance 152.8 fitness 0.6 tell 185.8
+    warm/step(rows=24/NP=8 ms): obs 0.174 policy 1.913 advance 0.578 fitness 0.013
+    compile(rows=48/NP=16 ms): obs 10.8 policy 56.8 advance 31.7 fitness 0.6
+    warm/step(rows=48/NP=16 ms): obs 0.185 policy 3.299 advance 0.524 fitness 0.013
+PASS 8 row tiling: identical within triples; untouched-row max delta 0; perturbed-row max delta 7.936972
+8/8 passed

@@ -1,0 +1,20 @@
+﻿python.exe : C:\04_Study\github\EvoxC-Robotic\.venv\Lib\site-packages\evoxc\numpy\creation.py:80: UserWarning: Embeddin
+g a tensor of 4147216 bytes as a graph constant (threshold 1048576 bytes, set via EVOXC_LARGE_CONSTANT_BYTES); prefer p
+assing it as an explicit input instead.
+At line:2 char:1
++ & "C:\04_Study\github\EvoxC-Robotic\.venv\Scripts\python.exe" .scratc ...
++ ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (C:\04_Study\git... input instead.:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+  return ops.constant(core.tensor(np.full(s, fill_value, dtype=dtype)))
+policy compiled 0.0506 s
+actions (24, 12) float32
+tile identical: True True
+row isolation: True True True
+tell compiled 0.2226 s
+randkey 504013510239267270 int64 gen 1.0 float32
+pop shapes [(8, 80), (8, 80, 4), (8, 640, 2), (8, 640, 1)]
+species SpeciesState [(3,), (3,), (3,), (3,), (8,), (3, 80), (3, 80, 4), (3, 640, 2), (3, 640, 1), ()]
+changed [True, True, True, True]
+hits/misses 0 2

@@ -1,0 +1,9 @@
+﻿
+genesis\__init__.py:55:EPS: float | None = None
+genesis\__init__.py:66:    eps=1e-15,
+genesis\__init__.py:201:    global EPS
+genesis\__init__.py:202:    EPS = float(max(eps, np.finfo(np_float).eps))
+genesis\__init__.py:419:    global device, backend, EPS
+genesis\__init__.py:422:    EPS = None
+
+

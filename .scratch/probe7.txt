@@ -1,0 +1,26 @@
+﻿Derive the genome's loop-invariant operands of one forward pass.
+
+Args:
+    state (State): Current state.
+    transformed (Any): Schedule returned by :meth:`transform`.
+    pop (Any, optional): Payload the schedule was derived from; ``None``
+        means ``state.pop``, like :meth:`forward`.
+    samples (int): Static tiling factor of the ``P * samples`` rows the
+        pass will be queried with.
+
+Returns:
+    Any: The genome's opaque prepared record for :meth:`forward_prepared`.
+-----
+Run one forward pass from a prepared record (:meth:`prepare_forward`).
+-----
+Decode the whole population into one batch-first execution schedule.
+
+Args:
+    state (State): Current state.
+    pop (Any, optional): Gene payload to decode; ``None`` means
+        ``state.pop`` (see :meth:`ask`).
+
+Returns:
+    Any: The genome's ``Transformed`` pytree, individual on axis 0
+    (topological level, per-node incoming-edge table of static width
+    ``K``, node validity and the input/output slots).

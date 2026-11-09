@@ -1,0 +1,11 @@
+﻿16: IGNORE_SCRIPT_PATTERNS = {
+17:     "*_train.py",
+18:     "*_eval.py",
+19:     "*_env.py",
+23:     "go2_evox_kernels.py",
+24:     "go2_legacy_reference.py",
+29: EXAMPLE_DEPENDENCIES = {
+60:         for path in sorted(EXAMPLES_DIR.rglob("*.py"))
+61:         if not any([path.match(pattern) for pattern in IGNORE_SCRIPT_PATTERNS])
+71:     module_deps = list(EXAMPLE_DEPENDENCIES.get(rel.name, []))
+74:             module_deps.extend(EXAMPLE_DEPENDENCIES.get(parent.as_posix(), []))

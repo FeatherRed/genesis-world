@@ -1,0 +1,9 @@
+﻿from __future__ import annotations
+import logging
+import math
+from dataclasses import dataclass
+import numpy as np
+import evoxc
+from tensorneat.algorithm.neat.species import SpeciesState
+from tensorneat.genome.utils import GenomeTensors
+from go2_evox_kernels import (

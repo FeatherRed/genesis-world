@@ -1,0 +1,56 @@
+﻿
+> examples\locomotion\go2_evox_kernels.py:11:    Runtime inputs: ``step`` (0-d int32), ``previous_action`` (float32, 12
+).
+  examples\locomotion\go2_evox_kernels.py:12:    Static specialization constants (in the spec tuple, never runtime-vary
+ing):
+  examples\locomotion\go2_evox_kernels.py:13:    ``standing_flat`` (float32, 12), ``phases`` (float32, 4), ``dt`` (floa
+t),
+  examples\locomotion\go2_evox_kernels.py:14:    ``inv_action_scale`` (float).
+> examples\locomotion\go2_evox_kernels.py:51:PHASES = np.array([0.0, np.pi, np.pi, 0.0], dtype=np.float32)
+  examples\locomotion\go2_evox_kernels.py:52:# joints are ordered FR/FL/RR/RL x hip/thigh/calf
+  examples\locomotion\go2_evox_kernels.py:53:STANDING = np.array(
+  examples\locomotion\go2_evox_kernels.py:54:    [[0.0, 0.8, -1.5], [0.0, 0.8, -1.5], [0.0, 1.0, -1.5], [0.0, 1.0, -1.5
+]],
+> examples\locomotion\go2_evox_kernels.py:55:    dtype=np.float32,
+  examples\locomotion\go2_evox_kernels.py:56:)
+  examples\locomotion\go2_evox_kernels.py:57:STANDING_FLAT = STANDING.ravel()
+  examples\locomotion\go2_evox_kernels.py:58:
+> examples\locomotion\go2_evox_kernels.py:86:def resolve_backend_device(backend=None, device=None):
+  examples\locomotion\go2_evox_kernels.py:87:    """Resolve ``(backend, device)``: explicit args > env vars > cpu/numpy
+ default."""
+  examples\locomotion\go2_evox_kernels.py:88:    resolved_backend = backend or os.environ.get("EVOXC_BACKEND") or "nump
+y"
+  examples\locomotion\go2_evox_kernels.py:89:
+> examples\locomotion\go2_evox_kernels.py:101:def _constant(array: np.ndarray) -> evoxc.SymbolicTensor:
+  examples\locomotion\go2_evox_kernels.py:102:    """Embed a host numpy array as a graph constant."""
+  examples\locomotion\go2_evox_kernels.py:103:    return evoxc.constant(evoxc.from_numpy(np.ascontiguousarray(array)))
+  examples\locomotion\go2_evox_kernels.py:104:
+> examples\locomotion\go2_evox_kernels.py:196:        evoxc.TensorSpec((), evoxc.int32, name="step"),
+  examples\locomotion\go2_evox_kernels.py:197:        evoxc.TensorSpec((12,), evoxc.float32, name="previous_action"),
+  examples\locomotion\go2_evox_kernels.py:198:        STANDING_FLAT,
+  examples\locomotion\go2_evox_kernels.py:199:        PHASES,
+> examples\locomotion\go2_evox_kernels.py:234:def _to_device_array(executable, array: np.ndarray):
+  examples\locomotion\go2_evox_kernels.py:235:    """Stage a host array onto the executable's device (no-op for cpu).""
+"
+  examples\locomotion\go2_evox_kernels.py:236:    arr = np.asarray(array)
+  examples\locomotion\go2_evox_kernels.py:237:    if arr.ndim > 0:
+> examples\locomotion\go2_evox_kernels.py:245:def _to_numpy(tensor) -> np.ndarray:
+  examples\locomotion\go2_evox_kernels.py:246:    """Materialize an output tensor as a host numpy array."""
+  examples\locomotion\go2_evox_kernels.py:247:    device = getattr(tensor, "device", None)
+  examples\locomotion\go2_evox_kernels.py:248:    if device is not None and device.kind != "cpu":
+> examples\locomotion\go2_evox_kernels.py:255:    prev = np.asarray(previous_action, dtype=np.float32).reshape(12)
+> examples\locomotion\go2_evox_kernels.py:256:    step_arr = np.asarray(step, dtype=np.int32).reshape(())
+  examples\locomotion\go2_evox_kernels.py:257:
+  examples\locomotion\go2_evox_kernels.py:258:    outputs = evoxc.run(
+  examples\locomotion\go2_evox_kernels.py:259:        executable,
+> examples\locomotion\go2_evox_kernels.py:285:        np.asarray(base_pos, dtype=np.float32).reshape(3),
+> examples\locomotion\go2_evox_kernels.py:286:        np.asarray(base_quat, dtype=np.float32).reshape(4),
+> examples\locomotion\go2_evox_kernels.py:287:        np.asarray(base_lin_vel_world, dtype=np.float32).reshape(3),
+> examples\locomotion\go2_evox_kernels.py:288:        np.asarray(base_ang_vel_world, dtype=np.float32).reshape(3),
+> examples\locomotion\go2_evox_kernels.py:289:        np.asarray(dof_pos, dtype=np.float32).reshape(12),
+> examples\locomotion\go2_evox_kernels.py:290:        np.asarray(action_change, dtype=np.float32).reshape(12),
+  examples\locomotion\go2_evox_kernels.py:291:    ]
+  examples\locomotion\go2_evox_kernels.py:292:    outputs = evoxc.run(
+  examples\locomotion\go2_evox_kernels.py:293:        executable,
+
+

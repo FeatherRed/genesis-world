@@ -1,0 +1,24 @@
+﻿commit 894645e0e2cb8ad4d54f12311c83da300418ce28
+Author: FeatherRed <1328181376@qq.com>
+Date:   Mon Nov 9 22:26:34 2026 +0800
+
+    Fix the roll termination predicate to compare against the unprojected roll cosine.
+
+diff --git a/examples/locomotion/go2_neat_kernels.py b/examples/locomotion/go2_neat_kernels.py
+index 5e34b7a3..7a863c78 100644
+--- a/examples/locomotion/go2_neat_kernels.py
++++ b/examples/locomotion/go2_neat_kernels.py
+@@ -194,5 +194,5 @@ def _tilt_exceeded_rows(quat: evoxc.SymbolicTensor, tan_limit: float):
+ 
+         pitch = atan2(sinp, cosp)          -> |sinp| > tan(limit) * cosp
+-        roll  = atan2(sinrcosp, cosrcosp)  -> |sinrcosp| > tan(limit) * cosrcosp * cosp
++        roll  = atan2(sinrcosp, cosrcosp)  -> |sinrcosp| > tan(limit) * cosrcosp
+                                               (with the cosrcosp*cosp <= 0 quadrant guard)
+ 
+@@ -216,5 +216,5 @@ def _tilt_exceeded_rows(quat: evoxc.SymbolicTensor, tan_limit: float):
+     roll_exceeded = evoxc.logical_or(
+         evoxc.less_equal(cosr, 0.0),
+-        evoxc.greater(evoxc.abs(sinrcosp), tan_limit * cosr),
++        evoxc.greater(evoxc.abs(sinrcosp), tan_limit * cosrcosp),
+     )
+     return roll_exceeded, pitch_exceeded

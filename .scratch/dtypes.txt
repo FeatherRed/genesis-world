@@ -1,0 +1,10 @@
+﻿bool_ True bool
+int32 True int32
+float32 True float32
+int64 True int64
+dtype True <function dtype at 0x000001A48DC04180>
+SymbolicTensor True <class 'evoxc.core.symbolic.SymbolicTensor'>
+Executable True <class 'evoxc.pipeline.Executable'>
+BoundExecutable True <class 'evoxc.pipeline.BoundExecutable'>
+TensorSpec True <class 'evoxc.core.spec.TensorSpec'>
+Device True <class 'evoxc.core.device.Device'>
