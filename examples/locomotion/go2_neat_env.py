@@ -2,17 +2,30 @@
 
 One :class:`Go2NeatEnv` owns a single ``gs.Scene`` with ``EPISODES_PER_POLICY * pop_size`` Go2
 rows (policy-major: rows ``3p, 3p+1, 3p+2`` are the episodes of policy ``p``) and scores one
-generation per :meth:`Go2NeatEnv.evaluate` call.  Genesis owns the physics and the state, the
-compiled graphs of ``go2_neat_kernels`` own the observation / policy / reward / termination math,
-and this module is only the boundary in between.
+generation per :meth:`Go2NeatEnv.evaluate` call.
+
+What this module owns
+---------------------
+Genesis owns the physics and the state, the compiled graphs of ``go2_neat_kernels`` own the
+observation / reward / termination math, the shared ``examples/neuroevolution`` layer owns the
+policy / fitness / tell graphs and the seeding rules, and this module is the boundary in between:
+the Go2 scene, the reset and perturbation application, the per-generation ``evaluate`` loop and
+the ``END_REASONS`` classification of the rows that ended.
+
+:class:`Go2NeatEnv` declares that boundary by subclassing :class:`env_base.BatchedEpisodeEnv`:
+its ``rows`` / ``episodes_per_policy`` / ``max_episode_length`` / ``cache`` attributes and its
+``evaluate`` / ``close`` methods are exactly what a ``trainer.NeuroevolutionTrainer`` drives, and
+:meth:`Go2NeatEnv.evaluate` validates its own result with
+:func:`env_base.validate_evaluation` before returning it.
 
 Seeding
 -------
 ``np.random.SeedSequence(master_seed).spawn(2)`` splits the master seed into an independent
-evolution stream (:func:`evolution_seed`, for the trainer's own RNG) and an env stream
-(:func:`generation_seed_table`).  Every generation owns ``EPISODES_PER_POLICY`` distinct episode
-seeds; a row keeps its generation's seed -- and therefore its reset perturbation -- for the whole
-generation, and the three seed-derived 19-vector init qpos are replicated to every policy's rows.
+evolution stream (``seeding.evolution_seed``, for the trainer's own RNG) and an env stream
+(``seeding.generation_seed_table``).  Every generation owns ``EPISODES_PER_POLICY`` distinct
+episode seeds; a row keeps its generation's seed -- and therefore its reset perturbation -- for
+the whole generation, and the three seed-derived 19-vector init qpos are replicated to every
+policy's rows.
 
 Resets
 ------
@@ -71,25 +84,26 @@ import time
 
 import numpy as np
 import torch
-from tensorneat import Pipeline, algorithm, genome, problem
-from tensorneat.common.tools import to_numpy
+from tensorneat import Pipeline, algorithm, genome
 
 import genesis as gs
 
-from genesis.utils.geom import inv_quat, quat_to_xyz, transform_quat_by_quat, xyz_to_quat
+from genesis.utils.geom import inv_quat, quat_to_xyz, transform_quat_by_quat
 
 from go2_evox_kernels import resolve_backend_device
+
+# ``go2_neat_kernels`` installs ``examples/neuroevolution`` on ``sys.path`` as its first
+# import-time action, so the shared layer below imports by bare module name and this module
+# needs no sys.path shim of its own.
 from go2_neat_kernels import (
     CLIP_ACTIONS,
     DEFAULT_COMMANDS,
-    EPISODES_PER_POLICY,
     NUM_ACTIONS,
     NUM_OBS,
     REWARD_SCALES,
     TERMINATION_LIMIT_DEG,
     TRACKING_SIGMA,
     ExecutableCache,
-    Perturbation,
     build_advance,
     build_fitness,
     build_obs,
@@ -99,6 +113,12 @@ from go2_neat_kernels import (
     run_obs,
     run_policy,
 )
+from env_base import BatchedEpisodeEnv, validate_evaluation
+from evox_runtime import _device_name
+from seeding import EPISODES_PER_POLICY, Perturbation, evolution_seed, generation_seed_table
+from seeding import perturbation_from_seed as _perturbation_from_seed
+from trainer import TraceOnlyProblem as _TraceOnlyProblem
+from trainer import pop_arrays_of
 
 logger = logging.getLogger(__name__)
 
@@ -202,95 +222,23 @@ def _check_cfg():
             raise ValueError(f"CFG['command_cfg'][{name!r}] must be the singleton [{value}, {value}]")
 
 
-def generation_seed_table(master_seed, num_generations, episodes=EPISODES_PER_POLICY):
-    """Return the ``(num_generations, episodes)`` int64 table of episode seeds.
-
-    The table is drawn from the env stream of ``SeedSequence(master_seed).spawn(2)`` (the
-    evolution stream is :func:`evolution_seed`), one row at a time: ``rng.choice(2**31, size=
-    episodes, replace=False)`` per row keeps a row's seeds distinct and, unlike one big
-    ``replace=False`` draw, keeps the table **prefix-stable** -- ``table(seed, N)[i]`` is identical
-    for every ``N > i``.
-
-    Args:
-        master_seed (int): Seed of the whole run.
-        num_generations (int): Number of generation rows to materialize.
-        episodes (int): Episodes per policy and row length.
-
-    Returns:
-        np.ndarray: ``(num_generations, episodes)`` int64, every row strictly distinct.
-    """
-    num_generations = int(num_generations)
-    episodes = int(episodes)
-    if num_generations < 0 or episodes < 1:
-        raise ValueError(f"num_generations must be >= 0 and episodes >= 1, got {num_generations} and {episodes}")
-    _, env_seq = np.random.SeedSequence(master_seed).spawn(2)
-    rng = np.random.default_rng(env_seq)
-    table = np.empty((num_generations, episodes), dtype=np.int64)
-    for generation in range(num_generations):
-        table[generation] = rng.choice(2**31, size=episodes, replace=False)
-    return table
-
-
-def evolution_seed(master_seed):
-    """Return the unsigned 32-bit seed of the evolution stream of ``master_seed``.
-
-    This is the sibling of the env stream :func:`generation_seed_table` draws from, so the
-    trainer's evolution RNG is independent of -- and unaffected by -- the episode seeds.
-
-    Args:
-        master_seed (int): Seed of the whole run.
-
-    Returns:
-        int: Non-negative seed that fits in ``uint32``.
-    """
-    evolution_seq, _ = np.random.SeedSequence(master_seed).spawn(2)
-    return int(evolution_seq.generate_state(1, dtype=np.uint32)[0])
-
-
-def _uniform(rng, amplitude, size):
-    """Return ``size`` offsets uniform in ``[-amplitude, +amplitude]``, consuming ``size`` draws."""
-    amplitude = float(amplitude)
-    return rng.uniform(-amplitude, amplitude, size=size)
-
-
 def perturbation_from_seed(seed, perturbation, num_dof=NUM_ACTIONS):
-    """Draw one reset perturbation from ``seed`` alone.
+    """Draw one reset perturbation from ``seed``; Go2 wrapper around the shared draw.
 
-    The draw order is fixed (and independent of the amplitudes, so the stream never shifts):
-    first the three ``base_pos`` offsets, then the three ``base_rpy`` angles, then the
-    ``num_dof`` ``joint_pos`` offsets, all uniform per component in ``[-p, +p]``.  A zero
-    ``Perturbation`` draws nothing and returns exact zeros, with ``base_quat == [1, 0, 0, 0]``.
-
-    ``base_quat`` is the standard w-first roll-pitch-yaw quaternion of ``base_rpy``
-    (``genesis.utils.geom.xyz_to_quat(..., rpy=True)``), i.e. the small base rotation in world axes
-    that :func:`perturbed_init_qpos` applies on top of the authored init orientation (``q_pert *
-    q_init``).
+    The draw itself is ``examples/neuroevolution/seeding.perturbation_from_seed``, which makes
+    ``num_dof`` mandatory because the joint count belongs to the task; this wrapper supplies the
+    Go2 action count as the default the callers here use.
 
     Args:
         seed (int): Episode seed of the generation's seed table.
         perturbation (Perturbation): Maximum absolute offsets (metres / radians / radians).
-        num_dof (int): Length of the joint offset vector.
+        num_dof (int): Length of the joint offset vector, the Go2 action count by default.
 
     Returns:
         dict: ``base_pos`` (3,) float32, ``base_quat`` (4,) float32 w-first, ``joint_pos``
         (``num_dof``,) float32.
     """
-    num_dof = int(num_dof)
-    if perturbation.is_zero:
-        return {
-            "base_pos": np.zeros(3, dtype=np.float32),
-            "base_quat": np.array([1.0, 0.0, 0.0, 0.0], dtype=np.float32),
-            "joint_pos": np.zeros(num_dof, dtype=np.float32),
-        }
-    rng = np.random.default_rng(int(seed))
-    base_pos = _uniform(rng, perturbation.base_pos, 3)
-    base_rpy = _uniform(rng, perturbation.base_rpy, 3)
-    joint_pos = _uniform(rng, perturbation.joint_pos, num_dof)
-    return {
-        "base_pos": base_pos.astype(np.float32),
-        "base_quat": np.asarray(xyz_to_quat(base_rpy, rpy=True), dtype=np.float32),
-        "joint_pos": joint_pos.astype(np.float32),
-    }
+    return _perturbation_from_seed(seed, perturbation, num_dof)
 
 
 def perturbed_init_qpos(init_qpos, seeds, perturbation):
@@ -327,11 +275,6 @@ def perturbed_init_qpos(init_qpos, seeds, perturbation):
     return out
 
 
-def _device_name(device):
-    """Return the stable ``"kind:index"`` spelling of a resolved ``evoxc`` device."""
-    return f"{device.kind}:{device.index}"
-
-
 def _to_host_float(value):
     """Move one device tensor to the host as float32 (read side of the boundary)."""
     return value.detach().cpu().numpy().astype(np.float32)
@@ -347,29 +290,19 @@ def _to_device_float(array):
     return torch.as_tensor(np.ascontiguousarray(array), dtype=gs.tc_float, device=gs.device)
 
 
-class TraceOnlyProblem(problem.BaseProblem):
-    """Stand-in problem for a pipeline that only supplies the genome statics.
-
-    ``build_policy`` needs a TensorNEAT ``(algo, config, pop_arrays)`` triple, and the config is
-    the tensor-free ``Pipeline._static_config`` of a ``Pipeline.setup()``.  Nothing here is ever
-    evaluated: the fitness comes from the simulation, not from the problem.
-    """
-
-    input_shape = (NUM_OBS,)
-    output_shape = (NUM_ACTIONS,)
-
-    def evaluate(self, state, keys, act_fn, transformed):
-        raise NotImplementedError("Go2NeatEnv only traces the genome pipeline, it never evaluates a problem")
-
-
-class Go2NeatEnv:
+class Go2NeatEnv(BatchedEpisodeEnv):
     """Batched, seeded evaluation environment of the TensorNEAT Go2 walking trainer.
+
+    Subclassing :class:`env_base.BatchedEpisodeEnv` is the declaration that this object is a
+    task environment of the shared neuroevolution layer; together with the
+    ``episodes_per_policy`` class attribute it is what makes the env usable by
+    ``trainer.NeuroevolutionTrainer``.
 
     Args:
         pop_size (int): Policies per generation; the scene has ``EPISODES_PER_POLICY * pop_size``
             rows, rows ``3p, 3p+1, 3p+2`` belonging to policy ``p``.
-        master_seed (int): Seed of the run; see :func:`generation_seed_table` and
-            :func:`evolution_seed`.
+        master_seed (int): Seed of the run; see ``seeding.generation_seed_table`` and
+            ``seeding.evolution_seed``.
         perturbation (Perturbation): Maximum reset offsets; the all-zero default reproduces the
             fixed reset of ``go2_env``.
         horizon (int | None): ``scene.step()`` calls per generation; ``None`` means
@@ -380,16 +313,19 @@ class Go2NeatEnv:
         device (str | evoxc.Device | None): ``evoxc`` device of the compiled graphs.
         show_viewer (bool): Open the Genesis viewer.
         seed_table (array-like | None): ``(num_generations, EPISODES_PER_POLICY)`` int table; when
-            given it replaces the table :func:`generation_seed_table` would draw.
+            given it replaces the table ``seeding.generation_seed_table`` would draw.
         stop_when_done (bool): Stop a generation as soon as every row has ended.
 
     Attributes:
         rows (int): Number of environment rows, ``3 * pop_size`` (also ``n_envs``).
+        episodes_per_policy (int): ``seeding.EPISODES_PER_POLICY``, the row tiling factor.
         max_episode_length (int): ``ceil(episode_length_s / dt)``, baked into the advance graph.
         cache (ExecutableCache): The one cache the four executables are built and looked up in.
         executables (callable): Return the four executables, compiling only the missing ones; call it
             once per generation as the compile-once proof (every call after ``__init__`` is a hit).
     """
+
+    episodes_per_policy = EPISODES_PER_POLICY
 
     def __init__(
         self,
@@ -541,7 +477,9 @@ class Go2NeatEnv:
         ``build_policy`` needs the algorithm instance and the tensor-free static config of a
         ``Pipeline.setup()``; tracing that pipeline on the reference backend is cheap and gives
         the payload shapes the policy graph must be built with.  The policy executable itself is
-        built on ``self.backend`` / ``self.device``.
+        built on ``self.backend`` / ``self.device``.  The problem is only a stub
+        (``trainer.TraceOnlyProblem``) carrying the two genome widths, and the payload is read
+        with the shared ``trainer.pop_arrays_of``.
         """
         gen = genome.DefaultGenome(
             num_inputs=NUM_OBS,
@@ -552,10 +490,10 @@ class Go2NeatEnv:
         # Only the forward pass is traced, so the species structure is irrelevant; it still has to
         # be admissible for a small population (``species_size * min_species_size <= pop_size``).
         algo = algorithm.NEAT(gen, pop_size=self.pop_size, species_size=min(SPECIES_SIZE, self.pop_size))
-        pipeline = Pipeline(algo, TraceOnlyProblem(), seed=TRACE_SEED, backend="numpy", is_detailed=False)
+        trace_problem = _TraceOnlyProblem(NUM_OBS, NUM_ACTIONS)
+        pipeline = Pipeline(algo, trace_problem, seed=TRACE_SEED, backend="numpy", is_detailed=False)
         state = pipeline.setup()
-        pop_arrays = tuple(np.array(to_numpy(leaf)) for leaf in state.pop)
-        return algo, pipeline._static_config(state), pop_arrays
+        return algo, pipeline._static_config(state), pop_arrays_of(state)
 
     def executables(self):
         """Return the four executables, compiling only the ones the cache does not hold yet."""
@@ -667,6 +605,9 @@ class Go2NeatEnv:
     def evaluate(self, pop_arrays, generation):
         """Simulate one generation and return its fitness plus the run bookkeeping.
 
+        The returned mapping is checked against ``env_base.validate_evaluation`` (the contract of
+        :class:`env_base.BatchedEpisodeEnv`) once per generation before it is handed back.
+
         Args:
             pop_arrays (tuple): The four genome payload arrays (``node_keys``, ``node_attrs``,
                 ``conn_keys``, ``conn_attrs``) of the generation, in the shapes the policy graph
@@ -747,9 +688,9 @@ class Go2NeatEnv:
 
         fitness = run_fitness(self.fitness_executable, returns)
         env_steps = steps * self.rows
-        return {
+        result = {
             "seeds": seeds,
-            "episode_returns": returns.reshape(self.pop_size, EPISODES_PER_POLICY).copy(),
+            "episode_returns": returns.reshape(self.pop_size, self.episodes_per_policy).copy(),
             "returns": returns,
             "fitness": fitness,
             "steps": steps,
@@ -762,6 +703,8 @@ class Go2NeatEnv:
             "end_reasons": {name: int(np.count_nonzero(ending == code)) for name, code in END_REASONS.items()},
             "init_qpos": init_qpos,
         }
+        validate_evaluation(result, self.pop_size, self.episodes_per_policy)
+        return result
 
     @staticmethod
     def _classify_endings(ending, done, base_rpy_deg, error_mask):
