@@ -387,7 +387,8 @@ class NeuroevolutionTrainer:
     def _aggregate(self, result):
         """Return ``(episode_returns, fitness)`` with the trainer's aggregation rule applied.
 
-        An unscored or otherwise non-finite episode counts as 0, and the mean is taken in float64 before narrowing back to float32.
+        An unscored or otherwise non-finite episode counts as 0, and the mean is taken in float32 because that is the arithmetic of the compiled ``fitness_graph`` (``evoxc.reduce_mean``) the env reports.
+        A float64 mean differs from that graph's answer by more than the ``1e-6`` tolerance at episode-return magnitudes of ~100, so it would reject a legitimate env.
         ``result["fitness"]`` must agree with that rule to ``1e-6``, otherwise the env is computing a second, possibly different fitness.
 
         Args:
@@ -397,11 +398,7 @@ class NeuroevolutionTrainer:
             tuple: ``episode_returns`` ``(pop_size, episodes)`` float32 and ``fitness`` ``(pop_size,)`` float32.
         """
         episode_returns = np.asarray(result["episode_returns"], dtype=np.float32)
-        fitness = (
-            np.nan_to_num(episode_returns, nan=0.0, posinf=0.0, neginf=0.0)
-            .mean(axis=1, dtype=np.float64)
-            .astype(np.float32)
-        )
+        fitness = np.nan_to_num(episode_returns, nan=0.0, posinf=0.0, neginf=0.0).mean(axis=1).astype(np.float32)
         reported = np.asarray(result["fitness"], dtype=np.float32)
         if reported.shape != fitness.shape or not np.allclose(reported, fitness, atol=1e-6, rtol=0):
             raise ValueError(

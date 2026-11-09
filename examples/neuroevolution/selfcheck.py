@@ -21,6 +21,9 @@ What each check pins, in order:
 ``trainer``
     End-to-end determinism of :class:`trainer.NeuroevolutionTrainer` against a simulator-free env: identical fitness history, records (timings aside) and seed table over two runs, the env is never closed, the ``output_dir`` artifacts, and the fitness tolerance.
 
+``large_returns``
+    The aggregation rule at the Go2 pilot's episode-return magnitude (~±100): an env whose float32 returns sit there and whose fitness is the real ``evolution_graphs`` fitness graph must be accepted, and the trainer's fitness must equal that graph bit for bit while a float64 mean of the same returns differs by more than the tolerance; the same env with the fitness off by 1e-3 must still be rejected, so the check is not vacuous.
+
 ``import_hygiene``
     An AST scan proving the six sibling modules import no ``torch`` / ``genesis`` / ``tensordict`` and no ``go2_*`` / ``hover_*`` task module, and that those packages are absent from ``sys.modules``.
 
@@ -61,6 +64,10 @@ from trainer import NeuroevolutionTrainer, TraceOnlyProblem, pop_arrays_of, spec
 POP_SIZE = 3
 #: Generations the trainer check runs.
 GENERATIONS = 3
+#: Generations the large-return check runs: the failure mode reproduces on the first one, two keep it cheap.
+LARGE_RETURN_GENERATIONS = 2
+#: Episode-return magnitude of the large-return check, the Go2 pilot's ~±100 per episode.
+LARGE_RETURN_SCALE = 100.0
 #: Episodes per policy, the documented triple every generation shares.
 EPISODES = EPISODES_PER_POLICY
 #: ``(num_inputs, num_outputs)`` of the two real tasks: Go2 walking (45 -> 12) and drone hover (17 -> 4).
@@ -357,7 +364,8 @@ def check_graphs():
 
     rows = POP_SIZE * EPISODES
     returns = np.arange(rows, dtype=np.float32) * np.float32(0.5) - np.float32(1.0)
-    expected = returns.reshape(POP_SIZE, EPISODES).mean(axis=1)
+    expected = returns.reshape(POP_SIZE, EPISODES).mean(axis=1, dtype=np.float32)
+    _require(expected.dtype == np.float32, f"the expected fitness must be the float32 mean, got {expected.dtype}")
     cache = ExecutableCache()
     fitness_key = ("fitness", rows, EPISODES, "numpy", "cpu:0")
     fitness_executable = cache.get(fitness_key, lambda: build_fitness(POP_SIZE, episodes_per_policy=EPISODES))
@@ -530,13 +538,7 @@ class FakeEnv:
         generation = int(generation)
         seeds = self.seed_table[generation]
         start = time.perf_counter()
-        episode_returns = np.array(
-            [
-                [self._episode_return(generation, policy, seed, episode) for episode, seed in enumerate(seeds)]
-                for policy in range(self.pop_size)
-            ],
-            dtype=np.float32,
-        )
+        episode_returns = self._episode_returns(generation, seeds)
         wall_time_s = max(time.perf_counter() - start, 1e-6)
         steps = self.rows * self.max_episode_length
         self.evaluated.append(generation)
@@ -544,7 +546,7 @@ class FakeEnv:
             "seeds": seeds,
             "episode_returns": episode_returns,
             "returns": episode_returns.reshape(-1),
-            "fitness": episode_returns.mean(axis=1) + np.float32(self.fitness_offset),
+            "fitness": self._report_fitness(episode_returns),
             "steps": steps,
             "env_steps": steps,
             "wall_time_s": wall_time_s,
@@ -554,9 +556,51 @@ class FakeEnv:
             "mean_episode_return": float(episode_returns.mean()),
         }
 
+    def _episode_returns(self, generation, seeds):
+        """Return the ``(pop_size, episodes)`` float32 episode returns of one generation."""
+        return np.array(
+            [
+                [self._episode_return(generation, policy, seed, episode) for episode, seed in enumerate(seeds)]
+                for policy in range(self.pop_size)
+            ],
+            dtype=np.float32,
+        )
+
+    def _report_fitness(self, episode_returns):
+        """Return the reported fitness: the float32 episode mean plus ``fitness_offset``."""
+        return episode_returns.mean(axis=1) + np.float32(self.fitness_offset)
+
     def close(self):
         """Record that the caller closed the env; the trainer must never do this."""
         self.closed = True
+
+
+class LargeReturnEnv(FakeEnv):
+    """A :class:`FakeEnv` at the Go2 pilot's episode-return magnitude, reporting the compiled fitness graph.
+
+    ``episode_returns`` are float32 draws at the ~±100 per-episode magnitude of the Go2 pilot, two positive episodes and one negative per policy, deterministic in ``(master_seed, generation)`` and still independent of the genome payload.
+    The reported fitness is what a task env produces: :func:`run_fitness` on ``episode_returns.reshape(-1)``, i.e. the float32 ``evoxc.reduce_mean`` of :func:`build_fitness`, plus ``fitness_offset``.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._fitness_executable = None
+
+    def _episode_returns(self, generation, seeds):
+        """Return the float32 returns of one generation at the Go2 magnitude, mixed signs."""
+        rng = np.random.default_rng((self.master_seed, int(generation)))
+        base = rng.uniform(0.5 * LARGE_RETURN_SCALE, LARGE_RETURN_SCALE - 1.0, size=(self.pop_size, 1))
+        signs = np.ones((1, EPISODES), dtype=np.float32)
+        signs[0, -1] = -1.0
+        jitter = rng.uniform(-1.0, 1.0, size=(self.pop_size, EPISODES))
+        return (base.astype(np.float32) * signs + jitter.astype(np.float32)).astype(np.float32)
+
+    def _report_fitness(self, episode_returns):
+        """Return the compiled fitness graph's answer plus ``fitness_offset``."""
+        if self._fitness_executable is None:
+            self._fitness_executable = build_fitness(self.pop_size, episodes_per_policy=EPISODES)
+        graph_fitness = run_fitness(self._fitness_executable, episode_returns.reshape(-1))
+        return graph_fitness + np.float32(self.fitness_offset)
 
 
 def check_trainer():
@@ -646,7 +690,66 @@ def check_trainer():
     )
 
 
-# --- 5. Import hygiene --------------------------------------------------------------
+# --- 5. Large-return aggregation ----------------------------------------------------
+
+
+def check_large_returns():
+    """Pin the float32 aggregation rule at the Go2 pilot's episode-return magnitude (~±100)."""
+
+    def train(env_kwargs=None):
+        """Run one full trainer pass against a fresh large-return env; returns ``(trainer, env)``."""
+        env = LargeReturnEnv(**(env_kwargs or {}))
+        trainer = NeuroevolutionTrainer(
+            env,
+            POP_SIZE,
+            LARGE_RETURN_GENERATIONS,
+            num_inputs=6,
+            num_outputs=2,
+            max_nodes=20,
+            max_conns=40,
+        )
+        trainer.run()
+        return trainer, env
+
+    trainer, env = train()
+    _require(
+        len(trainer.records) == LARGE_RETURN_GENERATIONS,
+        f"the trainer must record {LARGE_RETURN_GENERATIONS} generations, got {len(trainer.records)}",
+    )
+    fitness_executable = build_fitness(POP_SIZE, episodes_per_policy=EPISODES)
+    worst_float64_gap = 0.0
+    for generation, record in enumerate(trainer.records):
+        episode_returns = np.asarray(record["episode_returns"], dtype=np.float32)
+        magnitude = float(np.max(np.abs(episode_returns)))
+        _require(
+            episode_returns.dtype == np.float32 and 50.0 < magnitude <= LARGE_RETURN_SCALE,
+            f"generation {generation} must run float32 returns at the Go2 magnitude (|return| <= "
+            f"{LARGE_RETURN_SCALE}), got {episode_returns.dtype} up to {magnitude}",
+        )
+        graph_fitness = run_fitness(fitness_executable, episode_returns.reshape(-1))
+        _require(
+            np.array_equal(np.asarray(record["fitness"], dtype=np.float32), graph_fitness),
+            f"generation {generation}: the trainer's fitness {record['fitness']} must equal the compiled "
+            f"fitness graph's answer {graph_fitness.tolist()} exactly",
+        )
+        float64_mean = episode_returns.mean(axis=1, dtype=np.float64).astype(np.float32)
+        worst_float64_gap = max(worst_float64_gap, float(np.max(np.abs(float64_mean - graph_fitness))))
+    _require(
+        worst_float64_gap > 1e-6,
+        f"the float64 mean must differ from the compiled graph by more than the 1e-6 tolerance, got "
+        f"{worst_float64_gap}; otherwise this check would not exercise the aggregation defect",
+    )
+    trainer.close()
+    _require(env.closed is False, "NeuroevolutionTrainer.close() must not close the caller's env")
+
+    message = _expect_value_error(
+        lambda: train(env_kwargs={"fitness_offset": 1e-3}),
+        "a graph fitness off by 1e-3 at the Go2 magnitude",
+    )
+    _require("fitness" in message, f"the rejection message must name the fitness, got {message}")
+
+
+# --- 6. Import hygiene --------------------------------------------------------------
 
 
 def check_import_hygiene():
@@ -675,6 +778,7 @@ CHECKS = (
     ("env_base", check_env_base),
     ("graphs", check_graphs),
     ("trainer", check_trainer),
+    ("large_returns", check_large_returns),
     ("import_hygiene", check_import_hygiene),
 )
 
