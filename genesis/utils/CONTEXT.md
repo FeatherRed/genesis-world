@@ -64,6 +64,7 @@ Serialization & media:
 Other:
 - `path_planning.py` — `PathPlanner` (ABC), `RRT`, `RRTConnect`, `align_waypoints_length`, `rrt_valid_mask`, `rrt_connect_valid_mask` (Quadrants-based planners; FREE/SPHERICAL joints unsupported).
 - `uid.py` — `UID` (`full`/`short`/`match`, uuid4-hex based).
+- `hsa.py` — ROCm HSA runtime repair: `HsaRuntimeStatus`, `inspect_hsa_runtime` / `system_hsa_runtime_path` (pure detection of torch's bundled `libhsa-runtime64.so` vs. a differing system `libhsa-runtime64.so.1.*`, with versions, sha256 candidates from `$ROCM_PATH`/`$ROCM_HOME`/`/opt/rocm`/`/opt/rocm-*`), and `ensure_system_hsa_runtime` (one-shot `os.execve` with `LD_PRELOAD`, gated by `GS_HSA_REEXEC` opt-out and the `GS_HSA_REEXEC_DONE` one-shot sentinel).
 
 # Constraints
 
@@ -90,6 +91,8 @@ Other:
 - `quat_to_xyz(..., rpy=True)` exists only in the torch/numpy backends (`qd_quat_to_xyz` implements the non-`rpy` intrinsic x-y-z convention only); `rpy=True` angles of `q` equal the negated non-`rpy` angles of `inv_quat(q)`.
 - `_tc_quat_to_xyz` applies the `gs.EPS` gimbal-lock test to the `|q|^2`-scaled cosine, while `_np_quat_to_xyz`/`qd_quat_to_xyz` test the normalized cosine, so non-unit quaternions near pitch ±90° can take different branches per backend.
 - Heavy optional dependencies are imported lazily inside functions (e.g. `pygel3d` in `hybrid.py`, `moviepy` in `tools.animate`), so module import stays cheap but the deps are still required at call time.
+- `hsa.py` must re-exec the interpreter rather than preload with `ctypes.CDLL(..., RTLD_GLOBAL)`, because `LD_PRELOAD` has to be in place before the dynamic loader maps torch's HIP/HSA libraries; a runtime `ctypes` preload is provably insufficient.
+- `ensure_system_hsa_runtime` may only run once from a fresh interpreter before any torch/quadrants GPU work; `GS_HSA_REEXEC=0` is the opt-out and `GS_HSA_REEXEC_DONE=1` is the one-shot sentinel that stops the child from looping.
 
 # Dependencies (beyond the package manager)
 
