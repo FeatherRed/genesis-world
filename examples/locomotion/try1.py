@@ -20,9 +20,15 @@ Usage::
     python examples/locomotion/try1.py --max-steps 60  # viewer, bounded
     python examples/locomotion/try1.py --headless      # 5 s run, saves reward curve
     python examples/locomotion/try1.py --headless --evox-backend xla --evox-device cuda:0
+
+When ``PYTEST_VERSION`` is set — i.e. the script is run by ``tests/test_examples.py``
+with no arguments — no viewer is created and the unbounded run is capped at 5
+steps instead of looping forever.  An explicit ``--headless`` (250 steps) or
+``--max-steps N`` still takes precedence over that cap.
 """
 
 import argparse
+import os
 import time
 from itertools import count
 from pathlib import Path
@@ -100,6 +106,11 @@ def main():
     )
     args = parser.parse_args()
 
+    # The example smoke test (tests/test_examples.py) runs every script with no
+    # arguments, so the default viewer loop must not be allowed to hang it.
+    pytest_run = "PYTEST_VERSION" in os.environ
+    show_viewer = not args.headless and not pytest_run
+
     gs.init(backend=gs.gpu, precision="32", theme="raw")
     scene = gs.Scene(
         sim_options=gs.options.SimOptions(dt=DT, substeps=2),
@@ -109,7 +120,7 @@ def main():
             camera_lookat=(0.0, 0.0, 0.3),
             camera_fov=45,
         ),
-        show_viewer=not args.headless,
+        show_viewer=show_viewer,
     )
     scene.add_entity(gs.morphs.Plane())
     robot = scene.add_entity(gs.morphs.URDF(file="urdf/go2/urdf/go2.urdf", pos=(0.0, 0.0, 0.42)))
@@ -121,7 +132,7 @@ def main():
     robot.set_dofs_position(STANDING.ravel(), dofs)
     robot.set_dofs_kp(np.full(12, 40.0), dofs)
     robot.set_dofs_kv(np.full(12, 1.0), dofs)
-    if not args.headless:
+    if show_viewer:
         scene.viewer.follow_entity(robot, smoothing=0.15)
 
     # Compile both EvoX Compiler graphs ONCE, before the loop, and reuse them every step.
@@ -141,10 +152,18 @@ def main():
     position = None
 
     # Headless always runs the five-second scripted trot; the viewer loops until
-    # it is closed, optionally bounded by --max-steps.
-    num_steps = 250 if args.headless else args.max_steps
+    # it is closed, optionally bounded by --max-steps.  Under pytest the unbounded
+    # viewer run is shortened to a handful of viewerless steps.
+    if args.headless:
+        num_steps = 250
+    elif args.max_steps is not None:
+        num_steps = args.max_steps
+    elif pytest_run:
+        num_steps = 5
+    else:
+        num_steps = None
     for step in range(num_steps) if num_steps is not None else count():
-        if not args.headless and not scene.viewer.is_alive():
+        if show_viewer and not scene.viewer.is_alive():
             break
 
         # Control comes entirely from the compiled gait graph.

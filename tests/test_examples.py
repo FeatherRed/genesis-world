@@ -13,7 +13,16 @@ EXAMPLES_DIR = Path(__file__).parents[1] / "examples"
 
 # Training a policy, or evaluating the policy a training produces, is out of reach of the unit tests, and the other
 # modules hold code shared by examples
-IGNORE_SCRIPT_PATTERNS = {"*_train.py", "*_eval.py", "*_env.py", "behavior_cloning.py", "quadcopter_controller.py"}
+IGNORE_SCRIPT_PATTERNS = {
+    "*_train.py",
+    "*_eval.py",
+    "*_env.py",
+    "behavior_cloning.py",
+    "quadcopter_controller.py",
+    # shared helper modules, not runnable demos
+    "go2_evox_kernels.py",
+    "go2_legacy_reference.py",
+}
 
 # Map example scripts or directories to their required optional dependencies.
 # Directory keys apply recursively to all scripts within that directory.
@@ -22,6 +31,7 @@ EXAMPLE_DEPENDENCIES = {
     "ipc": ["uipc"],  # Requires pyuipc package (provides uipc module)
     "single_franka_batch_render.py": ["gs_madrona"],
     "demo.py": ["LuisaRenderPy"],
+    "try1.py": ["evoxc"],  # Go2 scripted-trot demo drives compiled EvoX Compiler graphs
 }
 # Examples running on a CUDA GPU alone, which the CPU fallback of 'gs.gpu' cannot stand in for
 CUDA_SCRIPT_NAMES = {"single_franka_batch_render.py"}
