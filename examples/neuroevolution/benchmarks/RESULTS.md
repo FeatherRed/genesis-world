@@ -1,7 +1,7 @@
 # Stage-3: PyTorch → EvoX Compiler migration of two neuroevolution pilots
 
 Every table below is copied verbatim from `results/tables.md`, which is **generated from `results/summary.json` by `summarize.py`**; no number here is hand-transcribed from a record, and every row names the record file it came from.
-The raw records are the deliverable: `results/*.json`, 37 benchmark records (38 files in `results/`, the 38th being `results/CONTEXT.md`).
+The raw records are the deliverable: `results/*.json`, 38 benchmark records (39 files in `results/`, the 39th being `results/CONTEXT.md`).
 
 ## 1. Scope and verdict
 
@@ -12,13 +12,13 @@ Two pilots were migrated and measured end to end:
 | Go2 walking | `examples/locomotion/go2_neat_env.py` | 45 → 12 | 20 s (1000 steps, `dt=0.02`) | `trainer.NeuroevolutionTrainer` |
 | Drone hovering | `examples/drone/hover_neat_env.py` | 17 → 4 | 15 s (1500 steps, `dt=0.01`) | `trainer.NeuroevolutionTrainer` |
 
-What was measured: (1) per-step numerical replay of the migrated evaluation environment against an independent pre-migration oracle, (2) steps/s, env-steps/s and a per-step time split at pop 8 and pop 32, (3) full 3-generation TensorNEAT training runs with per-generation curves and a held-out score, (4) NumPy vs device residency of the graph operands (parity, host traffic, per-graph compile cost). 37 records, all `status=ok`, none `contended`.
+What was measured: (1) per-step numerical replay of the migrated evaluation environment against an independent pre-migration oracle, (2) steps/s, env-steps/s and a per-step time split at pop 8 and pop 32, (3) full 3-generation TensorNEAT training runs with per-generation curves and a held-out score, (4) NumPy vs device residency of the graph operands (parity, host traffic, per-graph compile cost), and (5) the GPU process start with and without the ROCm HSA re-exec repair, timed separately from every build and generation. 38 records, all `status=ok`, none `contended`.
 
 **The one-paragraph answer.** The migration is numerically sound and, at these batch sizes, a qualified win. The migrated environment reproduces the pre-migration arithmetic to float32 noise on both pilots (observation max abs diff 4.77e-07 on Go2 and exactly 0 on hover; no termination, reset, command or reward-total mismatch in 100 compared steps per pilot), and it runs the whole train loop with no episode-level divergence. Moving the graph operands from NumPy arrays to device-resident buffers raises the Go2 rollout from 120.73 to 161.27 steps/s (1.336x) and hover from 105.33 to 167.57 steps/s (1.591x) on the GPU while cutting the per-step host traffic from 95.5 KB to 396 B (Go2) and 85.5 KB to 1.1 KB (hover) — but end to end the accelerator does **not** pay off at 24 rows: the best steady generation is still the CPU NumPy-residency run (Go2 1.26 s/generation, hover 0.92 s/generation against 1.33 s and 1.24 s on the GPU), because physics stays on the CPU for the device runs and the compile bill (4.03-4.49 s of graph builds, 23.9-27.4 s of process build) is paid up front. What cannot be claimed: a comparison against the torch environments, which never imported.
 
 ## 2. Pins and environment
 
-Baseline: `ad2f07e5` = `ad2f07e5aec1ba931f5a6704253f70e6fa6370b2`. Every one of the 37 records stores `git.baseline_env_diff_empty=true` with an empty `git.baseline_env_diff`, i.e. the two torch pilots (`go2_env.py`, `hover_env.py`) and their kernels were byte-identical to that commit in every run; `summarize.py` validates the field and reports `baseline_env_diff_empty_all: true`.
+Baseline: `ad2f07e5` = `ad2f07e5aec1ba931f5a6704253f70e6fa6370b2`. Every one of the 38 records stores `git.baseline_env_diff_empty=true` with an empty `git.baseline_env_diff`, i.e. the two torch pilots (`go2_env.py`, `hover_env.py`) and their kernels were byte-identical to that commit in every run; `summarize.py` validates the field and reports `baseline_env_diff_empty_all: true`.
 
 The harness itself evolved across commits, so the record families were produced at different heads (`summary.json` → `validation.heads`):
 
@@ -30,14 +30,16 @@ The harness itself evolved across commits, so the record families were produced 
 | `probe_tell_backend` (1) | `250f77fcd575b30aeb06db6248984f1052ffc78c` | Phase 4 |
 | `probe_torch_cpu_boundary` (1) | `42230b382ddbe614e4e50e362c3852623e039113` | Phase 4 |
 | `probe_unmatched_baselines` (1) | `1f2994a248a16ba30f163603b73e5d4c60d56f76` | Phase 4 |
+| `probe_startup` (1) | `d4f30d3805257c875eafb1a8f8620657a0c72951` | Stage 3 follow-up (process start) |
 
 Package set recorded in every record: `genesis-world 1.4.6`, `quadrants 1.4.0`, `evoxc 0.1.0`, `tensorneat 0.2.0`, `iree-base-compiler 3.13.0`, `iree-base-runtime 3.13.0`, `numpy 2.5.4`, `torch 2.13.0+rocm7.1`.
 Host: one `AMD Instinct MI300X VF` (gfx942, SKU M3000100, 1 device), `torch.version.hip 7.1.52802`, `rocm-smi` "Driver version: 6.16.6" (every record also carries its low-power-state warning), 20 CPUs, Python 3.12.3, Linux.
-1-minute load average over the 37 records: 0.76-2.16 (`summary.json` → `environment.loadavg_1m`); `contended=false` and `host.gpu_busy=false` in all 37, so no run is flagged for contention (the threshold is `common.CONTENTION_LOADAVG = 4.0`).
+1-minute load average over the 38 records: 0.18-2.16 (`summary.json` → `environment.loadavg_1m`); `contended=false` and `host.gpu_busy=false` in all 38, so no run is flagged for contention (the threshold is `common.CONTENTION_LOADAVG = 4.0`).
 
 ## 3. Method
 
 **Cold vs warm process.** `--process-role cold` is the first process of a run: fresh interpreter, first HIP context, the HSA re-exec path in `bench_runtime._ensure_gs_init` (Genesis is initialised before anything calls `torch.cuda`, otherwise the run dies with `HSA_STATUS_ERROR_INVALID_PACKET_FORMAT`). `--process-role warm` is the second process of the same command. **"Cold" is not cache-cold**: the quadrants/IREE disk caches were already populated from earlier work, and the measured build times are identical — Go2 GPU trainer build 26.72 s (cold, `neat_go2_gpu_device_numpy_tell`) vs 26.53 s (warm, `_r1`), hover 24.00 s vs 23.87 s (`neat_hover_gpu_device` / `_r1`), Go2 CPU 6.58 s vs 6.45 s (`neat_go2_seed0` / `_r1`). The pair therefore bounds process-level variance only; it does not measure a cold compile cache.
+**Process start, including the HSA re-exec.** No other record isolates the *start* of a GPU process, so the repair was measured on its own (`results/startup_hsa.json`, T21 in `results/tables.md`): `_startup_worker.py` is a real script file (the repair re-executes `sys.executable <script>`, so `python -c` would skip it), it marks `t0` before any third-party import, `t1` after `import genesis`, `t2` after `gs.init` returns, and the probe times spawn→exit of the whole process in its own session with a hard timeout. Three cases, 3 repeats each, on an idle GPU (`rocm-smi --showpids` empty and load average below the contention threshold before and after): `repair` (default environment; the payload carries `GS_HSA_REEXEC_DONE=1` and `LD_PRELOAD=/opt/rocm/lib/libhsa-runtime64.so.1.18.70100`), `no_repair` (`GS_HSA_REEXEC=0`; one process, no sentinel) and a `cpu` control (`--backend cpu`, no HSA involvement). Wall is 20.562 ± 0.551 s (`repair`), 13.892 ± 0.099 s (`no_repair`) and 14.146 ± 0.503 s (`cpu`); the process that prints the payload spends 7.495 ± 0.376 s on `import genesis` + `gs.init` when it was re-executed, against 13.166 ± 0.139 s in the un-repaired single process, because the parent has already read and page-cached those modules before it re-execs. The derived re-exec cost is therefore **6.670 s of wall** (median `repair` − median `no_repair`) — close to the ~6-6.5 s the migration notes expected for the repair itself — and it is the import plus partial init that the repair performs twice; the repaired child is not slower to start (−5.671 s on module→init, i.e. its *second* import is the cheaper one). This cost ends before `phases.build_s` begins and before any generation: no build, compile or first-generation number in this report contains it, and a `cpu`-backend process pays none of it (the repair is skipped entirely for `cpu`/`metal`).
 
 **Synchronisation.** `common.sync()` brackets every timed region (`torch.cuda.synchronize()` when a CUDA/HIP device is in play, a no-op on CPU); each record states its scope in `workload.sync` ("common.sync() before and after every generation" / "… each timed region").
 
@@ -267,10 +269,10 @@ CPU-resident work that remains on the device path: the hover `_draw_commands` ho
 - **Hover device-on-CPU is noise** (0.951x / 1.154x, T8). Do not quote it.
 - **One held-out triple** of 3 episode seeds per task, and a **3-generation** learning window: the held-out gap changes sign between seeds (§6), so no generalisation claim is supported.
 - **One shared GPU, no parallel measurement**: nothing ran concurrently, `contended=false` everywhere, but the GPU is not exclusive to this machine either (`gpu_after.foreign_pids` empty only proves no compile/rollout was left running).
-- **Records were taken with `git.dirty=true` in 33 of 37 cases** (the exceptions are `neat_go2_seed0.json`, `unmatched_baselines.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json`). The dirty paths are always harness files and other records — `M examples/neuroevolution/benchmarks/bench_runtime.py`, `?? examples/neuroevolution/benchmarks/{bench_envs,common,oracle}.py`, `?? examples/neuroevolution/benchmarks/results/` — never a pilot or a kernel; and every record independently proves the pilots were untouched via `git.baseline_env_diff_empty=true`.
+- **Records were taken with `git.dirty=true` in 34 of 38 cases** (the exceptions are `neat_go2_seed0.json`, `unmatched_baselines.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json`). The dirty paths are always harness files and other records — `M examples/neuroevolution/benchmarks/bench_runtime.py`, `?? examples/neuroevolution/benchmarks/{bench_envs,common,oracle}.py`, `?? examples/neuroevolution/benchmarks/results/` — never a pilot or a kernel; and every record independently proves the pilots were untouched via `git.baseline_env_diff_empty=true`.
 - **Byte counts are estimates**, not a PCIe counter (§7).
 - **Not measured, and not estimated**: the Go2 reward terms (aggregate-only `run_advance`), the torch-env performance and reward comparison, any PPO baseline, the `iree@rocm:0` tell (timeout, not a slow result), and `xla` without its PJRT plugin.
-- **Record count**: 37 records, not the 38 files in `results/` (the 38th is `results/CONTEXT.md`); `summarize.py` validates and reports the real number.
+- **Record count**: 38 records, not the 39 files in `results/` (the 39th is `results/CONTEXT.md`); `summarize.py` validates and reports the real number.
 - Known record inconsistency: none found. One table label was corrected instead — the T13 `best policy held-out improvement` column is the policy's trained−initial improvement on the unseen triple, **not** a train-vs-held-out gap; the gap has to be computed from the two recorded fitnesses (as done in §6).
 
 ## 12. Reproduction
@@ -294,13 +296,14 @@ Environment for every command: `PYTHONPATH=$PWD/examples/neuroevolution` (the ha
 | `unmatched_baselines.json` | `python …/bench_probe.py unmatched --out …/unmatched_baselines.json` |
 | `tell_backend_rocm.json` | `python …/bench_probe.py tell-backend --all --out …/tell_backend_rocm.json` (≈4.5 min, the IREE timeout dominates) |
 | `torch_cpu_boundary.json` | `python …/bench_probe.py torch-cpu --out …/torch_cpu_boundary.json` |
+| `startup_hsa.json` | `python …/bench_probe.py startup --repeats 3 --out …/startup_hsa.json` (≈2.5 min: 9 worker processes, 3 per case) |
 | `SUMMARY`/`tables.md` | `python examples/neuroevolution/benchmarks/summarize.py --markdown examples/neuroevolution/benchmarks/results/tables.md` (`summarize.py check` runs the self-check alone) |
 
 Expected runtime: a CPU training run is ~12 s wall for 3 generations plus ~6.5 s of build (`neat_go2_seed0.json` `phases.total_s`), a GPU trainer run ~40 s plus the 24-27 s build, a throughput/residency pair ~1-2 min, the probes 1-5 min. Every record stores its own `command`, so a record can always be reproduced from itself.
 
 ## 13. Record index
 
-37 records (T1 in `results/tables.md` carries the same list with head/status/contended). All `status=ok`, all `contended=false`.
+38 records (T1 in `results/tables.md` carries the same list with head/status/contended). All `status=ok`, all `contended=false`.
 
 | record | kind | task | seed | repeat | process | short description |
 |---|---|---|---|---|---|---|
@@ -341,3 +344,4 @@ Expected runtime: a CPU training run is ~12 s wall for 3 generations plus ~6.5 s
 | `unmatched_baselines` | probe_unmatched_baselines | go2+hover | 0 | 0 | only | torch envs, thin adapter, offline install, PPO |
 | `tell_backend_rocm` | probe_tell_backend | go2 | 0 | 0 | only | `numpy@cpu:0` / `xla@rocm:0` / `iree@rocm:0` tell matrix |
 | `torch_cpu_boundary` | probe_torch_cpu_boundary | go2+hover | 0 | 0 | only | AST scan, `import genesis` probe, cited boundary numbers |
+| `startup_hsa` | probe_startup | go2 | 0 | 0 | only | process start with / without the HSA re-exec repair |

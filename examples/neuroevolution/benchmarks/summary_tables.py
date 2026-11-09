@@ -5,7 +5,7 @@ GitHub-flavoured tables that ``RESULTS.md`` embeds verbatim, so no number in the
 hand-transcribed. It owns the number formatting and one builder per table family; it never reads a
 raw record and never imports ``genesis``, ``torch``, ``tensordict`` or ``evoxc``.
 
-Table ids are stable (``T1``.. ``T20``) and referenced from ``RESULTS.md``
+Table ids are stable (``T1``.. ``T21``) and referenced from ``RESULTS.md``
 """
 
 from __future__ import annotations
@@ -23,6 +23,18 @@ CHUNK_COLUMNS = (
 
 #: Timer groups folded into the ``other`` column (they are per-generation or tiny per step).
 OTHER_GROUPS = ("graph_obs", "graph_controls", "graph_fitness", "download", "stage_upload", "sync")
+
+#: Column order of the compact per-run startup rows stored in ``summary.json`` (T21).
+STARTUP_RUN_FIELDS = (
+    "case",
+    "repeat",
+    "wall_s",
+    "import_s",
+    "init_s",
+    "module_to_init_s",
+    "reexec_done",
+    "opt_out",
+)  # fmt: skip
 
 
 def _num(value):
@@ -664,6 +676,64 @@ def _probe_tables(summary):
     return tables
 
 
+def _startup_sentinel(run):
+    """How the ``GS_HSA_REEXEC_DONE`` sentinel and the opt-out identify one run's case."""
+    if run.get("reexec_done") == "1":
+        return "`GS_HSA_REEXEC_DONE=1` (re-executed)"
+    if run.get("opt_out") == "0":
+        return "none (`GS_HSA_REEXEC=0`)"
+    return "none (no HSA check)"
+
+
+def _startup_tables(summary):
+    """T21: process start up to ``gs.init``, with and without the ROCm HSA re-exec repair."""
+    tables = []
+    for entry in _entries(summary, "probe_startup"):
+        runs = [dict(zip(STARTUP_RUN_FIELDS, row)) for row in entry.get("runs") or []]
+        rows = [
+            [
+                run["case"],
+                _f(run["repeat"], 0),
+                _f(run["wall_s"]),
+                _f(run["import_s"]),
+                _f(run["init_s"]),
+                _f(run["module_to_init_s"]),
+                _startup_sentinel(run),
+                entry["record"],
+            ]
+            for run in runs
+        ]
+        cases, derived = entry.get("cases") or {}, entry.get("derived") or {}
+        medians = "; ".join(
+            f"`{case}` {_mean_spread(_pick(cases, case, 'wall_s'))} s wall / "
+            f"{_mean_spread(_pick(cases, case, 'module_to_init_s'))} s module→init"
+            for case in ("repair", "no_repair", "cpu")
+            if _pick(cases, case, "wall_s")
+        )
+        note = (
+            "`wall` is spawn→exit of the whole `python` process (so it includes the re-exec when one happens); "
+            "`module→init` is `import genesis` + `gs.init` in the process that printed the payload (the "
+            "re-executed child when the repair applies). Both are process start only: they end before "
+            "`phases.build_s` begins, so no build, compile or first-generation number in this report is "
+            f"inflated by them. Median ± spread over the repeats: {medians}. Derived re-exec cost: "
+            f"{_f(derived.get('reexec_cost_s'))} s of wall (`repair` − `no_repair`), which is the import and "
+            f"partial init the repair performs twice, against {_f(derived.get('reexec_cost_module_s'))} s on "
+            "module→init, i.e. the repaired child is not slower to import — the whole cost is the second "
+            "process start."
+        )
+        tables.append(
+            _table_block(
+                "T21",
+                "GPU process start: with and without the HSA re-exec repair",
+                ["case", "repeat", "wall s", "import s", "init s", "module→init s", "re-exec sentinel", "record"],
+                rows,
+                [entry["record"]],
+                note=note,
+            )
+        )
+    return tables
+
+
 def markdown_document(summary):
     """Render the whole ``tables.md`` document from a ``summarize.build_summary`` payload."""
     validation = summary["validation"]
@@ -692,5 +762,6 @@ def markdown_document(summary):
         + _residency_tables(summary)
         + _neat_tables(summary)
         + _probe_tables(summary)
+        + _startup_tables(summary)
     )
     return "\n".join(lines + sections).rstrip() + "\n"

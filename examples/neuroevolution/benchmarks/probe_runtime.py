@@ -331,8 +331,8 @@ def run_tell_entry(spec: dict, timeout: float) -> dict:
     return entry
 
 
-def tell_worker_processes() -> list[str]:
-    """Return the command lines of any live ``_tell_worker.py`` process (expected: empty)."""
+def worker_processes(script: str = "_tell_worker.py") -> list[str]:
+    """Return the command lines of any live probe worker running ``script`` (expected: empty)."""
     try:
         completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
             ["ps", "-eo", "pid,args"], capture_output=True, text=True, check=False, timeout=15
@@ -343,9 +343,14 @@ def tell_worker_processes() -> list[str]:
     found = []
     for line in completed.stdout.splitlines():
         stripped = line.strip()
-        if "_tell_worker.py" in stripped and not any(stripped.startswith(pid) for pid in own):
+        if script in stripped and not any(stripped.startswith(pid) for pid in own):
             found.append(stripped[:300])
     return found
+
+
+def tell_worker_processes() -> list[str]:
+    """Return the command lines of any live ``_tell_worker.py`` process (expected: empty)."""
+    return worker_processes("_tell_worker.py")
 
 
 def gpu_after() -> dict:

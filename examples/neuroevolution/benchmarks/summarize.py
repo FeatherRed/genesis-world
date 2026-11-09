@@ -32,7 +32,7 @@ import sys
 from pathlib import Path
 
 import common
-from summary_tables import _entries, _f, _mean_spread, _num, _pick, markdown_document
+from summary_tables import STARTUP_RUN_FIELDS, _entries, _f, _mean_spread, _num, _pick, markdown_document
 
 HERE = Path(__file__).resolve().parent
 RESULTS_DIR = HERE / "results"
@@ -59,6 +59,7 @@ KIND_ORDER = (
     "probe_unmatched_baselines",
     "probe_tell_backend",
     "probe_torch_cpu_boundary",
+    "probe_startup",
 )
 
 #: Hard ceiling on ``summary.json`` (aggregates and small arrays only).
@@ -521,6 +522,37 @@ def _probe_entry(name, record):
     }
 
 
+def _startup_row(run):
+    """One compact per-run row: the spawned process' wall plus the fields the worker printed."""
+    flat = {"case": run.get("case"), "repeat": run.get("repeat"), "wall_s": run.get("wall_s")}
+    flat.update(run.get("worker") or {})
+    return [flat.get(field) for field in STARTUP_RUN_FIELDS]
+
+
+def _probe_startup_entry(name, record):
+    """Extraction of the process-start record: per-run rows, per-case distributions, derived cost."""
+    measurements = record.get("measurements") or {}
+    statuses = measurements.get("hsa_status") or {}
+    status = next((block for block in statuses.values() if block), None) or {}
+    return {
+        **_head(name, record),
+        "cases": {
+            case: {
+                "wall_s": _stats_view(_pick(measurements, "wall_s", case)),
+                "module_to_init_s": _stats_view(_pick(measurements, "module_to_init_s", case)),
+            }
+            for case in ("repair", "no_repair", "cpu")
+            if _pick(measurements, "wall_s", case)
+        },
+        "runs": [_startup_row(run) for run in measurements.get("runs") or []],
+        "derived": {
+            key: _pick(measurements, "derived", key)
+            for key in ("reexec_cost_s", "reexec_cost_module_s", "gpu_premium_s")
+        },
+        "hsa": {key: status.get(key) for key in ("applicable", "bundled_version", "system_version")},
+    }
+
+
 EXTRACTORS = {
     "env_replay": _replay_entry,
     "env_throughput": _throughput_entry,
@@ -530,6 +562,7 @@ EXTRACTORS = {
     "probe_unmatched_baselines": _probe_entry,
     "probe_tell_backend": _probe_entry,
     "probe_torch_cpu_boundary": _probe_entry,
+    "probe_startup": _probe_startup_entry,
 }
 
 
@@ -657,7 +690,7 @@ def build_summary(loaded):
 def serialize_summary(summary):
     """The compact JSON payload written to ``summary.json``.
 
-    Compact (no indentation) on purpose: the aggregates of 37 records only fit under the size cap
+    Compact (no indentation) on purpose: the aggregates of 38 records only fit under the size cap
     that way. ``results/tables.md`` is the readable rendering of the same payload.
     """
     return json.dumps(summary, sort_keys=True, separators=(",", ":"), allow_nan=False) + "\n"
@@ -715,8 +748,8 @@ def _selfcheck(loaded, summary):
     assert json.loads(payload) == summary, "summary does not round-trip through JSON"
     assert serialize_summary(build_summary(loaded)) == payload, "summary is not deterministic"
     tables = markdown_document(summary)
-    assert tables.count("\n### T") >= 18, "fewer tables than expected"
-    assert tables.count("Sources:") >= 18, "a table has no source footnote"
+    assert tables.count("\n### T") >= 21, "fewer tables than expected"
+    assert tables.count("Sources:") >= 21, "a table has no source footnote"
     for name in summary["sources"]:
         assert f"`{_stem(name)}.json`" in tables, f"{_stem(name)} is not cited by any table"
     go2_replay = next(entry for entry in _entries(summary, "env_replay") if entry["task"] == "go2" and entry["repeat"] == 0)

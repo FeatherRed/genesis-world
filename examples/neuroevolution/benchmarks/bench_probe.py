@@ -1,4 +1,4 @@
-"""Stage-3 Phase-4 probes: unmatched baselines, backend capability and the torch/CPU boundary.
+"""Stage-3 Phase-4 probes: unmatched baselines, backend capability, the torch/CPU boundary and process start.
 
 The Phase 1-3 harness measured the *migrated* environments and trainer. This CLI records what the
 migration did **not** measure, so the Stage-3 report states its gaps instead of implying coverage:
@@ -25,6 +25,16 @@ migration did **not** measure, so the Stage-3 report states its gaps instead of 
     (:mod:`probe_sources`, :func:`_runtime_probe`), and the already-committed boundary numbers of
     ``results/`` cited with their source filename and git head (never re-measured).
 
+``startup``
+    The one process-start cost no other record covers: ``gs.init(backend=gs.gpu)`` repairs the ROCm
+    HSA runtime by re-executing the interpreter (:mod:`_startup_worker`, a real script file because
+    the repair re-executes ``sys.executable <script>``), so a GPU process pays its import and init
+    twice. Three cases -- ``repair`` (default environment), ``no_repair`` (``GS_HSA_REEXEC=0``, one
+    process) and ``cpu`` (no HSA involvement) -- give the wall of spawn->exit and the re-executed
+    child's ``import genesis`` + ``gs.init`` split, and therefore the cost of the repair. Every run
+    records its sentinel (``GS_HSA_REEXEC_DONE``) and opt-out evidence, so the ``repair`` and
+    ``no_repair`` cases are provably what they claim to be.
+
 Usage (from the repository root)::
 
     PYTHONPATH=$PWD MPLCONFIGDIR=$TMPDIR/mpl /root/evox-robotics/.venv/bin/python \
@@ -33,6 +43,8 @@ Usage (from the repository root)::
         examples/neuroevolution/benchmarks/bench_probe.py tell-backend --all
     PYTHONPATH=$PWD MPLCONFIGDIR=$TMPDIR/mpl /root/evox-robotics/.venv/bin/python \
         examples/neuroevolution/benchmarks/bench_probe.py torch-cpu
+    PYTHONPATH=$PWD MPLCONFIGDIR=$TMPDIR/mpl /root/evox-robotics/.venv/bin/python \
+        examples/neuroevolution/benchmarks/bench_probe.py startup
 
 A bare invocation prints the usage and exits 0, like the other benchmark CLIs, so the
 ``examples/**/*.py`` smoke harness does not treat this tool as a failing example.
@@ -62,9 +74,10 @@ from probe_runtime import (
     probe_env,
     run_capture,
     run_tell_entry,
+    worker_processes,
 )
 from probe_sources import BASELINES, RESULTS_DIR, interface_mismatch, measured_boundary, torch_scan
-from runtime_measure import _filter_own_gpu_pids
+from runtime_measure import _filter_own_gpu_pids, _process_tree
 
 
 def _new_probe_record(kind: str, task: str, workload: dict) -> dict:
@@ -359,6 +372,248 @@ def _fill_torch_cpu(args, record: dict) -> None:
     record["measurements"] = {"ast_scan": scan, "runtime_probe": runtime, "measured_boundary": measured_boundary()}
 
 
+# --- process start (ROCm HSA re-exec) ---------------------------------------------
+#: The worker measures one process start; it has to be a real script file because the repair
+#: re-executes ``sys.executable <that file>`` (``python -c`` has no script to re-run).
+STARTUP_WORKER = Path(__file__).resolve().parent / "_startup_worker.py"
+
+#: Marker of the single JSON payload line the worker prints (same protocol as ``_tell_worker.py``).
+STARTUP_MARKER = "STARTUP"
+
+#: Hard timeout of one worker run (the whole spawn, re-exec included).
+STARTUP_TIMEOUT_S = 120.0
+
+#: Seconds to wait for an idle GPU before aborting instead of timing a contended process start.
+STARTUP_WAIT_S = 120.0
+
+#: Poll interval of that wait.
+STARTUP_POLL_S = 10.0
+
+#: The three process-start cases: with the HSA repair, without it, and a CPU control.
+#: ``reexec``/``opt_out`` are the sentinel and opt-out values the case must observe, so a case
+#: cannot silently measure the other one.
+STARTUP_CASES = (
+    {"case": "repair", "backend": "gpu", "env": {}, "reexec": "1", "opt_out": None},
+    {"case": "no_repair", "backend": "gpu", "env": {"GS_HSA_REEXEC": "0"}, "reexec": None, "opt_out": "0"},
+    {"case": "cpu", "backend": "cpu", "env": {}, "reexec": None, "opt_out": None},
+)
+
+
+def _host_snapshot() -> dict:
+    """Host facts with this process' own GPU PIDs removed (it holds a HIP context by now)."""
+    host = common.host_info()
+    listed = [str(pid) for pid in host.get("rocm_pids") or []]
+    own = _process_tree()
+    foreign = [pid for pid in listed if int(pid) not in own]
+    host.update(
+        {
+            "rocm_pids_all": listed,
+            "rocm_pids": foreign,
+            "owned_gpu_pids": sorted({int(pid) for pid in listed if int(pid) in own}),
+            "gpu_busy": bool(foreign),
+        }
+    )
+    return host
+
+
+def _busy_reasons(host: dict) -> list[str]:
+    """The contention reasons of one host snapshot, in the shape ``common.new_record`` uses."""
+    reasons = []
+    if host.get("gpu_busy"):
+        reasons.append(f"rocm-smi --showpids lists {len(host.get('rocm_pids') or [])} process(es)")
+    load = host.get("loadavg_1m")
+    if load is not None and load > common.CONTENTION_LOADAVG:
+        reasons.append(f"/proc/loadavg 1-minute average {load} > {common.CONTENTION_LOADAVG}")
+    return reasons
+
+
+def _wait_for_idle_gpu(budget: float) -> dict:
+    """Wait for an idle GPU and a quiet host; refuse to record a contended process start."""
+    waited = 0.0
+    deadline = time.monotonic() + budget
+    while True:
+        host = _host_snapshot()
+        reasons = _busy_reasons(host)
+        if not reasons:
+            return {"waited_s": _r(waited), "host": host}
+        if time.monotonic() >= deadline:
+            raise RuntimeError(
+                f"GPU/host still busy after {waited:.0f} s ({'; '.join(reasons)}); refusing to time a "
+                "contended process start, rerun when the GPU is idle"
+            )
+        time.sleep(STARTUP_POLL_S)
+        waited += STARTUP_POLL_S
+
+
+def _case_matches(spec: dict, worker: dict | None) -> bool:
+    """Whether one payload carries the sentinel and opt-out evidence the case claims to measure."""
+    if not worker:
+        return False
+    if worker.get("reexec_done") != spec["reexec"] or worker.get("opt_out") != spec["opt_out"]:
+        return False
+    if worker.get("hsa_check_applies") is not (spec["backend"] != "cpu"):
+        return False
+    if spec["case"] == "repair":
+        status = worker.get("hsa_status") or {}
+        return bool(worker.get("ld_preload")) and status.get("preload_names_system") is True
+    return True
+
+
+def _startup_run(spec: dict, repeat: int, timeout: float) -> dict:
+    """Spawn the startup worker once; keep its wall, its payload and its evidence."""
+    env = probe_env()
+    env.update(spec["env"])
+    run = run_capture(
+        [sys.executable, str(STARTUP_WORKER), "--backend", spec["backend"]],
+        timeout=timeout,
+        env=env,
+        cwd=common.repo_root(),
+    )
+    stdout = run.pop("_stdout")
+    stderr = run.pop("_stderr")
+    payload, payload_lines = None, 0
+    for line in stdout.splitlines():
+        if not line.startswith(f"{STARTUP_MARKER} "):
+            continue
+        payload_lines += 1
+        try:
+            payload = json.loads(line[len(STARTUP_MARKER) + 1 :])
+        except json.JSONDecodeError:
+            payload = None
+    entry = {
+        "case": spec["case"],
+        "repeat": repeat,
+        "backend": spec["backend"],
+        "env": dict(spec["env"]),
+        "command": run["command"],
+        "wall_s": run["elapsed_s"],
+        "returncode": run["returncode"],
+        "timed_out": run["timed_out"],
+        "timeout_s": timeout,
+        "payload_lines": payload_lines,
+        "worker": payload,
+        "case_matches": _case_matches(spec, payload),
+    }
+    if run["timed_out"]:
+        entry["failure"] = f"worker exceeded its hard timeout of {timeout:.1f} s"
+    elif run["returncode"] != 0:
+        entry["failure"] = f"worker exited with returncode {run['returncode']}"
+    elif payload is None or payload_lines != 1:
+        entry["failure"] = f"expected exactly one {STARTUP_MARKER} payload line, got {payload_lines}"
+    elif not entry["case_matches"]:
+        entry["failure"] = (
+            f"case evidence mismatch: reexec_done={payload.get('reexec_done')!r} "
+            f"opt_out={payload.get('opt_out')!r} ld_preload={payload.get('ld_preload')!r}"
+        )
+    entry["status"] = "failed" if "failure" in entry else "ok"
+    entry["stderr_tail"] = [] if entry["status"] == "ok" else run["stderr_tail"]
+    return entry
+
+
+def _median_delta(blocks: dict, left: str, right: str):
+    """``median(left) - median(right)`` of two ``common.stats`` blocks, or ``None``."""
+    first = (blocks.get(left) or {}).get("median")
+    second = (blocks.get(right) or {}).get("median")
+    return None if first is None or second is None else _r(float(first) - float(second))
+
+
+def _startup_aggregate(runs: list[dict]) -> dict:
+    """Per-case statistics of the process start and the derived re-exec cost."""
+    by_case = {spec["case"]: [run for run in runs if run["case"] == spec["case"]] for spec in STARTUP_CASES}
+    measurements = {"runs": runs}
+    for key in ("wall_s", "import_s", "init_s", "module_to_init_s"):
+        measurements[key] = {
+            name: common.stats([(run["wall_s"] if key == "wall_s" else (run["worker"] or {}).get(key)) for run in case_runs])
+            for name, case_runs in by_case.items()
+        }
+    measurements["hsa_status"] = {name: (case_runs[0]["worker"] or {}).get("hsa_status") for name, case_runs in by_case.items()}
+    measurements["evidence"] = {
+        name: {
+            "n_runs": len(case_runs),
+            "expects_reexec": next(spec["reexec"] for spec in STARTUP_CASES if spec["case"] == name),
+            "expects_opt_out": next(spec["opt_out"] for spec in STARTUP_CASES if spec["case"] == name),
+            "reexec_done": sorted({(run["worker"] or {}).get("reexec_done") for run in case_runs}, key=str),
+            "opt_out": sorted({(run["worker"] or {}).get("opt_out") for run in case_runs}, key=str),
+            "ld_preload": sorted({str((run["worker"] or {}).get("ld_preload")) for run in case_runs}),
+            "payload_lines": sorted({run["payload_lines"] for run in case_runs}),
+            "all_match": all(run["case_matches"] for run in case_runs),
+        }
+        for name, case_runs in by_case.items()
+    }
+    wall = measurements["wall_s"]
+    measurements["derived"] = {
+        "reexec_cost_s": _median_delta(wall, "repair", "no_repair"),
+        "reexec_cost_module_s": _median_delta(measurements["module_to_init_s"], "repair", "no_repair"),
+        "gpu_premium_s": _median_delta(wall, "no_repair", "cpu"),
+        "definition": (
+            "reexec_cost_s = median(wall_s[repair]) - median(wall_s[no_repair]); wall is spawn->exit of "
+            "the whole python process, so it contains the process start that the repair performs twice; "
+            "reexec_cost_module_s is the same difference on the re-executed child's module->init "
+            "(import genesis + gs.init) and isolates whether the repaired child itself starts slower"
+        ),
+        "scope": (
+            "everything here happens before the record's own phases.build_s: it is process start only, no "
+            "scene, no compiled graph, no generation"
+        ),
+    }
+    return measurements
+
+
+def _fill_startup(args, record: dict) -> None:
+    """Run the three process-start cases ``--repeats`` times and fill the record."""
+    if not STARTUP_WORKER.is_file():
+        raise RuntimeError(f"missing worker script {STARTUP_WORKER}")
+    gate = _wait_for_idle_gpu(STARTUP_WAIT_S)
+    host_before = gate["host"]
+    record["workload"].update(
+        {
+            "python": sys.executable,
+            "worker": f"examples/neuroevolution/benchmarks/{STARTUP_WORKER.name}",
+            "cases": [spec["case"] for spec in STARTUP_CASES],
+            "repeats": args.repeats,
+            "case_timeout_s": args.timeout,
+            "hsa_opt_out_var": "GS_HSA_REEXEC",
+            "hsa_sentinel_var": "GS_HSA_REEXEC_DONE",
+            "idle_gate": (
+                "rocm-smi --showpids and /proc/loadavg are checked before the runs and again after them, "
+                f"the probe waits up to {STARTUP_WAIT_S:.0f} s for an idle GPU and aborts instead of timing "
+                "a contended start"
+            ),
+            "note": (
+                "one worker process per run: it marks t0 before any third-party import, t1 after "
+                "`import genesis` and t2 after `gs.init` returns, so module->init is exactly the process "
+                "start that precedes every build/first-generation timer. `wall` is spawn->exit of the whole "
+                "`python` process and therefore includes the re-exec when one happens; the parent "
+                "interpreter is replaced by os.execve, so only the child prints a payload line"
+            ),
+        }
+    )
+    started = time.perf_counter()
+    runs = [_startup_run(spec, repeat, args.timeout) for repeat in range(args.repeats) for spec in STARTUP_CASES]
+    runs_s = time.perf_counter() - started
+    measurements = _startup_aggregate(runs)
+    host_after = _host_snapshot()
+    reasons = [f"before: {reason}" for reason in _busy_reasons(host_before)]
+    reasons += [f"after: {reason}" for reason in _busy_reasons(host_after)]
+    record["host_before"], record["host_after"] = host_before, host_after
+    record["contended"] = bool(reasons)
+    record["contention_reasons"] = reasons
+    record["phases"] = {
+        "idle_wait_s": gate["waited_s"],
+        "case_runs_s": _r(runs_s),
+        "total_s": _r(gate["waited_s"] + runs_s),
+    }
+    record["timings"] = {"note": "per-run wall/import/init seconds are in measurements.runs and their per-case medians in measurements.*_s"}
+    record["measurements"] = {
+        **measurements,
+        "gpu_after": gpu_after(),
+        "worker_processes_left": worker_processes(STARTUP_WORKER.name),
+    }
+    failures = [f"{run['case']}#{run['repeat']}: {run['failure']}" for run in runs if run["status"] != "ok"]
+    if failures:
+        raise RuntimeError("; ".join(failures))
+
+
 # --- printing ---------------------------------------------------------------------
 def _print_unmatched(record: dict, out_path: Path) -> None:
     """Print the reviewable summary of the unmatched-baseline record."""
@@ -411,12 +666,39 @@ def _print_torch(record: dict, out_path: Path) -> None:
     )
 
 
+def _print_startup(record: dict, out_path: Path) -> None:
+    """Print the per-case process-start medians and the derived HSA re-exec cost."""
+    def _sec(value, digits: int = 3) -> str:
+        """Format one measured duration for the console line (``n/a`` when unmeasured)."""
+        return "n/a" if value is None else f"{float(value):.{digits}f}"
+
+    print(f"[probe] {record['kind']} status={record['status']} git={record['git']['head'][:12]}")
+    print(f"[probe] record -> {out_path}")
+    measurements = record.get("measurements") or {}
+    for name in ("repair", "no_repair", "cpu"):
+        wall = (measurements.get("wall_s") or {}).get(name) or {}
+        module = (measurements.get("module_to_init_s") or {}).get(name) or {}
+        evidence = (measurements.get("evidence") or {}).get(name) or {}
+        print(
+            f"[probe]   {name:<9} wall {_sec(wall.get('median'))}±{_sec(wall.get('spread'))}s "
+            f"module->init {_sec(module.get('median'))}±{_sec(module.get('spread'))}s "
+            f"n={wall.get('n')} reexec_done={evidence.get('reexec_done')} matches={evidence.get('all_match')}"
+        )
+    derived = measurements.get("derived") or {}
+    print(
+        f"[probe]   re-exec cost: wall {_sec(derived.get('reexec_cost_s'))}s "
+        f"module->init {_sec(derived.get('reexec_cost_module_s'))}s gpu premium {_sec(derived.get('gpu_premium_s'))}s"
+    )
+    gpu = measurements.get("gpu_after") or {}
+    print(f"[probe]   gpu_free_after={gpu.get('gpu_free')} workers_left={measurements.get('worker_processes_left')}")
+
+
 # --- CLI --------------------------------------------------------------------------
 def build_parser() -> argparse.ArgumentParser:
     """Return the parser of the Phase-4 probe CLI."""
     parser = argparse.ArgumentParser(
         prog="bench_probe.py",
-        description="Stage-3 Phase-4 probes: unmatched baselines, tell backends and the torch/CPU boundary.",
+        description="Stage-3 Phase-4 probes: unmatched baselines, tell backends, the torch/CPU boundary and process start.",
     )
     subparsers = parser.add_subparsers(dest="command", required=True)
     unmatched = subparsers.add_parser(
@@ -438,6 +720,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     torch_cpu.add_argument("--timeout", type=float, default=180.0, help="hard timeout of the import genesis probe")
     torch_cpu.add_argument("--out", default=str(RESULTS_DIR / "torch_cpu_boundary.json"))
+    startup = subparsers.add_parser(
+        "startup", help="measure process start up to gs.init, with and without the ROCm HSA re-exec repair"
+    )
+    startup.add_argument("--repeats", type=int, default=3, help="worker runs per case (repair / no_repair / cpu)")
+    startup.add_argument("--timeout", type=float, default=STARTUP_TIMEOUT_S, help="hard timeout of one worker process")
+    startup.add_argument("--out", default=str(RESULTS_DIR / "startup_hsa.json"))
     return parser
 
 
@@ -469,11 +757,27 @@ def main(argv=None) -> int:
     elif args.command == "torch-cpu":
         record = _new_probe_record(kind="probe_torch_cpu_boundary", task="go2+hover", workload={"probe": "torch_cpu"})
         run_guarded(lambda rec: _fill_torch_cpu(args, rec), record)
+    elif args.command == "startup":
+        if args.timeout <= 0:
+            raise ValueError("--timeout must be positive")
+        if args.repeats <= 0:
+            raise ValueError("--repeats must be positive")
+        record = _new_probe_record(
+            kind="probe_startup",
+            task="go2",
+            workload={"probe": "startup", "repeats": args.repeats, "cases": [spec["case"] for spec in STARTUP_CASES]},
+        )
+        run_guarded(lambda rec: _fill_startup(args, rec), record)
     else:
         raise SystemExit(f"unsupported subcommand {args.command!r}")
     out_path = Path(args.out)
     write_record(out_path, record)
-    {"unmatched": _print_unmatched, "tell-backend": _print_tell, "torch-cpu": _print_torch}[args.command](record, out_path)
+    {
+        "unmatched": _print_unmatched,
+        "tell-backend": _print_tell,
+        "torch-cpu": _print_torch,
+        "startup": _print_startup,
+    }[args.command](record, out_path)
     return 0 if record["status"] == "ok" else 1
 
 

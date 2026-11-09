@@ -3,8 +3,8 @@
 Generated from `results/summary.json` by `summarize.py`; do not edit by hand.
 Every table names the record files it was derived from, and every record is validated for schema, baseline provenance and status before it is aggregated.
 
-Records: 37 (37 ok, 0 failed, 0 contended). Baseline `ad2f07e5aec1ba931f5a6704253f70e6fa6370b2`; `git.baseline_env_diff_empty` in every record: true.
-Host: AMD Instinct MI300X VF, ROCm driver 6.16.6, 1-minute load average 0.76-2.16 over 37 records.
+Records: 38 (38 ok, 0 failed, 0 contended). Baseline `ad2f07e5aec1ba931f5a6704253f70e6fa6370b2`; `git.baseline_env_diff_empty` in every record: true.
+Host: AMD Instinct MI300X VF, ROCm driver 6.16.6, 1-minute load average 0.18-2.16 over 38 records.
 
 Validation warnings: none.
 
@@ -51,8 +51,9 @@ Head shas differ per record family because the harness evolved across commits; t
 | unmatched_baselines | probe_unmatched_baselines | go2+hover | 0 | 0 | only | 1f2994a2 | ok | false |
 | tell_backend_rocm | probe_tell_backend | go2 | 0 | 0 | only | 250f77fc | ok | false |
 | torch_cpu_boundary | probe_torch_cpu_boundary | go2+hover | 0 | 0 | only | 42230b38 | ok | false |
+| startup_hsa | probe_startup | go2 | 0 | 0 | only | d4f30d38 | ok | false |
 
-Sources: `env_go2_replay_seed0.json`, `env_go2_replay_seed0_r1.json`, `env_go2_throughput_numpy_cpu_pop32.json`, `env_go2_throughput_numpy_cpu_pop32_r1.json`, `env_go2_throughput_numpy_cpu_pop8.json`, `env_go2_throughput_numpy_cpu_pop8_r1.json`, `env_hover_replay_seed0.json`, `env_hover_replay_seed0_r1.json`, `env_hover_throughput_numpy_cpu_pop32.json`, `env_hover_throughput_numpy_cpu_pop32_r1.json`, `env_hover_throughput_numpy_cpu_pop8.json`, `env_hover_throughput_numpy_cpu_pop8_r1.json`, `neat_determinism_go2.json`, `neat_go2_gpu_device_numpy_tell.json`, `neat_go2_gpu_device_numpy_tell_r1.json`, `neat_go2_gpu_device_xla_tell.json`, `neat_go2_gpu_device_xla_tell_r1.json`, `neat_go2_gpu_numpy_residency.json`, `neat_go2_gpu_numpy_residency_r1.json`, `neat_go2_seed0.json`, `neat_go2_seed0_r1.json`, `neat_go2_seed1.json`, `neat_go2_seed2.json`, `neat_hover_gpu_device.json`, `neat_hover_gpu_device_r1.json`, `neat_hover_seed0.json`, `neat_hover_seed1.json`, `neat_hover_seed2.json`, `residency_go2_gpu.json`, `residency_go2_gpu_r1.json`, `residency_hover_device_cpu.json`, `residency_hover_device_cpu_r1.json`, `residency_hover_gpu.json`, `residency_hover_gpu_r1.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json`, `unmatched_baselines.json`
+Sources: `env_go2_replay_seed0.json`, `env_go2_replay_seed0_r1.json`, `env_go2_throughput_numpy_cpu_pop32.json`, `env_go2_throughput_numpy_cpu_pop32_r1.json`, `env_go2_throughput_numpy_cpu_pop8.json`, `env_go2_throughput_numpy_cpu_pop8_r1.json`, `env_hover_replay_seed0.json`, `env_hover_replay_seed0_r1.json`, `env_hover_throughput_numpy_cpu_pop32.json`, `env_hover_throughput_numpy_cpu_pop32_r1.json`, `env_hover_throughput_numpy_cpu_pop8.json`, `env_hover_throughput_numpy_cpu_pop8_r1.json`, `neat_determinism_go2.json`, `neat_go2_gpu_device_numpy_tell.json`, `neat_go2_gpu_device_numpy_tell_r1.json`, `neat_go2_gpu_device_xla_tell.json`, `neat_go2_gpu_device_xla_tell_r1.json`, `neat_go2_gpu_numpy_residency.json`, `neat_go2_gpu_numpy_residency_r1.json`, `neat_go2_seed0.json`, `neat_go2_seed0_r1.json`, `neat_go2_seed1.json`, `neat_go2_seed2.json`, `neat_hover_gpu_device.json`, `neat_hover_gpu_device_r1.json`, `neat_hover_seed0.json`, `neat_hover_seed1.json`, `neat_hover_seed2.json`, `residency_go2_gpu.json`, `residency_go2_gpu_r1.json`, `residency_hover_device_cpu.json`, `residency_hover_device_cpu_r1.json`, `residency_hover_gpu.json`, `residency_hover_gpu_r1.json`, `startup_hsa.json`, `tell_backend_rocm.json`, `torch_cpu_boundary.json`, `unmatched_baselines.json`
 
 ### T2 Environment replay parity against the pre-migration oracle
 
@@ -434,3 +435,21 @@ The probe cites these values from the records named in the `source record` colum
 | hover | throughput_numpy_cpu_pop8 | results/env_hover_throughput_numpy_cpu_pop8.json | cdda51ac | ok | n/a | n/a | n/a | n/a | n/a |
 
 Sources: `torch_cpu_boundary.json`
+
+### T21 GPU process start: with and without the HSA re-exec repair
+
+`wall` is spawn→exit of the whole `python` process (so it includes the re-exec when one happens); `module→init` is `import genesis` + `gs.init` in the process that printed the payload (the re-executed child when the repair applies). Both are process start only: they end before `phases.build_s` begins, so no build, compile or first-generation number in this report is inflated by them. Median ± spread over the repeats: `repair` 20.562 ± 0.551 s wall / 7.495 ± 0.376 s module→init; `no_repair` 13.892 ± 0.099 s wall / 13.166 ± 0.139 s module→init; `cpu` 14.146 ± 0.503 s wall / 13.444 ± 0.478 s module→init. Derived re-exec cost: 6.670 s of wall (`repair` − `no_repair`), which is the import and partial init the repair performs twice, against -5.671 s on module→init, i.e. the repaired child is not slower to import — the whole cost is the second process start.
+
+| case | repeat | wall s | import s | init s | module→init s | re-exec sentinel | record |
+|---|---|---|---|---|---|---|---|
+| repair | 0 | 20.159 | 6.339 | 0.790 | 7.129 | `GS_HSA_REEXEC_DONE=1` (re-executed) | startup_hsa |
+| no_repair | 0 | 13.794 | 12.334 | 0.771 | 13.105 | none (`GS_HSA_REEXEC=0`) | startup_hsa |
+| cpu | 0 | 14.146 | 12.235 | 1.209 | 13.444 | none (no HSA check) | startup_hsa |
+| repair | 1 | 20.709 | 6.699 | 0.796 | 7.495 | `GS_HSA_REEXEC_DONE=1` (re-executed) | startup_hsa |
+| no_repair | 1 | 13.892 | 12.370 | 0.796 | 13.166 | none (`GS_HSA_REEXEC=0`) | startup_hsa |
+| cpu | 1 | 14.543 | 12.674 | 1.213 | 13.887 | none (no HSA check) | startup_hsa |
+| repair | 2 | 20.562 | 6.705 | 0.800 | 7.505 | `GS_HSA_REEXEC_DONE=1` (re-executed) | startup_hsa |
+| no_repair | 2 | 13.893 | 12.486 | 0.758 | 13.244 | none (`GS_HSA_REEXEC=0`) | startup_hsa |
+| cpu | 2 | 14.040 | 12.195 | 1.215 | 13.409 | none (no HSA check) | startup_hsa |
+
+Sources: `startup_hsa.json`
