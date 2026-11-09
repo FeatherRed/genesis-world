@@ -1,0 +1,747 @@
+{
+  "command": [
+    "examples/neuroevolution/benchmarks/bench_probe.py",
+    "unmatched",
+    "--out",
+    "examples/neuroevolution/benchmarks/results/unmatched_baselines.json"
+  ],
+  "contended": false,
+  "contention_reasons": [],
+  "created_utc": "2026-11-09T22:12:33Z",
+  "error": null,
+  "git": {
+    "baseline": "ad2f07e5",
+    "baseline_env_diff": "",
+    "baseline_env_diff_empty": true,
+    "baseline_sha": "ad2f07e5aec1ba931f5a6704253f70e6fa6370b2",
+    "branch": "evogit-agent-T1-A56",
+    "dirty": false,
+    "dirty_files": [],
+    "head": "1f2994a248a16ba30f163603b73e5d4c60d56f76"
+  },
+  "gpu": {
+    "available": true,
+    "device_count": 1,
+    "hip": "7.1.52802",
+    "name": "AMD Instinct MI300X VF",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "host": {
+    "cpu_count": 20,
+    "gpu_busy": false,
+    "loadavg_1m": 1.14,
+    "loadavg_text": "1.14 1.07 0.92 20/649 3277760",
+    "platform": "linux",
+    "python": "3.12.3",
+    "rocm_driver": [
+      "============================ ROCm System Management Interface ============================",
+      "============================== Version of System Component ===============================",
+      "Driver version: 6.16.6",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ],
+    "rocm_pids": [],
+    "rocm_product": [
+      "============================ ROCm System Management Interface ============================",
+      "====================================== Product Info ======================================",
+      "GPU[0]\t\t: Card Series: \t\tAMD Instinct MI300X VF",
+      "GPU[0]\t\t: Card Model: \t\t0x74b5",
+      "GPU[0]\t\t: Card Vendor: \t\tAdvanced Micro Devices, Inc. [AMD/ATI]",
+      "GPU[0]\t\t: Card SKU: \t\tM3000100",
+      "GPU[0]\t\t: Subsystem ID: \t0x74a1",
+      "GPU[0]\t\t: Device Rev: \t\t0x00",
+      "GPU[0]\t\t: Node ID: \t\t1",
+      "GPU[0]\t\t: GUID: \t\t21947",
+      "GPU[0]\t\t: GFX Version: \t\tgfx942",
+      "==========================================================================================",
+      "================================== End of ROCm SMI Log ===================================",
+      "WARNING: AMD GPU device(s) is/are in a low-power state. Check power control/runtime_status"
+    ]
+  },
+  "kind": "probe_unmatched_baselines",
+  "measurements": {
+    "adapter_attempts": {
+      "go2": {
+        "code": "from go2_env import Go2Env; Go2Env(1, {}, {}, {}, {})",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "from go2_env import Go2Env; Go2Env(1, {}, {}, {}, {})"
+        ],
+        "elapsed_s": 7.330036,
+        "exception": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "extra_pythonpath": "examples/locomotion",
+        "name": "go2_env_adapter",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 288,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/locomotion/go2_env.py\", line 4, in <module>",
+          "    from tensordict import TensorDict",
+          "ModuleNotFoundError: No module named 'tensordict'"
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      },
+      "hover": {
+        "code": "from hover_env import HoverEnv; HoverEnv(1, {}, {}, {}, {})",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "from hover_env import HoverEnv; HoverEnv(1, {}, {}, {}, {})"
+        ],
+        "elapsed_s": 7.331436,
+        "exception": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "extra_pythonpath": "examples/drone",
+        "name": "hover_env_adapter",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 285,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/drone/hover_env.py\", line 4, in <module>",
+          "    from tensordict import TensorDict",
+          "ModuleNotFoundError: No module named 'tensordict'"
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      }
+    },
+    "adapter_verdict": {
+      "go2": {
+        "attempted": true,
+        "blocked_at": "import",
+        "observed_exception": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "verdict": "unmatched baseline, not a measured one: the import fails, and even with the dependencies installed the env lacks the row/seed/episode-return/evaluate contract the trainer needs"
+      },
+      "hover": {
+        "attempted": true,
+        "blocked_at": "import",
+        "observed_exception": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "verdict": "unmatched baseline, not a measured one: the import fails, and even with the dependencies installed the env lacks the row/seed/episode-return/evaluate contract the trainer needs"
+      }
+    },
+    "imports": {
+      "go2_env": {
+        "code": "import go2_env",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "import go2_env"
+        ],
+        "elapsed_s": 7.326477,
+        "exception": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "extra_pythonpath": "examples/locomotion",
+        "name": "go2_env",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 288,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/locomotion/go2_env.py\", line 4, in <module>",
+          "    from tensordict import TensorDict",
+          "ModuleNotFoundError: No module named 'tensordict'"
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      },
+      "go2_train": {
+        "code": "import go2_train",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "import go2_train"
+        ],
+        "elapsed_s": 0.064028,
+        "exception": {
+          "message": "Please install 'rsl-rl-lib>=5.0.0'.",
+          "type": "ImportError"
+        },
+        "extra_pythonpath": "examples/locomotion",
+        "name": "go2_train",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 1519,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 397, in from_name",
+          "    return next(cls.discover(name=name))",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "StopIteration",
+          "During handling of the above exception, another exception occurred:",
+          "Traceback (most recent call last):",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/locomotion/go2_train.py\", line 8, in <module>",
+          "    if int(metadata.version(\"rsl-rl-lib\").split(\".\")[0]) < 5:",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 889, in version",
+          "    return distribution(distribution_name).version",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 862, in distribution",
+          "    return Distribution.from_name(distribution_name)",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 399, in from_name",
+          "    raise PackageNotFoundError(name)",
+          "importlib.metadata.PackageNotFoundError: No package metadata was found for rsl-rl-lib",
+          "The above exception was the direct cause of the following exception:",
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/locomotion/go2_train.py\", line 11, in <module>",
+          "    raise ImportError(\"Please install 'rsl-rl-lib>=5.0.0'.\") from e",
+          "ImportError: Please install 'rsl-rl-lib>=5.0.0'."
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      },
+      "hover_env": {
+        "code": "import hover_env",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "import hover_env"
+        ],
+        "elapsed_s": 7.5803,
+        "exception": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "extra_pythonpath": "examples/drone",
+        "name": "hover_env",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 285,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/drone/hover_env.py\", line 4, in <module>",
+          "    from tensordict import TensorDict",
+          "ModuleNotFoundError: No module named 'tensordict'"
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      },
+      "hover_train": {
+        "code": "import hover_train",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "import hover_train"
+        ],
+        "elapsed_s": 0.064048,
+        "exception": {
+          "message": "Please install 'rsl-rl-lib>=5.0.0'.",
+          "type": "ImportError"
+        },
+        "extra_pythonpath": "examples/drone",
+        "name": "hover_train",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 1513,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 397, in from_name",
+          "    return next(cls.discover(name=name))",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "StopIteration",
+          "During handling of the above exception, another exception occurred:",
+          "Traceback (most recent call last):",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/drone/hover_train.py\", line 8, in <module>",
+          "    if int(metadata.version(\"rsl-rl-lib\").split(\".\")[0]) < 5:",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 889, in version",
+          "    return distribution(distribution_name).version",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 862, in distribution",
+          "    return Distribution.from_name(distribution_name)",
+          "           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^",
+          "  File \"/usr/lib/python3.12/importlib/metadata/__init__.py\", line 399, in from_name",
+          "    raise PackageNotFoundError(name)",
+          "importlib.metadata.PackageNotFoundError: No package metadata was found for rsl-rl-lib",
+          "The above exception was the direct cause of the following exception:",
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "  File \"/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/drone/hover_train.py\", line 11, in <module>",
+          "    raise ImportError(\"Please install 'rsl-rl-lib>=5.0.0'.\") from e",
+          "ImportError: Please install 'rsl-rl-lib>=5.0.0'."
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      },
+      "rsl_rl": {
+        "code": "import rsl_rl",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "import rsl_rl"
+        ],
+        "elapsed_s": 0.031869,
+        "exception": {
+          "message": "No module named 'rsl_rl'",
+          "type": "ModuleNotFoundError"
+        },
+        "extra_pythonpath": null,
+        "name": "rsl_rl",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 120,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "ModuleNotFoundError: No module named 'rsl_rl'"
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      },
+      "tensordict": {
+        "code": "import tensordict",
+        "command": [
+          "/root/evox-robotics/.venv/bin/python",
+          "-c",
+          "import tensordict"
+        ],
+        "elapsed_s": 0.032061,
+        "exception": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "extra_pythonpath": null,
+        "name": "tensordict",
+        "python": "/root/evox-robotics/.venv/bin/python",
+        "returncode": 1,
+        "stderr_bytes": 124,
+        "stderr_tail": [
+          "Traceback (most recent call last):",
+          "  File \"<string>\", line 1, in <module>",
+          "ModuleNotFoundError: No module named 'tensordict'"
+        ],
+        "stdout_bytes": 0,
+        "stdout_tail": [],
+        "timed_out": false,
+        "verdict": "failed"
+      }
+    },
+    "install_attempt": {
+      "method_used": null,
+      "note": "this venv is uv-managed and has no pip module; uv is not on PATH, so the offline install could not start. Nothing was installed and nothing outside $TMPDIR was written.",
+      "pip": {
+        "command": [
+          "timeout",
+          "90",
+          "/root/evox-robotics/.venv/bin/python",
+          "-m",
+          "pip",
+          "install",
+          "--no-deps",
+          "--target",
+          "/tmp/genesis/task_eae607d79afdeb2c/bench_deps",
+          "tensordict",
+          "rsl-rl-lib"
+        ],
+        "elapsed_s": 0.031986,
+        "pip_module_available": false,
+        "returncode": 1,
+        "stderr_tail": [
+          "/root/evox-robotics/.venv/bin/python: No module named pip"
+        ],
+        "timed_out": false
+      },
+      "ppo_training_run": false,
+      "status": "unavailable",
+      "target": "/tmp/genesis/task_eae607d79afdeb2c/bench_deps",
+      "target_imports": null,
+      "target_is_outside_venv": true,
+      "timeout_s": 90.0,
+      "uv": {
+        "available": false,
+        "which": null
+      }
+    },
+    "interface_mismatch": {
+      "go2": {
+        "attempted": true,
+        "auto_reset": {
+          "args": [
+            "envs_idx"
+          ],
+          "defaults": [
+            "None"
+          ],
+          "kind": "method",
+          "line": 208,
+          "present": true,
+          "qualified": "Go2Env._reset_idx",
+          "returns": []
+        },
+        "blocked_at": "import",
+        "config_source": {
+          "args": [],
+          "defaults": [],
+          "kind": "function",
+          "line": 64,
+          "present": true,
+          "qualified": "get_cfgs",
+          "returns": [
+            "(env_cfg, obs_cfg, reward_cfg, command_cfg)"
+          ]
+        },
+        "constructor": {
+          "args": [
+            "num_envs",
+            "env_cfg",
+            "obs_cfg",
+            "reward_cfg",
+            "command_cfg",
+            "show_viewer"
+          ],
+          "defaults": [
+            "False"
+          ],
+          "kind": "method",
+          "line": 16,
+          "present": true,
+          "qualified": "Go2Env.__init__",
+          "returns": []
+        },
+        "contract": {
+          "episode_return_boundary": "absent: returns live in the env's episode_sums/extras, never as a per-row episode return",
+          "evaluate": "absent",
+          "per_episode_seed": "absent: the internal reset takes only envs_idx, with no seed",
+          "rows": "none: the env steps one homogeneous batch of num_envs rows",
+          "step_return_value": "step(actions) -> (TensorDict observation, rew_buf, reset_buf, extras)"
+        },
+        "env_module_level_imports": [
+          {
+            "line": 3,
+            "module": "torch",
+            "root": "torch",
+            "statement": "import torch"
+          },
+          {
+            "line": 4,
+            "module": "tensordict",
+            "root": "tensordict",
+            "statement": "from tensordict import TensorDict"
+          },
+          {
+            "line": 6,
+            "module": "genesis",
+            "root": "genesis",
+            "statement": "import genesis as gs"
+          },
+          {
+            "line": 7,
+            "module": "genesis.utils.geom",
+            "root": "genesis",
+            "statement": "from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat"
+          }
+        ],
+        "has_evaluate": false,
+        "observed_adapter_error": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "observed_import_error": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "reasons": [
+          "import fails before construction: ModuleNotFoundError: No module named 'tensordict'",
+          "the constructor needs env_cfg/obs_cfg/reward_cfg/command_cfg, produced by go2_train.get_cfgs() which is itself unimportable (it enforces rsl-rl-lib>=5.0.0)",
+          "step() returns (TensorDict observation, rew_buf, reset_buf, extras); there is no episode-return array and returns only accumulate in the env's own episode_sums/extras",
+          "auto-reset is internal (no per-episode seed argument), so policies cannot be scored on the same ordered episode seeds, and there is no episodes_per_policy row contract",
+          "there is no evaluate(pop_arrays, generation) entry point, so the trainer cannot drive it"
+        ],
+        "required_for_adapter": [
+          "tensordict (module-level TensorDict observation)",
+          "rsl-rl-lib>=5.0.0 (the config source go2_train/hover_train enforces the version and imports rsl_rl)",
+          "a per-environment seedable reset wrapper (the internal reset takes no seed)",
+          "an episode-return boundary and an evaluate(pop_arrays, generation) implementation"
+        ],
+        "sources": {
+          "env": "examples/locomotion/go2_env.py",
+          "train": "examples/locomotion/go2_train.py"
+        },
+        "step": {
+          "args": [
+            "actions"
+          ],
+          "defaults": [],
+          "kind": "method",
+          "line": 155,
+          "present": true,
+          "qualified": "Go2Env.step",
+          "returns": [
+            "(self.get_observations(), self.rew_buf, self.reset_buf, self.extras)"
+          ]
+        },
+        "task": "go2",
+        "train_module_level_imports": [
+          {
+            "line": 12,
+            "module": "rsl_rl.runners",
+            "root": "rsl_rl",
+            "statement": "from rsl_rl.runners import OnPolicyRunner"
+          },
+          {
+            "line": 14,
+            "module": "genesis",
+            "root": "genesis",
+            "statement": "import genesis as gs"
+          }
+        ],
+        "verdict": "unmatched baseline, not a measured one: the import fails, and even with the dependencies installed the env lacks the row/seed/episode-return/evaluate contract the trainer needs"
+      },
+      "hover": {
+        "attempted": true,
+        "auto_reset": {
+          "args": [
+            "envs_idx"
+          ],
+          "defaults": [],
+          "kind": "method",
+          "line": 214,
+          "present": true,
+          "qualified": "HoverEnv.reset_idx",
+          "returns": []
+        },
+        "blocked_at": "import",
+        "config_source": {
+          "args": [],
+          "defaults": [],
+          "kind": "function",
+          "line": 64,
+          "present": true,
+          "qualified": "get_cfgs",
+          "returns": [
+            "(env_cfg, obs_cfg, reward_cfg, command_cfg)"
+          ]
+        },
+        "constructor": {
+          "args": [
+            "num_envs",
+            "env_cfg",
+            "obs_cfg",
+            "reward_cfg",
+            "command_cfg",
+            "show_viewer"
+          ],
+          "defaults": [
+            "False"
+          ],
+          "kind": "method",
+          "line": 20,
+          "present": true,
+          "qualified": "HoverEnv.__init__",
+          "returns": []
+        },
+        "contract": {
+          "episode_return_boundary": "absent: returns live in the env's episode_sums/extras, never as a per-row episode return",
+          "evaluate": "absent",
+          "per_episode_seed": "absent: the internal reset takes only envs_idx, with no seed",
+          "rows": "none: the env steps one homogeneous batch of num_envs rows",
+          "step_return_value": "step(actions) -> (TensorDict observation, rew_buf, reset_buf, extras)"
+        },
+        "env_module_level_imports": [
+          {
+            "line": 1,
+            "module": "torch",
+            "root": "torch",
+            "statement": "import torch"
+          },
+          {
+            "line": 4,
+            "module": "tensordict",
+            "root": "tensordict",
+            "statement": "from tensordict import TensorDict"
+          },
+          {
+            "line": 6,
+            "module": "genesis",
+            "root": "genesis",
+            "statement": "import genesis as gs"
+          },
+          {
+            "line": 7,
+            "module": "genesis.utils.geom",
+            "root": "genesis",
+            "statement": "from genesis.utils.geom import quat_to_xyz, transform_by_quat, inv_quat, transform_quat_by_quat"
+          }
+        ],
+        "has_evaluate": false,
+        "observed_adapter_error": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "observed_import_error": {
+          "message": "No module named 'tensordict'",
+          "type": "ModuleNotFoundError"
+        },
+        "reasons": [
+          "import fails before construction: ModuleNotFoundError: No module named 'tensordict'",
+          "the constructor needs env_cfg/obs_cfg/reward_cfg/command_cfg, produced by hover_train.get_cfgs() which is itself unimportable (it enforces rsl-rl-lib>=5.0.0)",
+          "step() returns (TensorDict observation, rew_buf, reset_buf, extras); there is no episode-return array and returns only accumulate in the env's own episode_sums/extras",
+          "auto-reset is internal (no per-episode seed argument), so policies cannot be scored on the same ordered episode seeds, and there is no episodes_per_policy row contract",
+          "there is no evaluate(pop_arrays, generation) entry point, so the trainer cannot drive it"
+        ],
+        "required_for_adapter": [
+          "tensordict (module-level TensorDict observation)",
+          "rsl-rl-lib>=5.0.0 (the config source go2_train/hover_train enforces the version and imports rsl_rl)",
+          "a per-environment seedable reset wrapper (the internal reset takes no seed)",
+          "an episode-return boundary and an evaluate(pop_arrays, generation) implementation"
+        ],
+        "sources": {
+          "env": "examples/drone/hover_env.py",
+          "train": "examples/drone/hover_train.py"
+        },
+        "step": {
+          "args": [
+            "actions"
+          ],
+          "defaults": [],
+          "kind": "method",
+          "line": 139,
+          "present": true,
+          "qualified": "HoverEnv.step",
+          "returns": [
+            "(self.get_observations(), self.rew_buf, self.reset_buf, self.extras)"
+          ]
+        },
+        "task": "hover",
+        "train_module_level_imports": [
+          {
+            "line": 12,
+            "module": "rsl_rl.runners",
+            "root": "rsl_rl",
+            "statement": "from rsl_rl.runners import OnPolicyRunner"
+          },
+          {
+            "line": 14,
+            "module": "genesis",
+            "root": "genesis",
+            "statement": "import genesis as gs"
+          }
+        ],
+        "verdict": "unmatched baseline, not a measured one: the import fails, and even with the dependencies installed the env lacks the row/seed/episode-return/evaluate contract the trainer needs"
+      }
+    },
+    "ppo": {
+      "error": {
+        "message": "Please install 'rsl-rl-lib>=5.0.0'.",
+        "source": "import go2_train",
+        "type": "ImportError"
+      },
+      "evaluation_run": false,
+      "module_error": {
+        "message": "No module named 'rsl_rl'",
+        "source": "import rsl_rl",
+        "type": "ModuleNotFoundError"
+      },
+      "note": "algorithm comparison only; not substituted for the environment comparison",
+      "reason": "PPO is trained by rsl-rl against the torch env; rsl_rl is not installed and go2_train/hover_train refuse to import without rsl-rl-lib>=5.0.0, so no PPO rollout was run",
+      "required": [
+        "rsl-rl-lib>=5.0.0",
+        "tensordict",
+        "tensorboard"
+      ],
+      "status": "unmatched",
+      "training_run": false
+    },
+    "verdict": {
+      "measured_environments": [],
+      "rule": "an environment is 'measured' only when the trainer drove it through env.evaluate(pop_arrays, generation); neither baseline could be imported, so both are unmatched",
+      "unmatched_algorithms": [
+        "ppo"
+      ],
+      "unmatched_environments": [
+        "go2",
+        "hover"
+      ]
+    }
+  },
+  "packages": {
+    "evoxc": "0.1.0",
+    "genesis-world": "1.4.6",
+    "iree-base-compiler": "3.13.0",
+    "iree-base-runtime": "3.13.0",
+    "numpy": "2.5.4",
+    "quadrants": "1.4.0",
+    "tensorneat": "0.2.0",
+    "torch": "2.13.0+rocm7.1"
+  },
+  "phases": {
+    "adapters_s": 14.66199818,
+    "imports_s": 15.1000749269,
+    "install_s": 0.0321828199085,
+    "scan_s": 0.0131362029351
+  },
+  "process_role": "only",
+  "repeat": 0,
+  "schema": "neuroevolution-benchmark/1",
+  "seed": 0,
+  "status": "ok",
+  "task": "go2+hover",
+  "timings": {
+    "note": "phase seconds are in phases; per-case elapsed_s is in measurements.imports/adapter_attempts"
+  },
+  "workload": {
+    "adapter_attempts": {
+      "go2": "from go2_env import Go2Env; Go2Env(1, {}, {}, {}, {})",
+      "hover": "from hover_env import HoverEnv; HoverEnv(1, {}, {}, {}, {})"
+    },
+    "baselines": {
+      "go2": "examples/locomotion/go2_env.py",
+      "hover": "examples/drone/hover_env.py"
+    },
+    "case_timeout_s": 60.0,
+    "cases": [
+      "tensordict",
+      "rsl_rl",
+      "go2_env",
+      "hover_env",
+      "go2_train",
+      "hover_train"
+    ],
+    "install_timeout_s": 90.0,
+    "note": "every case runs in its own session with a hard timeout and a process-group kill; the import failure is the measurement",
+    "probe": "unmatched",
+    "python": "/root/evox-robotics/.venv/bin/python",
+    "pythonpath_roots": {
+      "go2": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/locomotion",
+      "hover": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56/examples/drone",
+      "repo": "/root/evox-robotics/genesis-world/.genesis/workers/worker_T1_A56"
+    }
+  }
+}
