@@ -12,7 +12,7 @@ Demonstrates the photorealistic LuisaRender-based `RayTracer`, camera control (f
 ## Constraints
 - Standard genesis example pattern: `import genesis as gs` -> `gs.init(backend=gs.cpu)` -> `gs.Scene(...)` -> `add_entity`/`add_camera` -> `build` -> `step` + `render`.
 - Every script defines `main()` and is guarded by `if __name__ == "__main__": main()`, so each is directly runnable and importable.
-- Scripts are executed as pytest examples by `tests/test_examples.py` (`pytest.mark.examples`), which sets the `PYTEST_VERSION` environment variable so each script shortens its horizon for the test run.
+- Scripts are executed as pytest examples by `tests/test_examples.py` (`pytest.mark.examples`); each script shortens its horizon when `PYTEST_VERSION` is present in `os.environ` (a convention from `.github/contributing/EXAMPLES.md`; the in-repo harness does not set it at HEAD).
 - No subdirectories; all five scripts are flat files.
 
 ## Dependencies
