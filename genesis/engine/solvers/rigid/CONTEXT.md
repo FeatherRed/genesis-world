@@ -40,6 +40,16 @@ qd fields are field-major with the batch (env) dim LAST: e.g. `dyn_state.dofs.ve
 Conversion happens only at the boundary via `qd_to_torch(..., transpose=True)`, `qd_from_torch`, `qd_to_numpy(..., transpose=...)` in `genesis/utils/misc.py`; zero-copy is used when `gs.use_zerocopy` (set_state/get_state fast path).
 `func_*` are `@qd.func` device subroutines inlined into kernels; `kernel_*` are `@qd.kernel(fastcache=True)` launched entrypoints (some `graph=True`); there are no `@gs.jit` pipelines inside `rigid/` — the composition lives in `RigidSolver.substep`.
 
+## GPU Hot Path (per-substep device residency)
+The default non-differentiable, non-SAP substep (`RigidSolver.substep` else-branch, line 1352) launches device kernels only: `kernel_substep_dynamics` (graph) -> `collider.detection` (`kernel_detection`, graph) -> `kernel_substep_inequality` (graph) -> `func_solve_body` -> `kernel_substep_post` (graph); none reads a device value back to the host.
+No per-substep Python decision reads device values: hibernation (`_use_hibernation`), `len(sim.active_solvers)`, `_is_forward_pos_updated`/`_is_forward_vel_updated`, `_enable_collision`, `_disable_constraint`, `noslip_iterations`, and collider `_n_possible_pairs`/`_use_split_narrowphase`/`_use_coop_dedup` are Python-side build-time booleans/ints.
+Hibernation and island gating is device-side inside `_kernel_solve_monolith` (`n_constraints[i_b] > 0`, `n_awake_dofs[i_b] > 0`, constraint/solver.py:5898).
+`func_solve_body` is a `@qd.perf_dispatch` keyed on `hash((jac.shape, rigid_config, _n_iterations))` (host metadata only); its timing/autotune warmup is the sole framework-level sync caveat.
+The only CUDA host synchronization in a step is the non-blocking `check_errno` at `Simulator.step` start: `_errno_event.synchronize()` plus a pinned `_errno_host` read of the copy enqueued one step earlier (base_solver.py:363-373); the per-step merge `Solver.update_errno` is a device in-place `|=` (base_solver.py:321).
+Control writes (`control_dofs_position/_velocity/_force`) are pure torch in-place writes to zero-copy views when `gs.use_zerocopy` (CUDA default), else a device-only fallback kernel; a CUDA input tensor never round-trips the host.
+`detect_collision` (rigid_solver.py:1416) and `Collider.get_contacts` (collider.py:969,1024,1036) are the host readback paths, but neither runs during a substep.
+Metal-only `torch.mps.synchronize()` flushes in the write/read helpers have no CUDA equivalent (CUDA shares the default stream).
+
 ## Known Issues / Gotchas
 `_sanitize_sol_params` (line 166) treats solver params as a 7-tuple (`timeconst, dampratio, dmin, dmax, width, mid, power`); negative `timeconst` (direct stiffness/damping parameterization) is unsupported and falls back to defaults.
 `dampratio` must be strictly positive — despite its name it is the spring stiffness; `dmin/dmax/mid` clamp to `[1e-4, 0.9999]`, `width >= 0`, `power >= 1`.
