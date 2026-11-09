@@ -23,6 +23,11 @@ IGNORE_SCRIPT_PATTERNS = {
     "go2_evox_kernels.py",
     "go2_legacy_reference.py",
     "go2_neat_kernels.py",
+    "go2_device_rollout.py",
+    "hover_kernels.py",
+    "hover_legacy_reference.py",
+    "hover_device_rollout.py",
+    "neuroevolution/*.py",  # shared neuroevolution layer, including its 'selfcheck.py'
 }
 
 # Map example scripts or directories to their required optional dependencies.
@@ -33,6 +38,9 @@ EXAMPLE_DEPENDENCIES = {
     "single_franka_batch_render.py": ["gs_madrona"],
     "demo.py": ["LuisaRenderPy"],
     "try1.py": ["evoxc"],  # Go2 scripted-trot demo drives compiled EvoX Compiler graphs
+    # Whole neuroevolution tree, plus the drone smoke that imports its executable stack
+    "neuroevolution": ["evoxc", "tensorneat"],
+    "hover_neat_check.py": ["evoxc", "tensorneat"],
 }
 # Examples running on a CUDA GPU alone, which the CPU fallback of 'gs.gpu' cannot stand in for
 CUDA_SCRIPT_NAMES = {"single_franka_batch_render.py"}
