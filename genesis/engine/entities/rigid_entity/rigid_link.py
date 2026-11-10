@@ -1,14 +1,15 @@
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import genesis as gs
 from genesis.constants import link_ref_frame
 from genesis.repr_base import RBC
 from genesis.typing import LaxPositiveFArrayType
 from genesis.utils.misc import DeprecationError, qd_to_torch
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
+from ..torch_free import first_row
 from .description import KinematicLinkDescription, RigidGeomDescription, RigidLinkDescription, RigidVisGeomDescription
 from .inertial import LinkInertial
 from .rigid_geom import RigidGeom, RigidVisGeom
@@ -116,7 +117,7 @@ class KinematicLink(RBC):
             the solver. The internal link origin is the authored one moved by the entity's morph 'offset_pos' /
             'offset_quat' and, on a free root link with 'align=True', by the inertial alignment. Defaults to True.
         """
-        return self._solver.get_links_pos(self._idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_links_pos(self._idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_quat(self, envs_idx=None, *, relative=True):
@@ -133,7 +134,7 @@ class KinematicLink(RBC):
             by the solver. The internal link origin is the authored one moved by the entity's morph 'offset_pos' /
             'offset_quat' and, on a free root link with 'align=True', by the inertial alignment. Defaults to True.
         """
-        return self._solver.get_links_quat(self._idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_links_quat(self._idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_vel(self, envs_idx=None, *, relative=True) -> torch.Tensor:
@@ -152,7 +153,7 @@ class KinematicLink(RBC):
             'align=True', the inertial alignment. Both readings are expressed in world coordinates and differ by the
             transport 'omega x d'. Defaults to True.
         """
-        return self._solver.get_links_vel(self._idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_links_vel(self._idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_ang(self, envs_idx=None) -> torch.Tensor:
@@ -164,7 +165,7 @@ class KinematicLink(RBC):
         envs_idx : int or array of int, optional
             The indices of the environments to get the angular velocity. If None, get the angular velocity of all environments. Default is None.
         """
-        return self._solver.get_links_ang(self._idx, envs_idx)[..., 0, :]
+        return first_row(self._solver.get_links_ang(self._idx, envs_idx))
 
     @gs.assert_built
     def get_vAABB(self, envs_idx=None):
@@ -172,6 +173,7 @@ class KinematicLink(RBC):
         Get the axis-aligned bounding box (AABB) of the link's visual body in the world frame by aggregating all
         the visual geometries associated with this link (`link.vgeoms`).
         """
+        require_torch("KinematicLink.get_vAABB")
         if self.n_vgeoms == 0:
             gs.raise_exception("Link has no visual geometries.")
 
@@ -502,6 +504,7 @@ class RigidLink(KinematicLink):
         """
         Get the vertices of the link's collision body (concatenation of all `link.geoms`) in the world frame.
         """
+        require_torch("RigidLink.get_verts")
         if self.entity._enable_heterogeneous:
             gs.raise_exception("This method is not supported for heterogeneous entity.")
 
@@ -523,6 +526,7 @@ class RigidLink(KinematicLink):
         Get the vertex-based axis-aligned bounding box (AABB) of the link's collision body in the world frame by
         aggregating all the collision geometries associated with this link (`link.geoms`).
         """
+        require_torch("RigidLink.get_AABB")
         if self.n_geoms == 0:
             gs.raise_exception("Link has no collision geometries.")
 
@@ -667,7 +671,7 @@ class RigidLink(KinematicLink):
             The translational and rotational inverse weight of the link, per environment for a batched scene whose link
             info is batched.
         """
-        return self._solver.get_links_invweight(self._idx, envs_idx)[..., 0, :]
+        return first_row(self._solver.get_links_invweight(self._idx, envs_idx))
 
     @gs.assert_built
     def get_mass(self, envs_idx=None):
@@ -684,7 +688,10 @@ class RigidLink(KinematicLink):
         mass : torch.Tensor, shape (n_envs,) or scalar
             The mass of the link, per environment for a batched scene whose link info is batched.
         """
-        return self._solver.get_links_mass(self._idx, envs_idx)[..., 0]
+        mass = self._solver.get_links_mass(self._idx, envs_idx)
+        if HAS_TORCH and isinstance(mass, torch.Tensor):
+            return mass[..., 0]
+        return mass[(slice(None),) * (len(mass.shape) - 1) + (0,)]
 
     def set_friction(self, friction):
         """

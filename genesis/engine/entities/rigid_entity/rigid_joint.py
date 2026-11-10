@@ -6,6 +6,7 @@ from genesis.engine.entities.rigid_entity.rigid_link import RigidLink
 from genesis.repr_base import RBC
 from genesis.utils.misc import DeprecationError, tensor_to_array
 
+from ..torch_free import first_row
 from .description import RigidJointDescription
 
 
@@ -73,7 +74,7 @@ class RigidJoint(RBC):
         generalized coordinates corresponding to this joint (and all its ancestors in the kinematic tree). Physically,
         the anchor point is the "output" of the joint transmission, on which the child body is welded.
         """
-        return self._solver.get_joints_anchor_pos(self._idx)[..., 0, :]
+        return first_row(self._solver.get_joints_anchor_pos(self._idx))
 
     @gs.assert_built
     def get_anchor_axis(self):
@@ -82,7 +83,7 @@ class RigidJoint(RBC):
 
         See `RigidJoint.get_anchor_pos` documentation for details about the notion on anchor point.
         """
-        return self._solver.get_joints_anchor_axis(self._idx)[..., 0, :]
+        return first_row(self._solver.get_joints_anchor_axis(self._idx))
 
     def set_sol_params(self, sol_params):
         """
@@ -98,7 +99,7 @@ class RigidJoint(RBC):
         """
         Get the solver parameters the simulation is currently using for this joint.
         """
-        return self._solver.get_sol_params(joints_idx=self._idx, envs_idx=None)[..., 0, :]
+        return first_row(self._solver.get_sol_params(joints_idx=self._idx, envs_idx=None))
 
     # ------------------------------------------------------------------------------------
     # ----------------------------------- properties -------------------------------------

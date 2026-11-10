@@ -2,7 +2,6 @@ from itertools import chain
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import genesis as gs
 from genesis.constants import link_ref_frame
@@ -10,8 +9,10 @@ from genesis.engine.states.entities import RigidEntityState
 from genesis.typing import UnitVec4FType, Vec3FType
 from genesis.utils import geom as gu
 from genesis.utils.misc import DeprecationError, broadcast_tensor, qd_to_torch
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 from ..base_entity import Entity
+from ..torch_free import first_row
 from .description import (
     KinematicAttachmentDescription,
     KinematicEntityDescription,
@@ -182,6 +183,32 @@ def compute_forward_kinematics(entities, n_envs: int, qpos=None):
     )
     poses = (links_pos, links_quat, geoms_pos, geoms_quat, joints_xanchor, joints_xaxis)
     return tuple([np.broadcast_to(values, (n_envs, *values.shape[1:])) for values in poses])
+
+
+# Entity-local vertex indices are gathered on the device with PyTorch, like every other index collection, and on the
+# host without it. They only ever address the solver's vertex buffers, so a 32-bit host array serves the same purpose.
+_VERT_IDX_DTYPE = np.int32
+
+
+def _empty_verts_idx():
+    """Entity-local vertex indices of an entity no link has contributed a vertex to yet."""
+    if HAS_TORCH:
+        return torch.tensor([], dtype=gs.tc_int, device=gs.device)
+    return np.zeros((0,), dtype=_VERT_IDX_DTYPE)
+
+
+def _verts_idx_range(verts_start: int, verts_end: int):
+    """Entity-local vertex indices of one link, from 'verts_start' (included) to 'verts_end' (excluded)."""
+    if HAS_TORCH:
+        return torch.arange(verts_start, verts_end, dtype=gs.tc_int, device=gs.device)
+    return np.arange(verts_start, verts_end, dtype=_VERT_IDX_DTYPE)
+
+
+def _concat_verts_idx(verts_idx):
+    """Entity-local vertex indices of several links concatenated in order."""
+    if HAS_TORCH:
+        return torch.cat(verts_idx)
+    return np.concatenate(verts_idx)
 
 
 class KinematicEntity(Entity):
@@ -654,7 +681,7 @@ class KinematicEntity(Entity):
         pos : torch.Tensor, shape (3,) or (n_envs, 3)
             The position of the entity's base link.
         """
-        return self._solver.get_links_pos(self.base_link_idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_links_pos(self.base_link_idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_quat(self, envs_idx=None, *, relative=True):
@@ -675,7 +702,7 @@ class KinematicEntity(Entity):
         quat : torch.Tensor, shape (4,) or (n_envs, 4)
             The quaternion of the entity's base link.
         """
-        return self._solver.get_links_quat(self.base_link_idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_links_quat(self.base_link_idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_vel(self, envs_idx=None, *, relative=True):
@@ -698,7 +725,7 @@ class KinematicEntity(Entity):
         vel : torch.Tensor, shape (3,) or (n_envs, 3)
             The linear velocity of the entity's base link.
         """
-        return self._solver.get_links_vel(self.base_link_idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_links_vel(self.base_link_idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_ang(self, envs_idx=None):
@@ -715,7 +742,7 @@ class KinematicEntity(Entity):
         ang : torch.Tensor, shape (3,) or (n_envs, 3)
             The angular velocity of the entity's base link.
         """
-        return self._solver.get_links_ang(self.base_link_idx, envs_idx)[..., 0, :]
+        return first_row(self._solver.get_links_ang(self.base_link_idx, envs_idx))
 
     @gs.assert_built
     def get_links_pos(self, links_idx_local=None, envs_idx=None, *, relative=True):
@@ -786,6 +813,8 @@ class KinematicEntity(Entity):
         """
         if self.n_vgeoms == 0:
             gs.raise_exception("Entity has no visual geometries.")
+
+        require_torch("entity visual AABB aggregation")
 
         # For heterogeneous entities, compute AABB per-environment respecting active_envs_idx
         if self._enable_heterogeneous:
@@ -1270,6 +1299,8 @@ class KinematicEntity(Entity):
         if self._morph.enable_custom_vverts:
             return self._solver.get_vverts(self._custom_vvert_start, self._custom_vvert_start + self.n_vverts, envs_idx)
 
+        require_torch("entity visual vertex computation")
+
         self._solver.update_vgeoms()
         vgeoms_pos = qd_to_torch(self._solver.dyn_state.vgeoms.pos, envs_idx, transpose=True, copy=None)
         vgeoms_quat = qd_to_torch(self._solver.dyn_state.vgeoms.quat, envs_idx, transpose=True, copy=None)
@@ -1333,6 +1364,7 @@ class KinematicEntity(Entity):
             gs.raise_exception("Entity has zero dofs.")
 
         if local_point is not None:
+            require_torch("entity link Jacobian at a local point")
             local_point = torch.as_tensor(local_point, dtype=gs.tc_float, device=gs.device)
             if local_point.shape != (3,):
                 gs.raise_exception("Must be a vector of length 3")
@@ -1450,7 +1482,7 @@ class KinematicEntity(Entity):
 
         if return_error:
             qpos, error_pose = ret
-            return qpos, error_pose[..., 0, :]
+            return qpos, first_row(error_pose)
         return ret
 
     @gs.assert_built
@@ -1534,6 +1566,8 @@ class KinematicEntity(Entity):
             err_rot_z]. Only returned if `return_error` is True.
         """
         envs_idx = self._scene._sanitize_envs_idx(envs_idx)
+
+        require_torch("entity multi-link inverse kinematics")
 
         if self.n_dofs == 0:
             gs.raise_exception("Entity has zero dofs.")
@@ -1661,8 +1695,8 @@ class RigidEntity(KinematicEntity):
         self._free_verts_state_start = solver.n_free_verts
         self._fixed_verts_state_start = solver.n_fixed_verts
         self._equality_start = 0
-        self._free_verts_idx_local = torch.tensor([], dtype=gs.tc_int, device=gs.device)
-        self._fixed_verts_idx_local = torch.tensor([], dtype=gs.tc_int, device=gs.device)
+        self._free_verts_idx_local = _empty_verts_idx()
+        self._fixed_verts_idx_local = _empty_verts_idx()
         self._visualize_contact: bool = desc.visualize_contact
 
         self._batch_fixed_verts: bool = desc.morphs[0].batch_fixed_verts
@@ -1851,16 +1885,16 @@ class RigidEntity(KinematicEntity):
         verts_start = 0
         free_verts_idx_local, fixed_verts_idx_local = [], []
         for link in self.links:
-            verts_idx = torch.arange(verts_start, verts_start + link.n_verts, dtype=gs.tc_int, device=gs.device)
+            verts_idx = _verts_idx_range(verts_start, verts_start + link.n_verts)
             if link.is_fixed and not self._batch_fixed_verts:
                 fixed_verts_idx_local.append(verts_idx)
             else:
                 free_verts_idx_local.append(verts_idx)
             verts_start += link.n_verts
         if free_verts_idx_local:
-            self._free_verts_idx_local = torch.cat(free_verts_idx_local)
+            self._free_verts_idx_local = _concat_verts_idx(free_verts_idx_local)
         if fixed_verts_idx_local:
-            self._fixed_verts_idx_local = torch.cat(fixed_verts_idx_local)
+            self._fixed_verts_idx_local = _concat_verts_idx(fixed_verts_idx_local)
         self._n_free_verts = len(self._free_verts_idx_local)
         self._n_fixed_verts = len(self._fixed_verts_idx_local)
 
@@ -1955,6 +1989,8 @@ class RigidEntity(KinematicEntity):
         is_invalid: torch.Tensor
             A tensor of boolean mask indicating the batch indices with failed plan.
         """
+        require_torch("entity motion planning")
+
         if self._solver.n_envs > 0:
             n_envs = len(self._scene._sanitize_envs_idx(envs_idx))
         else:
@@ -2044,6 +2080,8 @@ class RigidEntity(KinematicEntity):
 
         if self.n_geoms == 0:
             gs.raise_exception("Entity has no collision geometries.")
+
+        require_torch("entity AABB aggregation")
 
         # Already computed internally by the solver. Let's access it directly for efficiency.
         if allow_fast_approx and isinstance(self.sim.coupler, LegacyCoupler):
@@ -2382,6 +2420,8 @@ class RigidEntity(KinematicEntity):
         """
         if self._enable_heterogeneous:
             gs.raise_exception("This method is not supported by heterogeneous entities.")
+
+        require_torch("entity vertex readout")
 
         self._solver.update_verts_for_geoms(slice(self.geom_start, self.geom_end))
 
@@ -2963,6 +3003,8 @@ class RigidEntity(KinematicEntity):
         -------
         total_energy : torch.Tensor, shape () or (n_envs,)
         """
+        require_torch("entity total energy readout")
+
         return self.get_kinetic_energy(envs_idx=envs_idx) + self.get_potential_energy(envs_idx=envs_idx)
 
     @gs.assert_built
@@ -3029,6 +3071,8 @@ class RigidEntity(KinematicEntity):
         contact_info : dict
             The contact information.
         """
+        require_torch("entity contact queries")
+
         contact_data = self._solver.collider.get_contacts(as_tensor=True, to_torch=True, is_padded=is_padded)
         n_contacts = contact_data["n_contacts"] if is_padded else None
         if is_padded:
@@ -3084,6 +3128,8 @@ class RigidEntity(KinematicEntity):
         entity_links_force : torch.Tensor, shape (n_links, 3) or (n_envs, n_links, 3)
             The net force applied on each links due to direct external contacts.
         """
+        require_torch("entity net contact force readout")
+
         links_idx = slice(self.link_start, self.link_end)
         tensor = qd_to_torch(self._solver.dyn_state.links.contact_force, envs_idx, links_idx, transpose=True, copy=True)
         return tensor[0] if self._solver.n_envs == 0 else tensor
@@ -3105,6 +3151,8 @@ class RigidEntity(KinematicEntity):
         envs_idx : None | array_like, optional
             The indices of the environments. If None, all environments will be considered. Defaults to None.
         """
+        require_torch("entity friction ratio assignment")
+
         links_idx_local = self._get_global_idx(links_idx_local, self.n_links, 0, unsafe=True)
 
         links_n_geoms = torch.tensor(
@@ -3271,6 +3319,8 @@ class RigidEntity(KinematicEntity):
         envs_idx : None | array_like, optional
             The indices of the environments. If None, all environments will be considered. Defaults to None.
         """
+        require_torch("entity total mass assignment")
+
         # The mass of an entity is the mass it moves, so a link fixed to the world takes no part in the total nor in
         # the fractions.
         links_idx = [link.idx for link in self.links if not link.is_fixed]
@@ -3299,6 +3349,8 @@ class RigidEntity(KinematicEntity):
         mass : torch.Tensor, shape (n_envs,) or scalar
             The total mass of the entity in kg.
         """
+        require_torch("entity total mass readout")
+
         links_idx = [link.idx for link in self.links if not link.is_fixed]
         return self._solver.get_links_mass(links_idx, envs_idx).sum(dim=-1)
 
