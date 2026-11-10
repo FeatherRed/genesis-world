@@ -29,53 +29,61 @@ What is pinned
 
 Two scenes are never alive at the same time
 -------------------------------------------
-Each ``Go2NeatEnv`` owns its own 24-row Go2 ``gs.Scene``, and two Genesis GPU scenes in one process
-are what a long in-process run is least able to survive here, so every test builds one residency's
-env, records what it needs on the host, closes it, and only then builds the other.  Both residencies
-still share the *same* Genesis GPU backend: the numpy env is built on ``gs.gpu`` as well, because the
-two numbers only compare when the physics runs on the same device.
+Each ``Go2NeatEnv`` owns its own 24-row Go2 ``gs.Scene``, so the module never holds two of them: the
+module-scoped ``default_campaign`` and ``timeout_campaign`` fixtures build one residency's scene, do
+all of that residency's work on it (record one generation, then run the trainer), close it, and only
+then build the other residency's scene.  Both residencies still share the *same* Genesis GPU backend:
+the numpy env is built on ``gs.gpu`` as well, because the two numbers only compare when the physics
+runs on the same device.
 
 Why this module owns ``gs.init``/``gs.destroy``
 ----------------------------------------------
 ``pytestmark`` parametrizes ``backend=None``, which makes the suite's autouse ``initialize_genesis``
-fixture a no-op: that fixture calls ``gs.destroy()`` after every test, while the trainers built here
-must outlive a single test (a module-scoped run keeps its executables and its solver state), and
-``gs.destroy()`` would pull the solver buffers out from under them.  The module-scoped ``gpu_genesis``
-fixture therefore initializes Genesis once, and destroys it once, at module teardown.
+fixture a no-op: that fixture calls ``gs.destroy()`` after every test, while the envs built here must
+outlive a single test (the module-scoped campaigns keep their scenes and executables for every test
+that reads them), and ``gs.destroy()`` would pull the solver buffers out from under them.  The
+module-scoped ``gpu_genesis`` fixture therefore initializes Genesis once, and destroys it once, at
+module teardown.
 
 Tolerances, with the value measured on this host
 ------------------------------------------------
 AMD Instinct MI300X VF (gfx942), ROCm 7.1.0, evoxc 0.1.0, tensorneat 0.2.0, iree 3.13.0, evoxc
 device ``rocm:0``, ``pop_size=8`` (24 rows), ``master_seed=0``, the default reset perturbation
-(0.05 m / 0.05 rad / 0.05 rad), genesis ``precision="32"``:
+(0.05 m / 0.05 rad / 0.05 rad), genesis ``precision="32"``.  Every bound has at least 3x headroom over
+the largest value measured in a whole-module run, except the three marked *deliberately tight*:
 
-* ``OBS_ATOL = 5e-4`` (measured 1.984e-04): the full ``(rows, 45)`` observation of one step.  The
-  observation starts at ``RESET_OBS_ATOL = 1e-6`` (measured 1.513e-09: the reset observation is
-  computed from the same staged values on both paths and only the float32 rounding of the inverse
-  quaternion differs) and the divergence then grows in the trailing 12 columns
-  -- the action slot -- because the two residencies' float32 control-target arithmetic differs in the
-  last bit and an untrained policy at a contact threshold amplifies it (``CONTEXT.md``: 2.4e-07 in,
-  2.2e-03 out over 21 steps).  The action-free block is ``OBS_STATE_ATOL = 1e-5`` (measured 3.7e-06).
-* ``REWARD_ATOL = 5e-5`` (measured 1.144e-05): one step's total reward.  Above the graph-level 1e-6
-  for the same reason -- the reward is a function of the diverging state.
-* ``RETURNS_ATOL = 1e-5`` (measured 7.63e-06): the accumulated episode return of one row.
-* ``TERM_ATOL = 1e-5`` (measured 3.81e-06): one ``walking_reward_terms`` value of the five
+* ``RESET_OBS_ATOL = 1e-6`` (measured 1.513e-09, 660x): the observation of step 0.  It is computed from
+  the same staged values on both paths and only the float32 rounding of the inverse quaternion differs,
+  so it is a reset-equivalence claim and not a rollout bound.
+* ``OBS_ATOL = 1e-3`` (measured 1.984e-04, 5.0x): the full ``(rows, 45)`` observation of one step.  The
+  reset observation starts at 1.513e-09 and the divergence then grows in the trailing 12 columns -- the
+  action slot -- because the two residencies' float32 control-target arithmetic differs in the last bit
+  and an untrained policy at a contact threshold amplifies it (``CONTEXT.md``: 2.4e-07 in, 2.2e-03 out
+  over 21 steps).  The action-free block is bounded separately.
+* ``OBS_STATE_ATOL = 2e-5`` (measured 3.7e-06, 5.4x): the 33 action-free observation columns of one step.
+* ``REWARD_ATOL = 5e-5`` (measured 1.144e-05, 4.4x): one step's total reward.  Above the graph-level
+  1e-6 for the same reason -- the reward is a function of the diverging state.
+* ``RETURNS_ATOL = 5e-5`` (measured 7.63e-06, 6.6x): the accumulated episode return of one row.
+* ``TERM_ATOL = 2e-5`` (measured 3.81e-06, 5.2x): one ``walking_reward_terms`` value of the five
   state-driven terms, compared across residencies.  ``action_rate`` is the exception:
-  ``ACTION_RATE_ATOL = 1e-1`` (measured 9.86e-02), because it is the squared sum of the action
-  differences and therefore quadratic in the diverging action vector; the *graph-level* agreement of
-  that term is 1e-5 and is pinned in ``tests/test_go2_neat_kernels.py``.
-* ``TERMS_SUM_ATOL = 1e-5`` (measured 3.81e-06 both paths): each path's six terms summed against that
-  same path's graph ``reward``.  This is the check that a path's reward is the legacy formula, and it
-  is not affected by the cross-path divergence.
-* ``HISTORY_ATOL = 1e-5`` (measured 4.77e-07 numpy vs device): one ``fitness_history`` entry, against
-  the documented values and across residencies -- the convention ``tests/test_neuroevolution_device_
-  parity.py`` uses.
-* ``CROSS_RESIDENCY_FITNESS_ATOL = 3e-3`` (measured 7.02e-04 on generation 0 policy 0): one per-policy
-  fitness of each residency's *own* generation-0 population.  Device-first initialization drifts by
-  <= 2.4e-07 on the float genome leaves and that is amplified by the same conditional-path chaos
-  (documented 7.17e-04), so no smaller constant is a "residency tolerance" -- the bit-exact claim is
-  made in :func:`test_first_population_update_parity` instead, on one identical population.
-* ``LEAF_ATOL = 1e-5`` (measured 2.384e-07): one float genome/species leaf after one ``tell``.
+  ``ACTION_RATE_ATOL = 5e-1`` (measured 9.86e-02, 5.1x), because it is the squared sum of the action
+  differences and therefore quadratic in the diverging action vector.  That bound is still a relative
+  1e-6 of the term itself, which is 4.8e5 in magnitude on both paths, and the *graph-level* agreement of
+  the term is 1e-5, pinned in ``tests/test_go2_neat_kernels.py``.
+* ``TERMS_SUM_ATOL = 1e-5`` (measured 3.81e-06): *deliberately tight*.  Each path's six terms summed
+  against that same path's graph ``reward`` in the same process.  This is the check that a path's
+  reward is the legacy formula, so it is not a cross-path chaos bound and must stay far below the
+  cross-path bounds; widening it would let a wrong reward formula hide behind the rollout divergence.
+* ``HISTORY_ATOL = 1e-5`` (measured 4.77e-07, 21x): one ``fitness_history`` entry, against the
+  documented values and across residencies -- the convention ``tests/test_neuroevolution_device_
+  parity.py`` uses.  *Deliberately tight*: it only absorbs the float32 reduction of one episode mean,
+  never a rollout.
+* ``CROSS_RESIDENCY_FITNESS_ATOL = 3e-3`` (measured 7.02e-04, 4.3x): one per-policy fitness of each
+  residency's *own* generation-0 population.  Device-first initialization drifts by <= 2.4e-07 on the
+  float genome leaves and that is amplified by the same conditional-path chaos, so no smaller constant
+  is a "residency tolerance" -- the bit-exact claim is made in
+  :func:`test_first_population_update_parity` instead, on one identical population.
+* ``LEAF_ATOL = 1e-5`` (measured 2.384e-07, 42x): one float genome/species leaf after one ``tell``.
 
 Skip reasons
 ------------
@@ -86,28 +94,35 @@ not installed); ``device_placement`` skips it when no non-CPU ``evoxc`` device a
 (``tests.device_pilot.reachable_device_or_skip``, which can be pointed at a device through
 ``EVOXC_DEVICE``).
 
-HSA caveat, and why the full-horizon case runs in a child
+One process, one module
+-----------------------
+The module runs in one process.  Two module-scoped campaigns build four Go2 scenes in total: one numpy
+and one device scene for the default configuration (recording plus the two trainer runs share each
+scene) and one of each for the ``episode_length_s=0.1`` timeout configuration; only one scene is alive
+at a time.  Verified on this host with the system HSA runtime preloaded (see below): three consecutive
+serial ``-n 0`` runs pass all five tests (178 s, 220 s and 222 s) and an ``-n 2`` run passes them in
+197 s; ``-m required`` collects all five.  CI runs it under the suite's default
+``-n auto --dist=worksteal``, which gives each test its own worker and therefore its own Genesis.
+
+HSA runtime, and why the process must use the system one
 --------------------------------------------------------
-Under pytest the HSA repair in ``gs.init`` is warn-only, so this process keeps torch's bundled HSA
-runtime and a *long* torch-present Genesis rollout aborts with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``
-after a few hundred steps.  Every in-process rollout here is therefore short (13 / 6 / 21 / 10 steps),
-and the 1000-step case is delegated to ``tests.torch_block.run_python_checked``, where torch is
-blocked and the system runtime is the one that gets loaded.
+``gs.init`` re-executes a plain interpreter with the system ``libhsa-runtime64.so`` preloaded, because
+torch's bundled copy corrupts AQL packets on ROCm rollouts.  Under ``pytest`` that repair is warn-only
+(a re-exec would restart the session), so the worker keeps torch's bundled runtime, and then Genesis
+GPU work can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT`` ("The AQL packet is malformed",
+surfacing as ``Queue ... aborting`` and as the ``qd_destroy_data`` abort seen here).  That is a
+process-wide constraint, not a scene-count one: bare ``pytest`` aborted the *first* in-process Go2 scene
+of a whole-module run, both while another job was training on the same GPU and again after that load had
+lightened, and every such run passes once the process preloads the runtime the repair would pick.  Run
+this module -- or the suite -- that way::
 
-Known limitation of one process, one module
--------------------------------------------
-Every test here passes on its own (measured call time: 60 s, 60 s, 33 s, 22 s and 106 s) and the whole
-module has also passed in one process (~230 s), but that single-process run is not reliable on this
-host: the fifth or sixth Go2 scene of a process occasionally aborts or segfaults inside
-``qd_destroy_data``/``launch_kernel`` while the Genesis HSA repair is warn-only (see the caveat above)
-and the GPU is shared with other jobs.  It is a Genesis/Quadrants teardown hazard of piling up many
-24-row Go2 scenes in one process, not an assertion failure, so the suite's default ``-n auto``
-distribution (one test per worker) is the reliable way to run this module; with ``-n 0`` run one
-``-k`` selection at a time.
-Example::
+    LD_PRELOAD=/opt/rocm/lib/libhsa-runtime64.so.1 \\
+        PYTHONPATH=$PWD:/tmp/gs-pytest-libs /root/evox-robotics/.venv/bin/python -m pytest \\
+        tests/test_go2_device_parity.py -q -n 0 --durations=15
 
-    PYTHONPATH=$PWD:/tmp/gs-pytest-libs /root/evox-robotics/.venv/bin/python -m pytest \\
-        tests/test_go2_device_parity.py -q -n 0
+The 1000-step case does not depend on that: it runs in a torch-blocked child through
+``tests.torch_block.run_python_checked``, where torch is not importable at all, so the system runtime is
+the one that gets loaded.  Every in-process rollout is short (13 / 6 / 21 steps).
 """
 
 from __future__ import annotations
@@ -153,6 +168,7 @@ from tests.device_pilot import (  # noqa: E402
 )
 from tests.torch_block import has_gpu, run_python_checked  # noqa: E402
 
+
 #: Policies per generation; 8 policies are 24 rows, the size ``verify_device.py`` measures at.
 POP_SIZE = 8
 #: Rows of the scene: ``EPISODES_PER_POLICY`` episodes per policy, policy-major.
@@ -194,29 +210,34 @@ DOCUMENTED_HISTORY_FULL_HORIZON = [-7.378471374511719, -7.318042755126953, -6.03
 DOCUMENTED_STEPS_HORIZON_25 = [21, 10]
 
 #: The reset observation of step 0, computed from the same staged values on both paths: measured
-#: 1.513e-09 (the host and the graph round the inverse quaternion differently in float32).
+#: 1.513e-09 (the host and the graph round the inverse quaternion differently in float32), 660x.
 RESET_OBS_ATOL = 1e-6
-#: One observation of one step, both residencies: measured 1.984e-04, and 1.513e-09 on step 0.
-OBS_ATOL = 5e-4
-#: The 33 action-free observation columns of one step: measured 3.7e-06.
-OBS_STATE_ATOL = 1e-5
+#: One full observation of one step, both residencies: measured 1.984e-04 (5.0x).
+OBS_ATOL = 1e-3
+#: The 33 action-free observation columns of one step: measured 3.7e-06 (5.4x).
+OBS_STATE_ATOL = 2e-5
 #: The action slot of the observation starts here (45 - 12).
 OBS_ACTION_COLUMN = NUM_INPUTS - NUM_OUTPUTS
-#: One step's total reward: measured 1.144e-05.
+#: One step's total reward: measured 1.144e-05 (4.4x).
 REWARD_ATOL = 5e-5
-#: One row's accumulated episode return: measured 7.63e-06.
-RETURNS_ATOL = 1e-5
-#: One state-driven ``walking_reward_terms`` value across residencies: measured 3.81e-06.
-TERM_ATOL = 1e-5
-#: ``action_rate`` across residencies: measured 9.86e-02, quadratic in the diverging action vector.
-ACTION_RATE_ATOL = 1e-1
-#: A path's six terms summed against that path's graph reward: measured 3.81e-06.
+#: One row's accumulated episode return: measured 7.63e-06 (6.6x).
+RETURNS_ATOL = 5e-5
+#: One state-driven ``walking_reward_terms`` value across residencies: measured 3.81e-06 (5.2x).
+TERM_ATOL = 2e-5
+#: ``action_rate`` across residencies: measured 9.86e-02 (5.1x), quadratic in the diverging action
+#: vector; the term itself is 4.8e5 in magnitude, so this is a relative bound of ~1e-6.
+ACTION_RATE_ATOL = 5e-1
+#: A path's six terms summed against that path's graph reward: measured 3.81e-06.  Deliberately not
+#: widened to 3x: it compares one path with itself inside one process, so it is not a cross-path chaos
+#: bound and must stay far below the cross-path ones.
 TERMS_SUM_ATOL = 1e-5
-#: One ``fitness_history`` entry: measured 4.77e-07 across residencies.
+#: One ``fitness_history`` entry, against the documented values and across residencies: measured
+#: 4.77e-07 (21x).  Deliberately kept at the cross-residency 1e-5: it absorbs one float32 episode-mean
+#: reduction, never a rollout.
 HISTORY_ATOL = 1e-5
-#: One per-policy fitness of each residency's own generation-0 population: measured 7.02e-04.
+#: One per-policy fitness of each residency's own generation-0 population: measured 7.02e-04 (4.3x).
 CROSS_RESIDENCY_FITNESS_ATOL = 3e-3
-#: One float genome/species leaf after one ``tell``: measured 2.384e-07.
+#: One float genome/species leaf after one ``tell``: measured 2.384e-07 (42x).
 LEAF_ATOL = 1e-5
 
 #: The six reward terms plus the ``dt``-scaled total, in ``walking_reward_terms`` order.
@@ -387,17 +408,19 @@ def _record_device_advance(monkeypatch) -> list:
     return steps
 
 
-def _recorded_generation(monkeypatch, residency, device, *, population=None, horizon=HORIZON, **kwargs):
+def _recorded_generation(monkeypatch, residency, device, *, env=None, population=None, horizon=HORIZON, **kwargs):
     """Evaluate generation 0 of one residency with every advance step recorded.
 
     Args:
         monkeypatch (pytest.MonkeyPatch): Restores the recording hooks at test teardown.
         residency (str): ``"numpy"`` or ``"device"``.
         device (evoxc.Device | None): The device of the residency (``None`` for ``"numpy"``).
+        env (Go2NeatEnv | None): An already open env of this residency to record on; ``None`` builds a
+            private one just for this generation.
         population (tuple | None): The four genome payload leaves to evaluate; ``None`` evaluates the
             env's own trace population and returns it, so the other residency can be fed the same one.
-        horizon (int): ``scene.step()`` calls of the generation.
-        **kwargs: Further ``Go2NeatEnv`` arguments (e.g. ``episode_length_s``).
+        horizon (int): ``scene.step()`` calls of the generation when ``env`` is ``None``.
+        **kwargs: Further ``Go2NeatEnv`` arguments (e.g. ``episode_length_s``) when ``env`` is ``None``.
 
     Returns:
         RecordedGeneration: The result mapping, the recorded steps and the population used.
@@ -406,11 +429,17 @@ def _recorded_generation(monkeypatch, residency, device, *, population=None, hor
         steps = _record_numpy_advance(monkeypatch)
     else:
         steps = _record_device_advance(monkeypatch)
-    with _open_env(residency, device, horizon=horizon, **kwargs) as env:
-        population = tuple(np.array(leaf, copy=True) for leaf in env._trace_pop) if population is None else population
-        result = env.evaluate(population, 0)
-        max_episode_length = int(env.max_episode_length)
-    return RecordedGeneration(result, steps, population, max_episode_length)
+    if env is None:
+        with _open_env(residency, device, horizon=horizon, **kwargs) as opened:
+            return _evaluate_recorded(opened, steps, population)
+    return _evaluate_recorded(env, steps, population)
+
+
+def _evaluate_recorded(env, steps, population):
+    """Run one recorded generation on an open ``env`` and snapshot it on the host."""
+    population = tuple(np.array(leaf, copy=True) for leaf in env._trace_pop) if population is None else population
+    result = env.evaluate(population, 0)
+    return RecordedGeneration(result, steps, population, int(env.max_episode_length))
 
 
 def _reward_terms(steps) -> np.ndarray:
@@ -478,20 +507,31 @@ def _trainer_run(env, generations) -> TrainerRun:
         trainer.close()
 
 
-def _residency_runs(residency, device):
-    """Two generations and a fresh one-generation run of one residency, on one env.
+def _record_and_train(monkeypatch, residency, device, *, population=None, horizon=HORIZON, **kwargs):
+    """One residency's whole default-config work on a single env, closed before the other residency.
 
-    The second run reuses the env's executable cache, so the evolution graphs are compiled once.
+    The recorded generation and both trainer runs share one ``Go2NeatEnv`` (and therefore one 24-row
+    scene): building the scene once per residency is what keeps the number of Genesis scenes a serial
+    run creates at four instead of six, and each residency's work finishes before the other residency's
+    scene is built.
 
     Args:
+        monkeypatch (pytest.MonkeyPatch): Restores the recording hooks after the recorded generation.
         residency (str): ``"numpy"`` or ``"device"``.
         device (evoxc.Device | None): The device of the residency (``None`` for ``"numpy"``).
+        population (tuple | None): The payload leaves the recorded generation evaluates; ``None`` uses
+            the env's own trace population, so the numpy residency hands its population to the device.
+        horizon (int): ``scene.step()`` calls of the recorded generation.
+        **kwargs: Further ``Go2NeatEnv`` arguments (e.g. ``episode_length_s``).
 
     Returns:
-        tuple: ``(two_generation_run, one_generation_run)``, both host snapshots.
+        tuple: ``(RecordedGeneration, (two_generation_run, one_generation_run))``.
     """
-    with _open_env(residency, device) as env:
-        return _trainer_run(env, 2), _trainer_run(env, 1)
+    with _open_env(residency, device, horizon=horizon, **kwargs) as env:
+        recorded = _recorded_generation(monkeypatch, residency, device, env=env, population=population)
+        monkeypatch.undo()
+        runs = (_trainer_run(env, 2), _trainer_run(env, 1))
+    return recorded, runs
 
 
 def _assert_leaf_parity(numpy_leaves, device_leaves, *, label, atol=LEAF_ATOL) -> float:
@@ -523,31 +563,56 @@ def _assert_leaf_parity(numpy_leaves, device_leaves, *, label, atol=LEAF_ATOL) -
 
 
 @pytest.fixture(scope="module")
-def residency_runs(gpu_genesis, device_placement):
-    """Both residencies' trainer runs, built and closed one after the other.
+def default_campaign(gpu_genesis, device_placement):
+    """Each residency's recorded generation and two trainer runs, one scene at a time.
 
-    ``gpu_genesis`` is requested first so Genesis is initialized before the first scene is built, and
-    only one env is alive at a time (each one owns a 24-row Go2 scene).
+    ``gpu_genesis`` is requested first so Genesis is initialized before the first scene is built; each
+    residency's scene is built, used for all of its work and closed before the other residency's scene
+    is built, so a serial run creates two scenes here (and two in ``timeout_campaign``).
     """
     backend, device = device_placement
-    return {
-        "numpy": _residency_runs("numpy", None),
-        "device": _residency_runs("device", device),
-    }
+    campaign = {}
+    for residency, placement in (("numpy", None), ("device", device)):
+        population = campaign["numpy"][0].population if residency == "device" else None
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            campaign[residency] = _record_and_train(monkeypatch, residency, placement, population=population)
+    return campaign
 
 
-def test_per_step_observation_and_reward_parity(gpu_genesis, device_placement, monkeypatch):
+@pytest.fixture(scope="module")
+def timeout_campaign(gpu_genesis, device_placement):
+    """Each residency's recorded timeout generation, one scene at a time.
+
+    ``episode_length_s=0.1`` fixes ``max_episode_length`` at 5 inside the advance graph, so the timeout
+    branch needs its own scenes; they are built, used and closed one at a time like the default ones.
+    The device residency is fed the numpy residency's generation-0 population.
+    """
+    backend, device = device_placement
+    campaign = {}
+    for residency, placement in (("numpy", None), ("device", device)):
+        population = campaign["numpy"].population if residency == "device" else None
+        with pytest.MonkeyPatch.context() as monkeypatch:
+            with _open_env(
+                residency, placement, horizon=TIMEOUT_HORIZON, episode_length_s=TIMEOUT_EPISODE_LENGTH_S
+            ) as env:
+                campaign[residency] = _recorded_generation(
+                    monkeypatch, residency, placement, env=env, population=population
+                )
+    return campaign
+
+
+def test_per_step_observation_and_reward_parity(default_campaign):
     """One generation on one population: observation, reward, bookkeeping and reward terms.
 
     The same generation-0 population (the numpy env's trace population, which both envs trace from the
     same ``Pipeline(seed=0)``) is evaluated by both residencies, and every advance step is compared.
     Measured: 13 steps, ``tilted=24`` in both, the first step's observation 1.513e-09 apart, the
     observation up to 1.984e-04 (action slot) / 3.7e-06 (action-free block), the total reward up to
-    1.144e-05, ``returns`` up to 7.63e-06, and the masks/counter exactly equal.
+    1.144e-05, ``returns`` up to 7.63e-06, the ``action_rate`` term up to 9.86e-02 on a term of 4.8e5,
+    and the masks/counter exactly equal.
     """
-    backend, device = device_placement
-    numpy = _recorded_generation(monkeypatch, "numpy", None)
-    recorded = _recorded_generation(monkeypatch, "device", device, population=numpy.population)
+    numpy = default_campaign["numpy"][0]
+    recorded = default_campaign["device"][0]
 
     assert len(numpy.steps) == len(recorded.steps) == numpy.result["steps"] == recorded.result["steps"], (
         f"recorded {len(numpy.steps)} numpy steps and {len(recorded.steps)} device steps, reported "
@@ -656,7 +721,7 @@ def test_per_step_observation_and_reward_parity(gpu_genesis, device_placement, m
         )
 
 
-def test_termination_mask_and_timeout_parity(gpu_genesis, device_placement, monkeypatch):
+def test_termination_mask_and_timeout_parity(timeout_campaign):
     """The timeout branch and the never-re-arming ``alive`` mask, on one population.
 
     ``episode_length_s=0.1`` makes ``max_episode_length`` 5, so a 40-step horizon must time rows out,
@@ -665,18 +730,8 @@ def test_termination_mask_and_timeout_parity(gpu_genesis, device_placement, monk
     ``[0, 0, 0, 0, 4, 20]``, the ``episode_length`` of every done row reset to 0, and ``alive``
     monotone non-increasing per row.
     """
-    backend, device = device_placement
-    numpy = _recorded_generation(
-        monkeypatch, "numpy", None, horizon=TIMEOUT_HORIZON, episode_length_s=TIMEOUT_EPISODE_LENGTH_S
-    )
-    recorded = _recorded_generation(
-        monkeypatch,
-        "device",
-        device,
-        population=numpy.population,
-        horizon=TIMEOUT_HORIZON,
-        episode_length_s=TIMEOUT_EPISODE_LENGTH_S,
-    )
+    numpy = timeout_campaign["numpy"]
+    recorded = timeout_campaign["device"]
 
     assert numpy.max_episode_length == recorded.max_episode_length == TIMEOUT_MAX_EPISODE_LENGTH, (
         f"expected max_episode_length {TIMEOUT_MAX_EPISODE_LENGTH} on both residencies, got "
@@ -718,7 +773,7 @@ def test_termination_mask_and_timeout_parity(gpu_genesis, device_placement, monk
         )
 
 
-def test_two_generation_end_to_end_reference_numbers(gpu_genesis, residency_runs):
+def test_two_generation_end_to_end_reference_numbers(default_campaign):
     """Two generations at each residency's own population, against the documented numbers.
 
     Each residency's generation-0 population is the trainer's own (device-first initialization under
@@ -729,8 +784,8 @@ def test_two_generation_end_to_end_reference_numbers(gpu_genesis, residency_runs
     -7.318042755126953 (device), 4.77e-07 apart, and a generation-0 per-policy fitness drift of up to
     7.02e-04.
     """
-    numpy_run, _ = residency_runs["numpy"]
-    device_run, _ = residency_runs["device"]
+    numpy_run, _ = default_campaign["numpy"][1]
+    device_run, _ = default_campaign["device"][1]
 
     assert evolution_seed(MASTER_SEED) == DOCUMENTED_EVOLUTION_SEED, (
         f"seeding.evolution_seed({MASTER_SEED}) is {evolution_seed(MASTER_SEED)}, documented as "
@@ -779,14 +834,14 @@ def test_two_generation_end_to_end_reference_numbers(gpu_genesis, residency_runs
     )
 
 
-def test_first_population_update_parity(gpu_genesis, residency_runs):
+def test_first_population_update_parity(default_campaign):
     """The post-``tell`` state of one generation: integer leaves/key/counter exact, floats measured.
 
     Measured: ``randkey`` -5246925798323494445 and ``generation`` 1.0 on both residencies, both integer
     payload leaves and both integer species leaves bit-identical, and every float leaf within 2.384e-07.
     """
-    _, numpy_first = residency_runs["numpy"]
-    _, device_first = residency_runs["device"]
+    _, numpy_first = default_campaign["numpy"][1]
+    _, device_first = default_campaign["device"][1]
 
     assert numpy_first.generation == device_first.generation == 1.0, (
         f"the generation counter must advance to exactly 1.0 on both residencies, got "
@@ -872,7 +927,7 @@ MARKER = "GO2_FULL_HORIZON"
 def test_full_horizon_reference_numbers_without_torch(gpu_genesis, device_placement):
     """Three full-horizon (1000-step) generations with the Torch-free, device-resident trainer.
 
-    The 3000-step rollout cannot run in this process (see the module docstring's HSA caveat), so it runs
+    The 3000-step rollout cannot run in this process (see the module docstring's HSA section), so it runs
     in a child interpreter through ``tests.torch_block.run_python_checked``: PyTorch is blocked before
     the first import and the harness fails the child if ``torch`` reaches ``sys.modules`` anyway.
     Measured there: ``fitness_history`` -7.378471374511719 / -7.318042755126953 / -6.039944171905518,
