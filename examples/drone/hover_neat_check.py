@@ -20,16 +20,22 @@ Four things this script is for, all of them cheap enough for the example smoke s
   fingerprint determinism, the same numeric tolerances, and the analytic reset observation must
   still match the live reset state at a perturbed pose.
 * **``--imports``** statically proves that the migrated stack stays free of ``torch``: an AST
-  scan of ``hover_kernels.py``, ``hover_neat_env.py``, ``hover_neat_train.py`` (skipped with a
-  note while it does not exist yet) and the six modules of the shared
-  ``examples/neuroevolution`` layer.  ``hover_device_rollout.py`` exports to Genesis through
-  ``torch.from_dlpack`` and imports torch lazily inside its helpers, and is therefore
-  deliberately outside that list.
+  scan of ``hover_kernels.py``, ``hover_neat_env.py``, ``hover_neat_train.py`` and
+  ``hover_device_kernels.py`` (skipped with a note while a file does not exist yet) and the six
+  modules of the shared ``examples/neuroevolution`` layer.  ``hover_device_rollout.py`` exports to
+  Genesis through ``torch.from_dlpack`` and imports torch lazily inside its helpers, and is
+  therefore deliberately outside that list.
 * **``--residency``** selects the rollout residency of every env this script builds:
   ``numpy`` (the default, host-staged) or ``device`` (the zero-copy device-resident rollout of
   ``hover_device_rollout.py``, which needs a non-numpy graph backend, e.g.
   ``--evoxc-backend iree --evoxc-device cpu:0``).  It applies to the default mode and to
   ``--parity``.
+* **``--torch-free``** is the Torch claim of the device residency, mirroring
+  ``examples/locomotion/go2_neat_train.py --torch-free``: it implies ``--residency device``, defaults
+  the graphs to ``iree@rocm:0`` and refuses the flags that would import Torch (a host rollout, a numpy
+  graph backend).  It applies to every mode above and, at the end of the run, prints
+  ``torch_free<TAB>1|0`` for the fact that ``"torch"`` never reached the process -- the exit code is 1
+  when it did.  ``--imports`` is a static scan, so it proves its part of the claim without it.
 * **``--residency-parity``** scores generation 0 twice -- once with a numpy-residency env, once
   with a device-residency env built from the same seed, population, horizon and perturbation --
   and prints the disagreement as ``name<TAB>value`` lines: ``returns_max_abs_diff``,
@@ -122,9 +128,15 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--residency",
         choices=("numpy", "device"),
-        default="numpy",
+        default=None,
         help="rollout residency of every env built here: numpy (default) or device "
         "(the zero-copy rollout of hover_device_rollout.py, needs a non-numpy graph backend)",
+    )
+    parser.add_argument(
+        "--torch-free",
+        action="store_true",
+        help="run with the Torch claim of the device residency: implies --residency device and "
+        "iree graphs, and prints torch_free<TAB>0|1 for `\"torch\" in sys.modules` at the end",
     )
     parser.add_argument(
         "--residency-parity",
@@ -148,9 +160,51 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def _resolve_torch_free(args):
+    """Resolve ``--torch-free``: imply the device residency and refuse what would import Torch.
+
+    The claim is the device residency's (no host array at a graph boundary), so it is the only
+    residency this flag can run, and the graphs have to be a device backend.  Everything else is
+    inherited from the flags, so a refusal always names the flag that has to go.
+    """
+    if not args.torch_free:
+        if args.residency is None:
+            args.residency = "numpy"
+        return
+    if args.residency == "numpy":
+        raise SystemExit(
+            "--torch-free runs the device-resident rollout, which stages no host array at a graph "
+            "boundary, so --residency numpy is not available here; drop --residency numpy (device "
+            "residency is implied) or drop --torch-free"
+        )
+    if args.evoxc_backend == "numpy":
+        raise SystemExit(
+            "--torch-free needs a device evoxc backend (device residency is IREE-backed), got "
+            "--evoxc-backend numpy; drop --evoxc-backend numpy or drop --torch-free"
+        )
+    args.residency = "device"
+
+
+def _torch_in_process():
+    """Whether ``torch`` has been imported in this process (the torch-free claim, reported only)."""
+    return "torch" in sys.modules
+
+
+def _report_torch_free():
+    """Print the ``--torch-free`` verdict; returns the exit-code contribution (0 ok, 1 imported)."""
+    imported = _torch_in_process()
+    print(f"torch_free\t{int(not imported)}")
+    if imported:
+        print(
+            "# torch reached the process through an imported module; the torch-free paths (the device "
+            "rollout of hover_device_rollout.py, the device kernels) must not import it"
+        )
+    return 1 if imported else 0
+
+
 def _resolve_targets(args):
     """Resolve the graph backend/device: explicit flags win, then the GPU defaults, then CPU."""
-    backend = args.evoxc_backend or ("iree" if args.gpu else "numpy")
+    backend = args.evoxc_backend or ("iree" if (args.gpu or args.torch_free) else "numpy")
     device = args.evoxc_device or ("rocm:0" if args.gpu else "cpu:0")
     return backend, device
 
@@ -532,8 +586,8 @@ def run_residency_parity(args):
 
 #: ``examples/`` root, so the printed module labels stay relative to the example tree.
 _EXAMPLES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-#: Drone modules of the migrated stack; ``hover_neat_train.py`` may not exist yet.
-_HOVER_MODULES = ("hover_kernels.py", "hover_neat_env.py", "hover_neat_train.py")
+#: Drone modules of the migrated stack; a file that does not exist yet is skipped with a note.
+_HOVER_MODULES = ("hover_kernels.py", "hover_device_kernels.py", "hover_neat_env.py", "hover_neat_train.py")
 #: The shared layer's modules, which are torch-free by contract (see its CONTEXT.md).
 _SHARED_MODULES = (
     "seeding.py",
@@ -642,11 +696,16 @@ def run_default(args):
 
 def main(argv=None):
     args = _parse_args(argv)
+    _resolve_torch_free(args)
     if args.imports:
-        return run_imports()
-    if args.residency_parity:
-        return run_residency_parity(args)
-    return run_parity(args) if args.parity else run_default(args)
+        code = run_imports()
+    elif args.residency_parity:
+        code = run_residency_parity(args)
+    else:
+        code = run_parity(args) if args.parity else run_default(args)
+    if args.torch_free:
+        code = max(code, _report_torch_free())
+    return code
 
 
 if __name__ == "__main__":
