@@ -184,9 +184,23 @@ def _parse_args(argv=None):
             "jax_plugins/*/*.so)."
         ),
     )
+    parser.add_argument(
+        "--torch-free",
+        action="store_true",
+        help=(
+            "Run the whole training loop without Torch: implies --residency device and defaults the "
+            "rollout graphs to IREE on rocm:0 (CUDA: cuda:0). Refuses a configuration that would "
+            "import torch, and reports whether torch reached the process."
+        ),
+    )
     parser.add_argument("-v", "--vis", action="store_true", help="Open the Genesis viewer.")
     parser.add_argument("--quiet", action="store_true", help="Write the artifacts without per-generation lines.")
     return parser.parse_args(argv)
+
+
+def _torch_in_process():
+    """Whether ``torch`` has been imported in this process (the torch-free claim, reported only)."""
+    return "torch" in sys.modules
 
 
 # --- Main ---------------------------------------------------------------------------
@@ -218,8 +232,32 @@ def main(argv=None):
             joint_pos=args.perturb_joint_pos,
         )
     )
-    backend = args.evoxc_backend or ("iree" if args.gpu else "numpy")
+    torch_free = bool(args.torch_free)
+    if torch_free and args.residency != "device":
+        if args.residency != "numpy":
+            raise ValueError(f"--torch-free implies --residency device, got {args.residency!r}")
+        args.residency = "device"
+    backend = args.evoxc_backend or ("iree" if (args.gpu or torch_free) else "numpy")
     device = args.evoxc_device or ("cuda:0" if args.gpu and backend != "numpy" else None)
+    if torch_free and device is None:
+        # The MI300X host this path was built on; a CUDA host passes --evoxc-device cuda:0.
+        device = "rocm:0"
+    if torch_free and backend == "numpy":
+        raise ValueError(
+            "--torch-free needs a non-CPU rollout backend (device residency is IREE-backed), got "
+            f"--evoxc-backend {backend!r}"
+        )
+    if torch_free and args.vis:
+        raise ValueError(
+            "--torch-free runs without Torch, but the built-in viewer is a Torch consumer; drop "
+            "-v/--vis or drop --torch-free"
+        )
+    if torch_free and args.tell_backend not in (None, "iree", "xla"):
+        raise ValueError(
+            "device residency runs every graph on one backend/device, so --torch-free cannot use "
+            f"--tell-backend {args.tell_backend!r}; use iree/xla on the same device as the rollout, "
+            "or drop --torch-free"
+        )
     show_viewer = bool(args.vis) and not pytest_mode
 
     if args.pjrt_plugin:
@@ -228,8 +266,15 @@ def main(argv=None):
         os.environ.setdefault("EVOXC_PJRT_PLUGIN", str(args.pjrt_plugin))
 
     if not gs._initialized:
-        if args.gpu:
-            gs.init(backend=gs.gpu, precision="32", logging_level="warning", performance_mode=True)
+        if args.gpu or torch_free:
+            # ``performance_mode=True`` hands the state to Quadrants ndarrays whose staged writes the
+            # torch-free setters cannot consume yet, so the torch-free path keeps ``use_ndarray`` off.
+            gs.init(
+                backend=gs.gpu,
+                precision="32",
+                logging_level="warning",
+                performance_mode=not torch_free,
+            )
         else:
             gs.init(backend=gs.cpu, precision="32", logging_level="warning")
 
@@ -271,10 +316,11 @@ def main(argv=None):
         print(
             f"Go2 NEAT walking: pop_size={args.pop_size} rows={env.rows} generations={generations} "
             f"horizon={env.horizon} max_episode_length={env.max_episode_length} "
-            f"genesis={'gpu' if args.gpu else 'cpu'} evoxc={env.backend}@{env.device_name} "
+            f"genesis={'gpu' if args.gpu or torch_free else 'cpu'} evoxc={env.backend}@{env.device_name} "
             f"tell={trainer.tell_backend}@{trainer.tell_device_name} "
             f"master_seed={args.master_seed} evolution_seed={trainer.evolution_seed} "
-            f"perturbation={'zero' if perturbation.is_zero else 'nonzero'} residency={env.residency}"
+            f"perturbation={'zero' if perturbation.is_zero else 'nonzero'} residency={env.residency} "
+            f"torch_free={torch_free} torch_in_process={_torch_in_process()}"
         )
 
     trainer.setup()
@@ -298,6 +344,8 @@ def main(argv=None):
             "show_viewer": show_viewer,
             "stop_when_done": bool(args.stop_when_done),
             "residency": env.residency,
+            "torch_free": torch_free,
+            "torch_in_process": _torch_in_process(),
         }
     )
     trainer.summary_path.write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
@@ -308,7 +356,14 @@ def main(argv=None):
             f"done: {generations} generations, {summary['totals']['steps']} steps, "
             f"{summary['totals']['wall_time_s']:.1f} s total, "
             f"best fitness {summary['totals']['best_fitness']:+.4f}; "
+            f"torch_in_process={_torch_in_process()}; "
             f"wrote {trainer.history_path} and {trainer.summary_path}"
+        )
+    if torch_free and _torch_in_process():
+        print(
+            "warning: --torch-free was requested but 'torch' is in sys.modules; some imported module "
+            "pulled it in (report it, the loop itself never imports torch)",
+            file=sys.stderr,
         )
     if trainer.tell_backend == "xla" and trainer.tell_device.kind != "cpu":
         # A live PJRT client makes the ROCm plugin abort at interpreter exit (after the work
