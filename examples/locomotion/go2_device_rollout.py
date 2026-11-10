@@ -29,9 +29,9 @@ buffers over, through DLPack in both directions:
 * graph output -> setter: the control graph's ``(rows, 12)`` targets go straight into
   ``robot.control_dofs_position(targets, _control_dof_slice)``, whose ``_stage_values`` copies them
   device to device with ``hipMemcpy2DAsync``; the per-generation ``(rows, 19)`` init-qpos tile goes
-  the same way into ``robot.set_qpos``, so an auto-reset copies nothing from the host.  Those two
-  setter contracts are the staged torch-free one (whole tile + ``envs_idx``) and the torch one
-  (the selected rows), which ``_reset_rows`` adapts to.
+  the same way into ``robot.set_qpos``, so an auto-reset copies nothing from the host.  ``set_qpos``
+  has one masked-write contract in both residencies: a whole ``(rows, 19)`` tile plus the selected
+  rows, each env's row being picked in-kernel.
 * graph output -> graph input: an executable's output is passed straight to the next one (the
   observation to the policy graph, the action to the control graph, the state blocks to the advance
   graph, ``returns`` / ``alive`` / ``episode_length`` back into the advance graph); ``IreeExecutable.
@@ -98,7 +98,6 @@ import quadrants as qd
 
 from genesis.utils.device_buffer import DeviceView
 from genesis.utils.geom import inv_quat, quat_to_xyz
-from genesis.utils.torch_compat import HAS_TORCH
 
 from go2_device_kernels import default_targets_tile, run_control, run_episode_returns, run_state
 from go2_neat_kernels import (
@@ -220,8 +219,8 @@ class _DeviceRollout:
 
         ``robot.get_pos/get_quat/get_vel/get_ang`` and ``scene.get_error_envs_mask`` return a
         contiguous ``DeviceView`` in a Torch-free process (and a contiguous tensor when Torch is
-        present); the compaction below only covers a backend that ever hands out a strided view,
-        and it stays on the device either way.
+        present); the error mask is boolean in both residencies.  The compaction below only covers a
+        backend that ever hands out a strided view, and it stays on the device either way.
         """
         flag = getattr(value, "is_contiguous", None)
         flagged = flag() if callable(flag) else flag
@@ -254,17 +253,13 @@ class _DeviceRollout:
     def _reset_rows(self, envs_idx):
         """Teleport the ended rows back to the generation's init pose (device to device).
 
-        The torch-free staged setter takes the whole ``(rows, n_qs)`` tile and applies ``envs_idx``
-        in its own kernel, while the torch setter scatters the rows it is given, so the tile is
-        handed over whole only when the scene has the staged setter.
+        ``set_qpos`` has a single masked-write contract: it takes the whole ``(rows, n_qs)`` tile plus
+        the selection and picks each env's row in its own kernel, staging device to device, so this
+        call is identical with and without Torch.
         """
-        if HAS_TORCH:
-            envs_idx = np.asarray(envs_idx, dtype=np.int32)
-            self.env.robot.set_qpos(
-                self._host_tile[envs_idx], envs_idx=envs_idx, zero_velocity=True, skip_forward=True
-            )
-            return
-        self.env.robot.set_qpos(self._tile, envs_idx=envs_idx, zero_velocity=True, skip_forward=True)
+        self.env.robot.set_qpos(
+            self._tile, envs_idx=np.asarray(envs_idx, dtype=np.int32), zero_velocity=True, skip_forward=True
+        )
 
     def _block(self, field):
         """Contiguous batch-last ``(12, rows)`` slice of a live ``(n_dofs, rows)`` solver buffer."""
@@ -386,8 +381,6 @@ class _DeviceRollout:
     def _stage_generation(self, row_init_qpos):
         """Stage the per-generation metadata tiles and write the reset pose of every row."""
         tile = np.ascontiguousarray(np.asarray(row_init_qpos, dtype=np.float32))
-        # The host tile is kept because a mid-loop reset writes selected rows only (see ``_reset_rows``).
-        self._host_tile = tile
         init_quat = np.ascontiguousarray(tile[:, 3:7])
         self._inv_init_quat = self._stage(inv_quat(init_quat))
         # The reset observation's joint block is metadata (the perturbed init qpos), so it is staged

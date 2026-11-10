@@ -46,9 +46,9 @@ init pose::
     base_quat = normalize(quat_world * inv_init_quat)
 
 with the w-first Hamilton product ``go2_neat_env._quat_mul`` computes on the host (the
-``genesis.utils.geom._tc_quat_mul`` coefficient form), then normalizes.  The error flag is
-``error_mask != 0``: genesis reports a latched solver error per row, and the advance graph
-consumes it as a bool.
+``genesis.utils.geom._tc_quat_mul`` coefficient form), then normalizes.  The error flag is passed
+through: ``Scene.get_error_envs_mask`` is boolean in both residencies, so the graph input is bool
+and the advance graph consumes it directly.
 
 Static operands
 ---------------
@@ -68,7 +68,7 @@ import evoxc
 import go2_neat_kernels  # noqa: F401  (imported first: it owns the shared-layer ``sys.path`` shim)
 from evox_runtime import _attach, _device_name, _outputs, _positive_int, _rows_of
 from go2_evox_kernels import _to_device_array, resolve_backend_device
-from go2_neat_kernels import EPISODES_PER_POLICY, NUM_ACTIONS, _int32, _quat_columns
+from go2_neat_kernels import EPISODES_PER_POLICY, NUM_ACTIONS, _quat_columns
 
 #: Columns of the joint slice the twelve actuators live in (``qpos``/``dofs`` dof order).
 NUM_MOTORS = NUM_ACTIONS
@@ -231,19 +231,16 @@ def run_control(executable, *, raw_actions, done, permutation=None, default_targ
 
 
 @evoxc.defn
-def go2_device_state(base_quat_world, dof_pos_block, dof_vel_block, inv_init_quat, error_mask, gather, mask_is_bool):
+def go2_device_state(base_quat_world, dof_pos_block, dof_vel_block, inv_init_quat, error_mask, gather):
     """One state step: relative base quaternion, action-order joint blocks, error flag."""
     dof_pos = evoxc.matmul(evoxc.transpose(dof_pos_block, (1, 0)), gather)
     dof_vel = evoxc.matmul(evoxc.transpose(dof_vel_block, (1, 0)), gather)
     base_quat = _quat_product_rows(base_quat_world, inv_init_quat)
-    # ``Scene.get_error_envs_mask`` is a boolean tensor when Torch is present and the zero-copy
-    # view of an int32 buffer when it is not, and a compiled graph has one input dtype, so the
-    # caller builds the graph for the mask its scene hands out (``mask_is_bool`` is static).
-    error_flag = error_mask if mask_is_bool else evoxc.not_equal(error_mask, _int32(0))
-    return [base_quat, dof_pos, dof_vel, error_flag]
+    # ``Scene.get_error_envs_mask`` is boolean in both residencies, so the mask is the error flag.
+    return [base_quat, dof_pos, dof_vel, error_mask]
 
 
-def build_state(rows, *, num_dof, qpos_dof_slot, mask_is_bool=False, backend="numpy", device=None):
+def build_state(rows, *, num_dof, qpos_dof_slot, backend="numpy", device=None):
     """Compile the state graph for ``rows`` environments.
 
     Args:
@@ -251,9 +248,6 @@ def build_state(rows, *, num_dof, qpos_dof_slot, mask_is_bool=False, backend="nu
         num_dof (int): Width of the actuator slice (``12`` for the Go2).
         qpos_dof_slot (array-like): ``(num_dof,)`` int index array mapping action order to
             the slot inside the actuator slice (``motors_dof_idx - dof_low``).
-        mask_is_bool (bool): Whether ``scene.get_error_envs_mask()`` hands out a boolean tensor
-            (Torch present) instead of the int32 zero-copy buffer view (Torch-free), which fixes
-            the dtype of that graph input.
         backend (str): ``evoxc`` backend name.
         device (str | evoxc.Device | None): ``evoxc`` device.
 
@@ -270,9 +264,8 @@ def build_state(rows, *, num_dof, qpos_dof_slot, mask_is_bool=False, backend="nu
         evoxc.TensorSpec((num_dof, rows), evoxc.float32, name="dof_pos_block"),
         evoxc.TensorSpec((num_dof, rows), evoxc.float32, name="dof_vel_block"),
         evoxc.TensorSpec((rows, 4), evoxc.float32, name="inv_init_quat"),
-        evoxc.TensorSpec((rows,), evoxc.bool_ if mask_is_bool else evoxc.int32, name="error_mask"),
+        evoxc.TensorSpec((rows,), evoxc.bool_, name="error_mask"),
         evoxc.TensorSpec((num_dof, num_dof), evoxc.float32, name="gather"),
-        bool(mask_is_bool),
         backend=resolved_backend,
         device=resolved_device,
     )
@@ -282,7 +275,6 @@ def build_state(rows, *, num_dof, qpos_dof_slot, mask_is_bool=False, backend="nu
         rows=rows,
         num_dof=num_dof,
         qpos_dof_slot=np.asarray(qpos_dof_slot, dtype=np.int64).reshape(num_dof),
-        mask_is_bool=bool(mask_is_bool),
         gather=gather,
         device_name=_device_name(resolved_device),
     )
@@ -307,8 +299,7 @@ def run_state(
             actuator slice (a contiguous slice of ``solver.dyn_state.dofs.pos``).
         dof_vel_block: ``(num_dof, rows)`` float32, same layout, joint velocities.
         inv_init_quat: ``(rows, 4)`` float32 inverse of the generation's init quaternion.
-        error_mask: ``(rows,)`` solver error mask (``scene.get_error_envs_mask()``): int32, or
-            bool when the graph was built with ``mask_is_bool=True``.
+        error_mask: ``(rows,)`` boolean solver error mask (``scene.get_error_envs_mask()``).
         gather: ``(num_dof, num_dof)`` float32 permutation; default = the compiled one.
 
     Returns:
@@ -324,7 +315,6 @@ def run_state(
         _operand(executable, inv_init_quat),
         _operand(executable, error_mask),
         _operand(executable, executable.gather if gather is None else gather),
-        executable.mask_is_bool,
     )
     base_quat, dof_pos, dof_vel, error_flag = _outputs(outputs)[:4]
     return base_quat, dof_pos, dof_vel, error_flag

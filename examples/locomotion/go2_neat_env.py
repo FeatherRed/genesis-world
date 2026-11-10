@@ -84,7 +84,8 @@ them needs torch:
   ``get_quat()``, ``get_vel()``, ``get_ang()``, ``get_dofs_position(motors_dof_idx)``,
   ``get_dofs_velocity(motors_dof_idx)``, the base quaternion relative to the per-row init pose,
   and its roll/pitch/yaw (both computed on the host);
-* read with ``tensor_to_array(...).astype(bool)``: ``scene.get_error_envs_mask()``;
+* read with ``tensor_to_array(...).astype(bool)``: ``scene.get_error_envs_mask()``, which is
+  boolean in both residencies;
 * write with a plain NumPy array: the PD targets and the per-row reset qpos, because
   ``control_dofs_position`` and ``set_qpos`` take ``array_like`` and convert internally;
 * ``motors_dof_idx`` / ``actions_dof_idx`` are NumPy index arrays built once in ``__init__`` and
@@ -129,7 +130,6 @@ import genesis as gs
 
 from genesis.utils.geom import inv_quat, quat_to_xyz, transform_quat_by_quat
 from genesis.utils.misc import tensor_to_array
-from genesis.utils.torch_compat import HAS_TORCH
 
 from go2_evox_kernels import resolve_backend_device
 
@@ -462,10 +462,6 @@ class Go2NeatEnv(BatchedEpisodeEnv):
                 # memory and exceeding it raises.
                 max_collision_pairs=20,
                 tolerance=1e-5,
-                # Torch-free Genesis builds the dofs-info write for a per-environment buffer; the
-                # torch path keeps the shared buffer ``go2_env`` uses. The values written are the
-                # same either way (every row gets ``CFG['kp']`` / ``CFG['kd']``).
-                batch_dofs_info=not HAS_TORCH,
             ),
             vis_options=gs.options.VisOptions(
                 rendered_envs_idx=[0],
@@ -634,17 +630,12 @@ class Go2NeatEnv(BatchedEpisodeEnv):
                 device=self.device,
             ),
         )
-        # ``get_error_envs_mask`` is a bool tensor with Torch and the zero-copy view of an int32
-        # buffer without it, and a compiled graph has one input dtype, so the state graph is built
-        # for the mask this scene hands out.
-        mask_is_bool = self._error_mask_is_bool()
         state = cache.get(
-            ("state", self.rows, NUM_ACTIONS, mask_is_bool, self.backend, self.device_name),
+            ("state", self.rows, NUM_ACTIONS, self.backend, self.device_name),
             lambda: build_state(
                 self.rows,
                 num_dof=NUM_ACTIONS,
                 qpos_dof_slot=self._qpos_dof_slot,
-                mask_is_bool=mask_is_bool,
                 backend=self.backend,
                 device=self.device,
             ),
@@ -654,11 +645,6 @@ class Go2NeatEnv(BatchedEpisodeEnv):
             lambda: build_episode_returns(self.pop_size, backend=self.backend, device=self.device),
         )
         return obs, policy, advance, fitness, control, state, episode_returns
-
-    def _error_mask_is_bool(self):
-        """Whether this scene hands out a boolean error mask (Torch present) instead of an int32 view."""
-        mask = self.scene.get_error_envs_mask()
-        return str(getattr(mask, "dtype", "")).rsplit(".", 1)[-1] == "bool"
 
     def _seeds_for(self, generation):
         """Return the ``(EPISODES_PER_POLICY,)`` int64 seeds of one generation."""
