@@ -4058,6 +4058,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         buffer they read, while a DLPack producer is staged device to device and a host array is uploaded (see
         'torch_free.stage_kernel_values'). A torch tensor living on another device, a host one included, is uploaded the
         same way as a host array, since a kernel argument has to be a buffer of this device.
+        Both residencies run this staging, so a producer reaching the setter from a compiled graph is staged and
+        expanded the same way whether PyTorch is installed or not.
         """
         if is_torch_tensor(propellers_rpm) and propellers_rpm.device == gs.device:
             values = propellers_rpm if propellers_rpm.dtype == gs.tc_float else propellers_rpm.to(gs.tc_float)
@@ -4071,9 +4073,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         if not is_row and tuple(values.shape) != (1, n_propellers):
             gs.raise_exception(
                 f"The propeller RPM values of shape {tuple(values.shape)} cannot be written into the {n_propellers} "
-                f"propellers of the {self._B} environments of the scene. A drone propeller write takes them as a whole "
-                f"tile of shape (n_envs, n_propellers) = ({self._B}, {n_propellers}), the batch axis first, or as a "
-                f"single row of shape (1, {n_propellers}) or ({n_propellers},), which every environment takes."
+                f"propellers of the {self._B} environments of the scene. The setter takes them as a whole tile of "
+                f"shape (n_envs, n_propellers) = ({self._B}, {n_propellers}), the batch axis first, or as a single "
+                f"row of shape (1, {n_propellers}) or ({n_propellers},), which every environment takes."
             )
         buffer = self._drone_rpm_buffer
         if buffer is None or tuple(buffer.shape) != (self._B, n_propellers):

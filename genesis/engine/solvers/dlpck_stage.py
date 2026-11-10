@@ -10,8 +10,10 @@ such an argument, so that no solver repeats any of it:
 - '_HipAsyncCopies', '_hip_async_copies', '_device_copy_plan', '_copy_after_pending_work' and
   '_copy_transposed_after_pending_work', the stream-ordered device-to-device transfers those two issue, which cost the
   caller no device synchronization.
-- '_read_selection', '_contiguous_strides', '_device_copy_shape' and '_host_values', the read-side selection and the
-  layout queries the copies are planned from.
+- '_read_selection', '_contiguous_strides', '_is_compact_layout', '_device_copy_shape' and '_host_values', the
+  read-side selection and the layout queries the copies are planned from.
+  A producer is compact when every axis holding more than one value carries the row-major stride, while an axis holding
+  a single value accepts any stride, since it holds that single element alone.
 
 The read and sanitize helpers these functions build on ('numpy_dtype', 'to_numpy_values', 'device_tensor_from_numpy',
 'read_view', 'is_dlpack_source', 'is_full_env_selection', ...) live in 'genesis.engine.solvers.torch_free', which
@@ -86,13 +88,30 @@ def _contiguous_strides(shape) -> tuple[int, ...]:
     return tuple(strides)
 
 
+def _is_compact_layout(shape, strides) -> bool:
+    """Whether `strides` lays the values of `shape` out as the single contiguous row-major block they fill.
+
+    An axis holding a single value accepts any stride, since that value sits at the offset 0 of the axis whatever the
+    stride reports, which is what an axis added by an unsqueeze reports as the stride 0 of a broadcast.
+    An axis holding more than one value must carry the row-major stride, so a producer broadcasting over an axis of its
+    own is still refused.
+    """
+    if len(shape) != len(strides):
+        return False
+    return all(
+        size <= 1 or stride == expected for size, stride, expected in zip(shape, strides, _contiguous_strides(shape))
+    )
+
+
 def _device_copy_shape(value, dtype) -> tuple[int, ...] | None:
     """Shape of the device buffer the bridge copies `value` into without a host roundtrip, None when it takes the host.
 
     It writes a buffer of at most two dimensions only, which is why the third dimension of a state layout, the
     components of a vector, takes the host path ('stage_kernel_values').
-    Both sides share a dtype and no cast is performed, the source must be compact, and a Metal backend has no device
-    copy at all.
+    Both sides share a dtype and no cast is performed, the source must be compact ('_is_compact_layout'), and a Metal
+    backend has no device copy at all.
+    An axis holding a single value accepts any stride, since it holds that single element alone, which is what an
+    unsqueeze of a dense buffer reports as the stride 0 of a broadcast.
     A producer that keeps its layout to itself, as a compiled-graph runtime hands its output over, is described by its
     own DLPack capsule: the DLTensor of the capsule holds the dtype, the shape and the strides, a NULL 'strides' field
     meaning the compact row-major layout of that shape, which is the reading 'dlpack_info' gives it.
@@ -112,7 +131,7 @@ def _device_copy_shape(value, dtype) -> tuple[int, ...] | None:
         shape = tuple(shape)
         if len(shape) > 2 or numpy_dtype(value_dtype) != numpy_dtype(dtype):
             return None
-        return shape if tuple(strides) == _contiguous_strides(shape) else None
+        return shape if _is_compact_layout(shape, tuple(strides)) else None
     # A producer exposing no layout of its own, as a compiled-graph output does, describes it in its capsule alone
     try:
         info = dlpack_info(value)
@@ -120,7 +139,7 @@ def _device_copy_shape(value, dtype) -> tuple[int, ...] | None:
         return None
     if len(info.shape) > 2 or info.dtype != numpy_dtype(dtype) or info.device_type == _kDLCPU:
         return None
-    return info.shape if info.strides == _contiguous_strides(info.shape) else None
+    return info.shape if _is_compact_layout(info.shape, info.strides) else None
 
 
 def _host_values(value) -> np.ndarray:
@@ -262,9 +281,9 @@ def _device_copy_plan(src, dst):
     """The two ends of a device-to-device copy, or None when the stream cannot issue it.
 
     `dst` is the contiguous device buffer of at most two dimensions the copy writes, and the DLPack producer `src` must
-    hold the same dtype with a contiguous layout of its own, on the device of `dst`. A producer exposing no layout of
-    its own, as a raw capsule does, a backend without the asynchronous transfer, as the CPU and Metal ones, and a buffer
-    holding no byte at all are refused, and the caller falls back on 'copy_from_dlpack'.
+    hold the same dtype with a compact layout of its own ('_is_compact_layout'), on the device of `dst`. A producer
+    exposing no layout of its own, as a raw capsule does, a backend without the asynchronous transfer, as the CPU and
+    Metal ones, and a buffer holding no byte at all are refused, and the caller falls back on 'copy_from_dlpack'.
     """
     if gs.backend != gs.amdgpu:
         return None
@@ -272,7 +291,7 @@ def _device_copy_plan(src, dst):
     if not dst_view.is_contiguous or dst_view.ndim > 2 or not dst_view.nbytes:
         return None
     src_info = dlpack_info(src)
-    if src_info.dtype != dst_view.dtype or src_info.strides != _contiguous_strides(src_info.shape):
+    if src_info.dtype != dst_view.dtype or not _is_compact_layout(src_info.shape, src_info.strides):
         return None
     device = dst_view.device
     if (src_info.device_type, src_info.device_id) != (device.dlpack_device_type, device.index):
