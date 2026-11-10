@@ -283,6 +283,21 @@ def _require_zerocopy_for_producer(value, subject: str) -> None:
         )
 
 
+def _require_tensor_for_relative_pose(value, subject: str) -> None:
+    """Refuse a DLPack producer a relative link-pose write on a link carrying a non-identity morph offset.
+
+    Composing the offset onto the authored pose is tensor arithmetic, which an opaque producer, exposing neither
+    indexing nor arithmetic of its own, cannot take; the absolute write of the resulting world pose takes it as it is.
+    A torch tensor and a NumPy array are left untouched, as is every write of a scene whose offsets are the identity.
+    """
+    if is_opaque_producer(value):
+        gs.raise_exception(
+            f"A relative {subject} write on a link with a non-identity morph offset takes a torch.Tensor or a NumPy "
+            "array, which the offset is composed onto. Write the resulting world pose absolutely instead, which "
+            "takes any DLPack producer."
+        )
+
+
 def _split_last_axis(tensor, size: int):
     """The `size` components of the trailing axis of a read, which a device view states with explicit indices."""
     if HAS_TORCH:
@@ -2096,6 +2111,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # Composing the offset is device tensor arithmetic, which a torch-free scene never reaches since its morph
             # offsets are the identity one it strips above
             require_torch("relative link pose with a non-identity morph offset")
+            _require_tensor_for_relative_pose(pos, "link position")
             cur_quat = self.get_links_quat(links_idx, envs_idx, relative=False)[..., 0, :]
             offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)[..., 0, :]
             offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)[..., 0, :]
@@ -2104,11 +2120,17 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             )
             relative = False
 
-        # Zero-copy fast path: single base link, non-relative. Write the position buffer in place instead of
-        # launching a kernel. The kernel path below handles relative or multi-link updates, as well as waking up
-        # hibernated entities, which is required whenever hibernation is enabled.
-        if gs.use_zerocopy and HAS_TORCH and not relative and isinstance(links_idx, int) and not (
-            self._use_hibernation
+        # Zero-copy fast path: single base link, non-relative, from a tensor or a host array. Write the position
+        # buffer in place instead of launching a kernel. The kernel path below handles relative or multi-link updates,
+        # as well as waking up hibernated entities, which is required whenever hibernation is enabled.
+        # An opaque DLPack producer has no indexing to write the buffer with, so it takes the staged branch too.
+        if (
+            gs.use_zerocopy
+            and HAS_TORCH
+            and not relative
+            and isinstance(links_idx, int)
+            and not self._use_hibernation
+            and not is_opaque_producer(pos)
         ):
             link = self.links[links_idx]
             if link.is_fixed:
@@ -2177,6 +2199,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 # Compose the body-frame offset onto the authored position, keeping the current orientation, then set
                 # the resulting world position absolutely.
                 require_torch("relative link pose with a non-identity morph offset")
+                _require_tensor_for_relative_pose(pos, "link position")
                 cur_quat = self._read_data(self.dyn_state.links.quat, envs_idx_, links_idx_)
                 offset_pos = _select_links_offset(self._links_offset_pos, links_idx_, envs_idx_)
                 offset_quat = _select_links_offset(self._links_offset_quat, links_idx_, envs_idx_)
@@ -2282,15 +2305,22 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # Composing the offset is device tensor arithmetic, which a torch-free scene never reaches since its morph
             # offsets are the identity one it strips above
             require_torch("relative link pose with a non-identity morph offset")
+            _require_tensor_for_relative_pose(quat, "link orientation")
             offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)[..., 0, :]
             quat = gu.transform_quat_by_quat(offset_quat, torch.as_tensor(quat, dtype=gs.tc_float, device=gs.device))
             relative = False
 
-        # Zero-copy fast path: single base link, non-relative. Write the quaternion buffer in place instead of
-        # launching a kernel. The kernel path below handles relative or multi-link updates, as well as waking up
-        # hibernated entities, which is required whenever hibernation is enabled.
-        if gs.use_zerocopy and HAS_TORCH and not relative and isinstance(links_idx, int) and not (
-            self._use_hibernation
+        # Zero-copy fast path: single base link, non-relative, from a tensor or a host array. Write the quaternion
+        # buffer in place instead of launching a kernel. The kernel path below handles relative or multi-link updates,
+        # as well as waking up hibernated entities, which is required whenever hibernation is enabled.
+        # An opaque DLPack producer has no indexing to write the buffer with, so it takes the staged branch too.
+        if (
+            gs.use_zerocopy
+            and HAS_TORCH
+            and not relative
+            and isinstance(links_idx, int)
+            and not self._use_hibernation
+            and not is_opaque_producer(quat)
         ):
             link = self.links[links_idx]
             if link.is_fixed:
@@ -2356,6 +2386,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             if relative:
                 require_torch("relative link pose with a non-identity morph offset")
+                _require_tensor_for_relative_pose(quat, "link orientation")
                 offset_quat = _select_links_offset(self._links_offset_quat, links_idx_, envs_idx_)
                 if not relative_pos_passthrough:
                     # The offset position rotates with the orientation, so keep the authored-frame position fixed by
@@ -4005,11 +4036,12 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         come from 'set_drone_rpm' alone, as they do on every path.
 
         `propellers_revs` is the mutable accumulator of the drone, batch-last of shape (n_propellers, n_envs), which
-        this call advances in place: a torch tensor in a torch residency and a 'qd.Ndarray' without PyTorch.
+        this call advances in place: a torch tensor in a torch residency and a 'qd.Ndarray' without PyTorch, both on the
+        device of the scene. It is the only buffer written here, and it wraps at 60 / dt.
         `propellers_rpm` takes the same values as the entity method, laid out batch-first: either the whole
         (n_envs, n_propellers) tile of the scene, or a single row of n_propellers values, bare or as a (1, n_propellers)
-        tile, which every environment takes, as a DLPack producer, a staged Quadrants buffer, a torch tensor on the
-        device, or a host array (see '_stage_drone_rpm').
+        tile, which every environment takes, as a DLPack producer, an already-staged Quadrants buffer, a torch tensor on
+        the device of the scene, or a host array (see '_stage_drone_rpm'). The thrust comes from 'set_drone_rpm' alone.
         """
         n_propellers = propellers_revs.shape[0]
         values = self._stage_drone_rpm(propellers_rpm, n_propellers)
@@ -4024,10 +4056,13 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         reallocating (see 'kernel_broadcast_drone_rpm').
         A torch tensor already on the device, and a Quadrants buffer of the device dtype, reach the kernels as the
         buffer they read, while a DLPack producer is staged device to device and a host array is uploaded (see
-        'torch_free.stage_kernel_values').
+        'torch_free.stage_kernel_values'). A torch tensor living on another device, a host one included, is uploaded the
+        same way as a host array, since a kernel argument has to be a buffer of this device.
         """
-        if is_torch_tensor(propellers_rpm):
+        if is_torch_tensor(propellers_rpm) and propellers_rpm.device == gs.device:
             values = propellers_rpm if propellers_rpm.dtype == gs.tc_float else propellers_rpm.to(gs.tc_float)
+        elif is_torch_tensor(propellers_rpm):
+            values = stage_kernel_values(to_numpy_values(propellers_rpm), gs.qd_float)
         else:
             values = stage_kernel_values(propellers_rpm, gs.qd_float)
         if tuple(values.shape) == (self._B, n_propellers):
