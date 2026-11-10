@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
-import torch
 
 import genesis as gs
 from genesis.engine.bvh import BVHState, BVHStaticConfig, get_bvh_config, get_bvh_data, is_rank_sort
@@ -23,6 +22,7 @@ from genesis.utils.raycast_qd import (
     kernel_refresh_grouped_visual_bvh,
     kernel_refresh_visual_bvh,
 )
+from genesis.utils.torch_compat import torch
 from genesis.vis.rasterizer_context import RasterizerContext
 
 from .base_sensor import (
@@ -528,6 +528,9 @@ class RaycasterReturnType(NamedTuple):
 class RaycasterSensor(
     KinematicSensorMixin, SimpleSensor[RaycasterOptions, RaycastContext, RaycasterSharedMetadata, RaycasterReturnType]
 ):
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "raycaster sensor"
+
     def __init__(self, options: RaycasterOptions, idx: int, shared_context, shared_metadata, manager: "SensorManager"):
         super().__init__(options, idx, shared_context, shared_metadata, manager)
         self.ray_starts: torch.Tensor = torch.empty((0, 3), device=gs.device, dtype=gs.tc_float)

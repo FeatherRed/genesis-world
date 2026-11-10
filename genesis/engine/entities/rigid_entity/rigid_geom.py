@@ -2,7 +2,6 @@ from functools import cached_property
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import skimage
 import trimesh
@@ -12,7 +11,9 @@ import genesis.utils.geom as gu
 from genesis.engine.mesh import Mesh
 from genesis.repr_base import RBC
 from genesis.utils.misc import DeprecationError, qd_to_torch, tensor_to_array
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
+from ..torch_free import first_row
 from .description import RigidGeomDescription, RigidVisGeomDescription
 
 if TYPE_CHECKING:
@@ -254,7 +255,7 @@ class RigidGeom(RBC):
         When 'relative' is True (default), the position reported is that of the authored geom origin. The internal geom
         origin used by the solver is the authored one moved by the entity's morph 'offset_pos' / 'offset_quat'.
         """
-        return self._solver.get_geoms_pos(self._idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_geoms_pos(self._idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_quat(self, envs_idx=None, *, relative=True):
@@ -264,13 +265,14 @@ class RigidGeom(RBC):
         When 'relative' is True (default), the orientation reported is that of the authored geom origin. The internal
         geom origin used by the solver is the authored one moved by the entity's morph 'offset_pos' / 'offset_quat'.
         """
-        return self._solver.get_geoms_quat(self._idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_geoms_quat(self._idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_verts(self):
         """
         Get the vertices of the geom in world frame.
         """
+        require_torch("RigidGeom.get_verts")
         self._solver.update_verts_for_geoms(self._idx)
 
         verts_idx = slice(self.verts_state_start, self.verts_state_end)
@@ -287,6 +289,7 @@ class RigidGeom(RBC):
         """
         Get the vertex-based axis-aligned bounding box (AABB) of the geom in world frame.
         """
+        require_torch("RigidGeom.get_AABB")
         verts = self.get_verts()
         return torch.stack((verts.min(dim=-2).values, verts.max(dim=-2).values), dim=-2)
 
@@ -605,8 +608,13 @@ class RigidVisGeom(RBC):
         self._solver = link.entity.solver
 
         # Lazy-initialize low-res geometry because it is usually unused and may be slow to compute
-        self._init_pos_tc = torch.from_numpy(desc.pos).to(device=gs.device, dtype=gs.tc_float)
-        self._init_quat_tc = torch.from_numpy(desc.quat).to(device=gs.device, dtype=gs.tc_float)
+        if HAS_TORCH:
+            self._init_pos_tc = torch.from_numpy(desc.pos).to(device=gs.device, dtype=gs.tc_float)
+            self._init_quat_tc = torch.from_numpy(desc.quat).to(device=gs.device, dtype=gs.tc_float)
+        else:
+            # Without PyTorch the authored pose stays a host array: only the torch-gated AABB helper reads it.
+            self._init_pos_tc = np.asarray(desc.pos, dtype=gs.np_float)
+            self._init_quat_tc = np.asarray(desc.quat, dtype=gs.np_float)
         self._aabb_verts: torch.Tensor | None = None
 
         self._uid = gs.UID()
@@ -648,7 +656,7 @@ class RigidVisGeom(RBC):
         When 'relative' is True (default), the position reported is that of the authored geom origin. The internal geom
         origin used by the solver is the authored one moved by the entity's morph 'offset_pos' / 'offset_quat'.
         """
-        return self._solver.get_vgeoms_pos(self._idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_vgeoms_pos(self._idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_quat(self, envs_idx=None, *, relative=True):
@@ -658,7 +666,7 @@ class RigidVisGeom(RBC):
         When 'relative' is True (default), the orientation reported is that of the authored geom origin. The internal
         geom origin used by the solver is the authored one moved by the entity's morph 'offset_pos' / 'offset_quat'.
         """
-        return self._solver.get_vgeoms_quat(self._idx, envs_idx, relative=relative)[..., 0, :]
+        return first_row(self._solver.get_vgeoms_quat(self._idx, envs_idx, relative=relative))
 
     @gs.assert_built
     def get_vAABB(self, envs_idx=None):
@@ -668,6 +676,7 @@ class RigidVisGeom(RBC):
         This method computes the bounding box of the geometry after aggressive decimation of its convex hull. This is
         usually sufficiently accurate (<1mm), while significantly improving runtime speed and reducing memory footprint.
         """
+        require_torch("RigidVisGeom.get_vAABB")
         if self._aabb_verts is None:
             # Aggressiveness has been tuned to give sub-millimeter accuracy on Franka robot in random configurations
             aabb_mesh = self.vmesh.copy()
@@ -718,6 +727,7 @@ class RigidVisGeom(RBC):
                 self.vvert_start + custom_offset, self.vvert_end + custom_offset, envs_idx
             )
 
+        require_torch("RigidVisGeom.get_vverts")
         self._solver.update_vgeoms()
         vgeoms_pos = qd_to_torch(self._solver.dyn_state.vgeoms.pos, envs_idx, transpose=True, copy=None)
         vgeoms_quat = qd_to_torch(self._solver.dyn_state.vgeoms.quat, envs_idx, transpose=True, copy=None)

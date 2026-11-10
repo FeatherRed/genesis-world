@@ -1,10 +1,11 @@
 import numpy as np
-import torch
 
 import genesis as gs
 import genesis.utils.geom as gu
 import genesis.utils.particle as pu
 from genesis.repr_base import RBC
+
+from .torch_free import as_device_index
 
 
 class Emitter(RBC):
@@ -166,8 +167,8 @@ class Emitter(RBC):
                     f"number of particles ({self._entity.n_particles})."
                 )
 
-            particles_idx = torch.arange(
-                self._next_particle, self._next_particle + n_particles, dtype=gs.tc_int, device=gs.device
+            particles_idx = as_device_index(
+                np.arange(self._next_particle, self._next_particle + n_particles, dtype=gs.np_int)
             )
 
             self._entity.set_particles_pos(positions, particles_idx)
@@ -233,8 +234,8 @@ class Emitter(RBC):
                 f"of particles ({self._entity.n_particles})."
             )
 
-        particles_idx = torch.arange(
-            self._next_particle, self._next_particle + n_particles, dtype=gs.tc_int, device=gs.device
+        particles_idx = as_device_index(
+            np.arange(self._next_particle, self._next_particle + n_particles, dtype=gs.np_int)
         )
 
         self._entity.set_particles_pos(positions, particles_idx)

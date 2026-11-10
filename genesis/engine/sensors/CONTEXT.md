@@ -7,7 +7,7 @@ Users create sensors with `scene.add_sensor(options)` and read them with `scene.
 
 ## API Surface (flat directory — one module per sensor family or concern)
 
-- `base_sensor.py` — core contracts: `Sensor`, `SimpleSensor`, `SharedSensorContext`, metadata dataclasses, link-attach mixins, ring-pipeline hooks.
+- `base_sensor.py` — core contracts: `Sensor`, `SimpleSensor`, `SharedSensorContext`, metadata dataclasses, link-attach mixins, ring-pipeline hooks, and `Sensor._torch_feature` (the PyTorch capability name reported when a sensor is created without PyTorch).
 - `sensor_manager.py` — `SensorManager`: class registry (`SENSOR_TYPES_MAP`), per-type/per-dtype caches, timeline rings, `read_sensors`, `get_sensors_by_entity`, `_resolve_sensor_cls` lazy discovery.
 - `camera.py` — `CameraReturnType`, `BaseCameraWrapper`/`RasterizerCameraWrapper`/`BatchRendererCameraWrapper`, `BaseCameraSensor`, `RasterizerCameraSensor`, `RaytracerCameraSensor`, `BatchRendererCameraSensor`, per-class `*CameraSharedMetadata`.
 - `depth_camera.py` — `DepthCameraSensor` (thin reshape over `RaycasterSensor`).
@@ -87,6 +87,21 @@ Lifecycle: `activate` (idempotent, called from a consumer's `build`, constructs 
 - Directory is flat by design; kernels and metadata are tightly coupled to their sensor module. Do not split files without reason.
 - Sensors must never modify physics state.
 - `read()`/`read_ground_truth()` return pure views/clones; the caller may mutate the result (manager clones on read).
+
+## Torch-free mode
+
+PyTorch is optional at import time: every module imports it through `genesis.utils.torch_compat` (`from genesis.utils.torch_compat import torch`), never `import torch`.
+With PyTorch absent `torch` is a module-like placeholder: annotations (`torch.Tensor`, `torch.dtype`), `isinstance(x, torch.Tensor)` and subscriptions stay safe, and only *executed* calls raise.
+`tactile_shared.py` binds `F = torch.nn.functional` at module scope, the placeholder-safe equivalent of `import torch.nn.functional as F`.
+No sensor module executes a torch call at import time: module/class bodies, decorators and default arguments only read attributes, and `make_tensor_field` defers `torch.empty` to metadata instantiation.
+
+The sensor layer is PyTorch-backed end to end: `SensorManager` allocates per-class `torch.Tensor` caches and `TensorRingBuffer` timeline rings, `SimpleSensor` caches/post-processes in torch, and camera reads return torch tensors, so sensor *use* requires PyTorch.
+`Sensor._torch_feature` names the capability of each concrete class (`"camera sensor"`, `"IMU sensor"`, `"raycaster sensor"`, `"kinematic taxel sensor"`, `"temperature grid sensor"`, ...).
+`SensorManager.create_sensor` calls `require_torch(sensor_cls._torch_feature)` after `validate_scene` and before any metadata/context allocation, and `Sensor.__init__` gates direct instantiation; without PyTorch both raise `'<feature>' requires PyTorch, which is not installed. Feature: <feature>.` so option-validation errors still take precedence over the missing-torch error.
+
+A scene with **no** sensors stays entirely torch-free: `SensorManager.__init__`, `build`, `step`, `reset`, `destroy`, `read_sensors` and `get_sensors_by_entity` only iterate the empty per-type registries, so `Simulator.build`/`step` never touch torch on that path.
+The runtime torch calls inside sensor bodies stay unguarded on purpose: every one of them is unreachable without PyTorch because the construction-time gate precedes it.
+Do not add `import torch` to a module here, and keep new import-time code free of torch calls.
 
 ## Gotchas / Known Issues
 

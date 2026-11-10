@@ -14,7 +14,7 @@ This module contains Quadrants kernels and functions for:
 
 from enum import IntEnum
 
-import torch
+import numpy as np
 
 import quadrants as qd
 
@@ -23,6 +23,7 @@ import genesis.utils.geom as gu
 from genesis.engine.solvers.rigid.data import DynInfo, DynState, GeomsInitAABB, RigidInfo
 from genesis.grad.bridge import register_custom_backward
 from genesis.utils.data import eoa
+from genesis.utils.torch_compat import HAS_TORCH, torch
 
 from .manual_bw import kernel_manual_forward_kinematics_bw, kernel_manual_forward_velocity_bw
 from .misc import (
@@ -45,6 +46,16 @@ class LINK_SWEEP_PASS(IntEnum):
     INERTIA_FORCE_FOLD = 3
 
 
+def all_envs_idx(dyn_state):
+    """Index of every environment, as the int32 device tensor the replayed kernels are launched over."""
+    n_envs = dyn_state.links.pos.shape[1]
+    if HAS_TORCH:
+        return torch.arange(n_envs, dtype=gs.tc_int, device=gs.device)
+    envs_idx = qd.tensor(gs.qd_int, shape=(n_envs,), backend=qd.Backend.NDARRAY)
+    envs_idx.from_numpy(np.arange(n_envs, dtype=gs.np_int))
+    return envs_idx
+
+
 def reverse_cartesian_space(envs, dyn_state, dyn_info, rigid_info, rigid_config):
     """
     Reverse an update of the cartesian space and of the velocities of the links, from the values it left.
@@ -54,7 +65,7 @@ def reverse_cartesian_space(envs, dyn_state, dyn_info, rigid_info, rigid_config)
     state they derive from. The update is replayed first, stage by stage, to rebuild the intermediates the manual
     reverses read (see kernel_manual_forward_kinematics_bw).
     """
-    envs_idx = torch.arange(dyn_state.links.pos.shape[1], dtype=gs.tc_int, device=gs.device)
+    envs_idx = all_envs_idx(dyn_state)
     kernel_forward_kinematics_replay(envs_idx, dyn_state, dyn_info, rigid_info, rigid_config, is_backward=True)
     kernel_COM_links_replay(dyn_state, dyn_info, rigid_info, rigid_config)
     kernel_update_geoms_replay(dyn_state, dyn_info, rigid_config)
@@ -68,7 +79,7 @@ def reverse_cartesian_space(envs, dyn_state, dyn_info, rigid_info, rigid_config)
 
 def reverse_forward_velocity(envs, dyn_state, dyn_info, rigid_info, rigid_config, is_backward):
     """Reverse an update of the velocities of the links, from the values it left (see reverse_cartesian_space)."""
-    envs_idx = torch.arange(dyn_state.links.pos.shape[1], dtype=gs.tc_int, device=gs.device)
+    envs_idx = all_envs_idx(dyn_state)
     kernel_forward_velocity(envs_idx, dyn_state, dyn_info, rigid_info, rigid_config, is_backward=True)
     kernel_manual_forward_velocity_bw(dyn_state, dyn_info, rigid_info, rigid_config)
 

@@ -1,5 +1,7 @@
 import genesis as gs
 from genesis.repr_base import RBC
+
+from ..torch_free import first_row
 from .description import RigidEqualityDescription
 
 
@@ -37,7 +39,7 @@ class RigidEquality(RBC):
         """
         Get the solver parameters the simulation is currently using for this equality constraint.
         """
-        return self._solver.get_sol_params(eqs_idx=self._idx, envs_idx=None)[..., 0, :]
+        return first_row(self._solver.get_sol_params(eqs_idx=self._idx, envs_idx=None))
 
     # ------------------------------------------------------------------------------------
     # ----------------------------------- properties -------------------------------------

@@ -11,7 +11,6 @@ from itertools import product
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import trimesh
 
@@ -35,6 +34,7 @@ from genesis.utils.misc import (
     unique_rows,
 )
 from genesis.utils.sdf import SDF, SDFInfo
+from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, require_torch, torch
 
 from . import gjk, mpr, support_field
 from .broadphase import func_broad_phase
@@ -131,7 +131,7 @@ class Collider:
 
         self._init_collision_fields()
 
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and HAS_TORCH:
             # Probe every view the zero-copy contact query needs (including the per-call n_contacts and
             # contact_sort_idx ones, which qd_to_torch caches on their fields). If any field sits past 2**31 bytes
             # in its SNode tree no zero-copy view exists, and get_contacts falls back to the gather-kernel path.
@@ -158,6 +158,9 @@ class Collider:
                     )
             except ValueError:
                 self._contact_data = None
+        else:
+            # Without torch no zero-copy view exists, so 'get_contacts' has nothing to probe
+            self._contact_data = None
 
         # Make sure that the initial state is clean
         self.clear()
@@ -862,7 +865,7 @@ class Collider:
 
     def reset(self, envs_idx=None, *, cache_only: bool = True) -> None:
         self._contact_data_cache.clear()
-        if gs.use_zerocopy and self._contact_data is not None:
+        if gs.use_zerocopy and HAS_TORCH and self._contact_data is not None:
             envs_mask = indices_to_mask(envs_idx)
             if not cache_only:
                 first_time = qd_to_torch(self.collider_state.first_time, copy=False)
@@ -892,9 +895,9 @@ class Collider:
         """
         self._contact_data_cache.clear()
         # A kernel wipes the live contacts alone, while views over the contact buffers would wipe every slot of them
-        if not isinstance(envs_idx, torch.Tensor):
+        if not is_torch_tensor(envs_idx):
             envs_idx = self._solver._scene._sanitize_envs_idx(envs_idx)
-        if isinstance(envs_idx, torch.Tensor) and envs_idx.dtype == torch.bool:
+        if is_torch_tensor(envs_idx) and envs_idx.dtype == torch.bool:
             fn = kernel_masked_collider_clear
         else:
             fn = kernel_collider_clear
@@ -945,6 +948,9 @@ class Collider:
     def get_contacts(
         self, as_tensor: bool = True, to_torch: bool = True, keep_batch_dim: bool = False, is_padded: bool = False
     ):
+        # The contact readout is gathered and split as torch tensors, so no cache may be filled without torch
+        require_torch("rigid contact introspection")
+
         # Early return if already pre-computed
         contact_data = self._contact_data_cache.setdefault((as_tensor, to_torch, is_padded), {})
         if contact_data:

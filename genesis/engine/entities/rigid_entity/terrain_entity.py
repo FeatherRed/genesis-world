@@ -1,7 +1,7 @@
 import numpy as np
-import torch
 
 import genesis as gs
+from genesis.utils.torch_compat import HAS_TORCH, torch
 
 from .description import TerrainEntityDescription
 from .rigid_entity import RigidEntity
@@ -19,7 +19,10 @@ class TerrainEntity(RigidEntity):
         super()._load_model()
         # Collider storage covers only the first collision terrain, while height queries support every terrain
         # entity, kinematic ones included. Assigned after the model loads, so it covers a morph and a description.
-        self._terrain_height_field = torch.as_tensor(self.terrain_hf, dtype=gs.tc_float, device=gs.device)
+        if HAS_TORCH:
+            self._terrain_height_field = torch.as_tensor(self.terrain_hf, dtype=gs.tc_float, device=gs.device)
+        else:
+            self._terrain_height_field = np.asarray(self.terrain_hf, dtype=gs.np_float)
 
     @property
     def terrain_hf(self) -> np.ndarray:

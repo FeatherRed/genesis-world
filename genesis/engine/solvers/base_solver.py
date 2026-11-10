@@ -3,7 +3,6 @@ from enum import IntFlag
 from typing import TYPE_CHECKING, NamedTuple, overload
 
 import numpy as np
-import torch
 
 import numba as nb
 
@@ -17,6 +16,7 @@ from genesis.engine.states import SolverCheckpoint
 from genesis.grad.bridge import RolloutGraph
 from genesis.repr_base import RBC
 from genesis.utils.data import CHECKPOINT_KINDS, ArrayItem, ConfigItem, DataItem, DataKind, ScalarItem, fill_data
+from genesis.utils.device_buffer import view_of
 from genesis.utils.misc import (
     assign_indexed_tensor,
     broadcast_tensor,
@@ -31,6 +31,19 @@ from genesis.utils.misc import (
     sanitize_indexed_tensor,
     tensor_to_array,
 )
+from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, require_torch, torch
+from .torch_free import (
+    broadcast_values,
+    device_tensor_from_numpy,
+    envs_index_tensor,
+    index_field,
+    mps_synchronize,
+    owned_view,
+    qd_field,
+    read_view,
+    sanitize_io_variables,
+    stage_kernel_values,
+)
 
 
 if TYPE_CHECKING:
@@ -40,6 +53,10 @@ if TYPE_CHECKING:
 
 # The bits of an errno: those of an int32 without its sign bit, the flags being int32 kernel literals
 ERRNO_BITS = 31
+
+# The number of non-blocking error checks a torch-free scene lets pass between two reads of the error flags: without a
+# pinned copy to read the previous check back, every check reading them to the host would stall the device at every step
+ERRNO_CHECK_INTERVAL = 64
 
 
 class BackwardErrorCode(IntFlag):
@@ -188,6 +205,17 @@ class GravityMixin:
         """
         if self._gravity is None:
             gs.raise_exception(f"{type(self).__name__} holds no body for a gravity to act on.")
+        # A torch-free scene always runs zero-copy, the kernel path below being the one its boolean would select
+        if not HAS_TORCH:
+            if envs_idx is None:
+                # The whole batch in one upload, the environments being the last axis of the buffer
+                self._gravity.from_numpy(broadcast_values(gravity, gs.tc_float, (self._B, 3)))
+            else:
+                envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
+                gravity_ = broadcast_values(gravity, gs.tc_float, (envs_idx_.shape[0], 3), ("envs_idx", ""))
+                kernel_set_gravity(device_tensor_from_numpy(gravity_, gs.tc_float), envs_idx_, self._gravity)
+            return
+
         # Indices are not checked on purpose: deciding to raise means reading a comparison back from the device, which
         # syncs, and this may run every step.
         if gs.use_zerocopy:
@@ -215,11 +243,15 @@ class GravityMixin:
 
         Returns
         -------
-        gravity : torch.Tensor, shape (3,) or (n_envs, 3)
-            The gravity vector of each environment.
+        gravity : torch.Tensor | genesis.utils.device_buffer.DeviceView, shape (3,) or (n_envs, 3)
+            The gravity vector of each environment, as a zero-copy device view in a torch-free scene.
         """
         if self._gravity is None:
             gs.raise_exception(f"{type(self).__name__} holds no body for a gravity to act on.")
+        if not HAS_TORCH:
+            # A buffer of vectors keeps the environments first, the last axis holding the three components
+            tensor = view_of(self._gravity, transpose=len(self._gravity.shape) > 1, row_mask=envs_idx)
+            return tensor[0] if self._sim.n_envs == 0 else tensor
         tensor = qd_to_torch(self._gravity, envs_idx, transpose=True, copy=True)
         return tensor[0] if self._sim.n_envs == 0 else tensor
 
@@ -270,13 +302,20 @@ class Solver(RBC):
         # them and from the backward pass since the last reset of each env (see 'register_errors')
         self._errno: "qd.Tensor | None" = None
         self._error_messages: dict[int, str] = {}
-        self._errno_latched: torch.Tensor | None = None
+        self._errno_latched: "torch.Tensor | qd.Tensor | None" = None
+        # The device-resident mask of the envs whose latched flags are set, which a torch-free scene reads instead of
+        # the boolean tensor the torch path derives from '_errno_latched' (see 'get_error_envs_mask')
+        self._errno_mask: "qd.Tensor | None" = None
         # The page-locked host copy of '_errno_latched' a non-blocking check reads, and the event recorded once it
-        # landed (see 'check_errno')
-        self._errno_host: torch.Tensor | None = None
+        # landed (see 'check_errno'), which only the torch path has
+        self._errno_host: "torch.Tensor | None" = None
         self._errno_event: "torch.cuda.Event | None" = None
         # The context of the check that enqueued the copy 'check_errno' reads next
         self._errno_host_context: str | None = None
+        # The number of non-blocking checks a torch-free scene ran since the last read of the flags, and whether the
+        # flags it read then already raised (see 'check_errno')
+        self._errno_check_count = 0
+        self._errno_reported = False
 
     def _add_force_field(self, force_field):
         self._ffs.append(force_field)
@@ -310,9 +349,13 @@ class Solver(RBC):
 
         A step calls this once it is over, so that 'check_errno' and 'get_error_envs_mask' read '_errno_latched' alone.
         A backward pass restores `errno` with the state before reversing each step, so it calls this once before its
-        first restore and after reversing each step.
+        first restore and after reversing each step. A torch-free scene runs one kernel doing the merge and refreshing
+        the mask of the flagged envs, `_errno_mask`.
         """
         if self._errno is None:
+            return
+        if not HAS_TORCH:
+            kernel_merge_errno(self._errno, self._errno_latched, self._errno_mask)
             return
         # On CPU, numpy views of both share their memory, which spares a torch operation
         if gs.backend == gs.cpu and gs.use_zerocopy.is_supported:
@@ -320,12 +363,26 @@ class Solver(RBC):
         else:
             self._errno_latched |= qd_to_torch(self._errno)
 
-    def get_error_envs_mask(self) -> torch.Tensor:
-        """Return whether each env flagged an error since its last reset (see 'register_errors')."""
+    def get_error_envs_mask(self):
+        """
+        Return whether each env flagged an error since its last reset (see 'register_errors').
+
+        A torch-free scene returns a zero-copy device view of the int32 flags of '_errno_mask', a non-zero entry
+        meaning a flag, where the torch path returns a boolean tensor.
+        """
+        if not HAS_TORCH:
+            return view_of(self._errno_mask)
         return self._errno_latched > 0
 
     def flag_errno(self, code: int, envs_idx=None) -> None:
         """Flag the given error for the given envs, all of them if None, which 'check_errno' then raises."""
+        if not HAS_TORCH:
+            # Flagging no environment flags nothing, and Quadrants has no zero-length buffer to launch a kernel on
+            envs_idx_ = envs_index_tensor(self._scene, envs_idx)
+            if envs_idx_ is None:
+                return
+            kernel_flag_errno(envs_idx_, code, self._errno_latched, self._errno_mask)
+            return
         # The flags of every env are updated through a mask, rather than those of the selected envs alone: indexing by a
         # boolean mask makes torch count the envs it selects to size the result, which waits for the device, and the
         # backward pass flags envs after reversing every step (see 'StepOperation.backward')
@@ -335,6 +392,19 @@ class Solver(RBC):
 
     def clear_errno(self, envs_idx=None) -> None:
         """Clear the errors the solver flagged for the given envs, all of them if None (see 'register_errors')."""
+        if not HAS_TORCH:
+            # Clearing no environment leaves every flag as it is, and Quadrants has no zero-length buffer to launch a
+            # kernel on (see 'envs_index_tensor')
+            envs_idx_ = envs_index_tensor(self._scene, envs_idx)
+            if envs_idx_ is None:
+                return
+            if self._errno is None:
+                kernel_clear_errno(envs_idx_, self._errno_latched, self._errno_mask)
+            else:
+                kernel_clear_errno_flags(envs_idx_, self._errno, self._errno_latched, self._errno_mask)
+            # An error flagged from now on is raised, whatever the flags read before the reset raised (see 'check_errno')
+            self._errno_reported = False
+            return
         envs_mask = indices_to_mask(envs_idx)
         if self._errno is not None:
             if gs.use_zerocopy:
@@ -356,9 +426,14 @@ class Solver(RBC):
         the copy the previous call enqueued is checked instead: an error raises one call later, with the context of the
         call that enqueued it, and the host only waits for the device when it runs ahead of it by more than the interval
         between two calls. A blocking check raises what no copy has reported yet with the context of the last one.
+        Without PyTorch, a non-blocking check reads the flags to the host once every 'ERRNO_CHECK_INTERVAL' calls only,
+        with the context of the newest of them, so that stepping never stalls on the device more than that often.
         `context` says where the check runs, ahead of the message.
         """
         if not self._error_messages:
+            return
+        if not HAS_TORCH:
+            self._check_errno_torch_free(blocking, context)
             return
         if not blocking and self._errno_host is not None:
             self._errno_event.synchronize()
@@ -381,6 +456,55 @@ class Solver(RBC):
         for code, message in self._error_messages.items():
             if errno & code:
                 gs.raise_exception(message if context is None else f"{context}: {message}")
+
+    def _check_errno_torch_free(self, blocking: bool, context: str | None) -> None:
+        """Raise on the flags of '_errno_latched' without a pinned copy, reading them to the host at most every interval.
+
+        A non-blocking check reads the flags once every 'ERRNO_CHECK_INTERVAL' calls, and raises with the context of
+        the newest of them, which is the one-call-late semantics of the CUDA path. The flags a read raised stay raised
+        on the device until a reset, so they raise no second time, like the copy the CUDA path clears (see
+        'check_errno').
+        """
+        self._errno_check_count += 1
+        if not blocking:
+            # The context of the newest check is the one the flags read next are raised with
+            if context is not None:
+                self._errno_host_context = context
+            if self._errno_check_count < ERRNO_CHECK_INTERVAL:
+                return
+        self._errno_check_count = 0
+        errno = int(np.bitwise_or.reduce(view_of(self._errno_latched).to_numpy()))
+        if blocking:
+            raise_context, self._errno_host_context = context, None
+        else:
+            raise_context = self._errno_host_context
+            is_reported, self._errno_reported = self._errno_reported, bool(errno)
+            if is_reported:
+                return
+        if not errno:
+            return
+        for code, message in self._error_messages.items():
+            if errno & code:
+                gs.raise_exception(message if raise_context is None else f"{raise_context}: {message}")
+
+    @staticmethod
+    def _broadcast_values(values, dtype, shape, dim_names=None):
+        """Broadcast values to a host numpy array of `dtype` and `shape`, for a torch-free scene (see 'broadcast_tensor').
+
+        Entities broadcasting the values they hand a solver reuse this rather than importing the helper themselves.
+        """
+        return broadcast_values(values, dtype, shape, dim_names)
+
+    @staticmethod
+    def _stage_kernel_values(value, dtype=None):
+        """Return `value` as the device buffer the kernel of a state setter takes, for a torch-free scene.
+
+        The state a setter writes is the one a getter read, which is a zero-copy device view in a torch-free scene, and
+        the kernels writing the state take 'qd.types.ndarray()' arguments, which a device view is not. A NumPy array, a
+        Quadrants buffer and a DLPack producer are taken as well, as the torch path takes a tensor (see
+        'torch_free.stage_kernel_values'). The setter of the torch path keeps its own handling, and stages nothing.
+        """
+        return stage_kernel_values(value, gs.qd_float if dtype is None else dtype)
 
     def _sanitize_io_variables(
         self,
@@ -410,7 +534,25 @@ class Solver(RBC):
         them in turn leaves (see 'drop_repeated_index'): in a row of indices per env, an earlier occurrence becomes -1,
         which the kernels skip. A write adding its values to the state (`accumulate`) keeps every occurrence, so that
         the values of a repeated index add up.
+
+        In a torch-free scene the values and the indices come back as Quadrants buffers of the same shapes and layout,
+        which the kernels take as they take the torch tensors (see 'torch_free.sanitize_io_variables').
         """
+        if not HAS_TORCH:
+            return sanitize_io_variables(
+                self._scene,
+                tensor,
+                inputs_idx,
+                input_size,
+                idx_name,
+                envs_idx,
+                element_shape,
+                dtype=dtype,
+                batched=batched,
+                batched_idx=batched_idx,
+                skip_allocation=skip_allocation,
+                accumulate=accumulate,
+            )
         if dtype is None:
             dtype = gs.tc_float
         n_envs = self._scene.n_envs
@@ -467,11 +609,18 @@ class Solver(RBC):
         return tensor_, inputs_idx_, envs_idx_
 
     def build(self):
+        if not HAS_TORCH and self._requires_grad:
+            require_torch("differentiable simulation")
         self._B = self._sim._B
-        self._errno_latched = torch.zeros((self._B,), dtype=gs.tc_int, device=gs.device)
-        if gs.device.type == "cuda":
-            self._errno_host = torch.zeros((self._B,), dtype=gs.tc_int, pin_memory=True)
-            self._errno_event = torch.cuda.Event()
+        if HAS_TORCH:
+            self._errno_latched = torch.zeros((self._B,), dtype=gs.tc_int, device=gs.device)
+            if gs.device.type == "cuda":
+                self._errno_host = torch.zeros((self._B,), dtype=gs.tc_int, pin_memory=True)
+                self._errno_event = torch.cuda.Event()
+        else:
+            # Quadrants zeroes the memory of a field, and the mask of the flagged envs starts with none of them
+            self._errno_latched = qd_field(gs.qd_int, (self._B,))
+            self._errno_mask = qd_field(gs.qd_int, (self._B,))
         if self._requires_grad:
             self._error_messages[BackwardErrorCode.INVALID_GRAD_NAN] = (
                 "The backward pass produced a 'nan' or 'inf' gradient of the state. The rollout is likely too stiff to "
@@ -536,10 +685,16 @@ class Solver(RBC):
         passed on to 'qd_to_torch': a getter returning what it reads asks for a copy, since a getter returns by value.
         While the operations of the solver are recorded, the read is one operation of the rollout whose outputs are
         copies of the whole arrays, which a later step leaves untouched, and from which torch selects the slots (see
-        'record_read').
+        'record_read'). A torch-free scene reads zero-copy device views of the arrays instead, the frames and the
+        recording being out of its reach by construction (see 'build').
         """
         is_single = isinstance(data, (qd.Tensor, qd.Field, qd.Ndarray))
         fields = (data,) if is_single else tuple(data)
+        if not HAS_TORCH:
+            # 'read_view' transposes a buffer of vectors on its batch axis rather than on the components its element
+            # holds, which is the axis 'view_of' would move to the front of the view
+            views = [read_view(field, envs_idx, idx) for field in fields]
+            return views[0] if is_single else views
         copy = True if self.is_recording else copy
         if self.has_frames:
             tensors = [qd_to_torch(field, row_mask=0, keepdim=False).movedim(1, 0) for field in fields]
@@ -556,6 +711,22 @@ class Solver(RBC):
             tensors = [tensor[mask] for tensor in tensors]
         return tensors[0] if is_single else tensors
 
+    def _read_state_values(self, data, envs_idx, idx):
+        """
+        Read the given slots of one array of the solver, or of several, as values the caller owns.
+
+        A state snapshot is restored later on, so its values must not follow the solver as it steps: a torch scene reads
+        a copy of the arrays, and a torch-free scene reads a device-to-device copy of them into buffers of its own,
+        rather than the zero-copy views its getters return (see 'owned_view'). The layout is the one of the getters,
+        whatever the kind of the array.
+        """
+        if HAS_TORCH:
+            return self._read_data(data, envs_idx, idx, copy=True)
+        is_single = isinstance(data, (qd.Tensor, qd.Field, qd.Ndarray))
+        fields = (data,) if is_single else tuple(data)
+        views = [owned_view(field, envs_idx, idx) for field in fields]
+        return views[0] if is_single else views
+
     def add_grad_from_state(self, grads, selection) -> None:
         """
         Add the gradients of the tensors of a queried state to the adjoint of the state of the solver.
@@ -571,7 +742,7 @@ class Solver(RBC):
                 else:
                     qd_add_grad(field, grad)
         if gs.use_zerocopy.is_supported and gs.backend == gs.metal:
-            torch.mps.synchronize()
+            mps_synchronize()
 
     def reset_grad(self) -> None:
         """Zero the adjoint of the state of the solver, from which a backward pass starts."""
@@ -592,7 +763,12 @@ class Solver(RBC):
         process off the host, and as numpy arrays otherwise. A boundary checkpoint holds the state at the boundary of
         two steps alone, from which the backward pass of a recorded step replays it: no gradient, frame 0 of the arrays
         holding frames, on the device whatever the backend.
+
+        A boundary checkpoint is the record of a differentiable rollout, so a torch-free scene cannot save one; a full
+        checkpoint holds numpy arrays there, whatever the backend.
         """
+        if boundary_only and not HAS_TORCH:
+            require_torch("differentiable simulation checkpoint")
         arrays = {}
         if boundary_only:
             if self._boundary_items is None:
@@ -606,10 +782,10 @@ class Solver(RBC):
                     if isinstance(item, ConfigItem) or item.kind not in kinds:
                         continue
                     if isinstance(item, ArrayItem):
-                        is_placeholder = not isinstance(item.array, torch.Tensor) and not item.array.shape
+                        is_placeholder = not is_torch_tensor(item.array) and not item.array.shape
                         if item.name in grad_names or is_placeholder:
                             continue
-                        if not isinstance(item.array, torch.Tensor) and item.array.has_grad():
+                        if not is_torch_tensor(item.array) and item.array.has_grad():
                             grad_names.add(f"{item.name}.grad")
                             grad = None
                             if gs.use_zerocopy.is_supported:
@@ -626,7 +802,7 @@ class Solver(RBC):
                     if isinstance(item, ScalarItem) or not gs.use_zerocopy.is_supported:
                         self._boundary_items.items_copied.append(item)
                         continue
-                    if isinstance(item.array, torch.Tensor):
+                    if is_torch_tensor(item.array):
                         view = item.array
                     else:
                         try:
@@ -649,7 +825,7 @@ class Solver(RBC):
                 torch._foreach_copy_(copies, self._boundary_items.views)
                 # The copy reads the arrays on the torch stream, before the next kernel writes them (see qd_zero_grad)
                 if gs.backend == gs.metal:
-                    torch.mps.synchronize()
+                    mps_synchronize()
                 arrays.update(zip(self._boundary_items.names, copies))
             items = self._boundary_items.items_copied
         else:
@@ -660,8 +836,9 @@ class Solver(RBC):
             elif boundary_only and self.has_frames:
                 arrays[item.name] = qd_to_torch(item.array, row_mask=0, keepdim=False, copy=True)
             else:
+                # A torch-free scene holds no device view to copy into, its record being the numpy arrays themselves
                 arrays[item.name] = data_to_array(
-                    item.array, to_torch=boundary_only or gs.use_zerocopy.is_supported, copy=True
+                    item.array, to_torch=HAS_TORCH and (boundary_only or gs.use_zerocopy.is_supported), copy=True
                 )
         # The static configs are provenance, which a boundary checkpoint never leaving the process does without
         configs = {}
@@ -678,6 +855,8 @@ class Solver(RBC):
         recomputing it overrides this to recompute or invalidate that array when the record lacks DERIVED (see
         'DataKind'). On Metal, the caller synchronizes the torch stream before the next kernel (see 'fill_data').
         """
+        if boundary_only and not HAS_TORCH:
+            require_torch("differentiable simulation checkpoint")
         if boundary_only:
             # The arrays with a view are written back in one fused copy, from the copies 'save_checkpoint' made of them
             # in this process, which spares checking them against the scene
@@ -746,3 +925,40 @@ def kernel_set_gravity(tensor: qd.types.ndarray(), envs_idx: qd.types.ndarray(),
     for i_b_ in range(envs_idx.shape[0]):
         for j in qd.static(range(3)):
             gravity[envs_idx[i_b_]][j] = tensor[i_b_, j]
+
+
+# The kernels of the error flags of a torch-free scene, which has no torch operation to merge, mask or clear them
+# (see Solver.update_errno, flag_errno and clear_errno). The qd.Tensor annotation accepts both forms the buffers are
+# allocated in: a field, as the latch and its mask are, and a member of a struct field, as the flags of a solver are.
+
+
+@qd.kernel
+def kernel_merge_errno(errno: qd.Tensor, errno_latched: qd.Tensor, errno_mask: qd.Tensor):
+    for i_b in range(errno_latched.shape[0]):
+        errno_latched[i_b] |= errno[i_b]
+        errno_mask[i_b] = qd.cast(errno_latched[i_b] != 0, qd.i32)
+
+
+@qd.kernel
+def kernel_flag_errno(envs_idx: qd.Tensor, code: qd.i32, errno_latched: qd.Tensor, errno_mask: qd.Tensor):
+    for i_b_ in range(envs_idx.shape[0]):
+        i_b = envs_idx[i_b_]
+        errno_latched[i_b] |= code
+        errno_mask[i_b] = qd.cast(errno_latched[i_b] != 0, qd.i32)
+
+
+@qd.kernel
+def kernel_clear_errno(envs_idx: qd.Tensor, errno_latched: qd.Tensor, errno_mask: qd.Tensor):
+    for i_b_ in range(envs_idx.shape[0]):
+        i_b = envs_idx[i_b_]
+        errno_latched[i_b] = 0
+        errno_mask[i_b] = 0
+
+
+@qd.kernel
+def kernel_clear_errno_flags(envs_idx: qd.Tensor, errno: qd.Tensor, errno_latched: qd.Tensor, errno_mask: qd.Tensor):
+    for i_b_ in range(envs_idx.shape[0]):
+        i_b = envs_idx[i_b_]
+        errno[i_b] = 0
+        errno_latched[i_b] = 0
+        errno_mask[i_b] = 0

@@ -1,5 +1,7 @@
 import numpy as np
-import torch
+
+from genesis.utils.device_buffer import DeviceView
+from genesis.utils.torch_compat import torch
 
 
 def brief(x):
@@ -17,6 +19,11 @@ def brief(x):
             return f"{__repr_name__(x)}: {x.__repr__()}"
         else:
             return f"{__repr_name__(x)}, shape: {x.shape}"
+
+    elif isinstance(x, DeviceView):
+        # A device view carries no values of its own: dumping them would require copying the buffer back to the host,
+        # so the shape, which is what a caller compares between views, is reported without any of the data
+        return f"{__repr_name__(x)}, shape: {x.shape}"
 
     # elif isinstance(x, (gs.IntEnum, gs.UID)):
     #     return x.__repr__()

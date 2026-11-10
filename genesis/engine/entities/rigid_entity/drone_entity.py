@@ -1,6 +1,7 @@
-import torch
+import numpy as np
 
 import genesis as gs
+from genesis.utils.torch_compat import HAS_TORCH, torch
 
 from .description import DroneEntityDescription
 from .rigid_entity import RigidEntity
@@ -16,25 +17,37 @@ class DroneEntity(RigidEntity):
         self._n_propellers = len(morph.propellers_link_name)
 
         propellers_link = gs.List([self.get_link(name) for name in morph.propellers_link_name])
-        self._propellers_link_idx = torch.tensor(
-            [link.idx for link in propellers_link], dtype=gs.tc_int, device=gs.device
-        )
+        propellers_link_idx = [link.idx for link in propellers_link]
+        if HAS_TORCH:
+            self._propellers_link_idx = torch.tensor(propellers_link_idx, dtype=gs.tc_int, device=gs.device)
+        else:
+            self._propellers_link_idx = np.asarray(propellers_link_idx, dtype=gs.np_int)
         try:
-            self._propellers_vgeom_idxs = torch.tensor(
-                [link.vgeoms[0].idx for link in propellers_link], dtype=gs.tc_int, device=gs.device
-            )
+            propellers_vgeom_idxs = [link.vgeoms[0].idx for link in propellers_link]
+            if HAS_TORCH:
+                self._propellers_vgeom_idxs = torch.tensor(propellers_vgeom_idxs, dtype=gs.tc_int, device=gs.device)
+            else:
+                self._propellers_vgeom_idxs = np.asarray(propellers_vgeom_idxs, dtype=gs.np_int)
             self._animate_propellers = True
         except Exception:
             gs.logger.warning("No visual geometry found for propellers. Skipping propeller animation.")
             self._animate_propellers = False
 
-        self._propellers_spin = torch.tensor(morph.propellers_spin, dtype=gs.tc_float, device=gs.device)
+        if HAS_TORCH:
+            self._propellers_spin = torch.tensor(morph.propellers_spin, dtype=gs.tc_float, device=gs.device)
+        else:
+            self._propellers_spin = np.asarray(morph.propellers_spin, dtype=gs.np_float)
         self._model = morph.model
 
     def _build(self):
         super()._build()
 
-        self._propellers_revs = torch.zeros((self._n_propellers, self.solver._B), dtype=gs.tc_float, device=gs.device)
+        if HAS_TORCH:
+            self._propellers_revs = torch.zeros(
+                (self._n_propellers, self.solver._B), dtype=gs.tc_float, device=gs.device
+            )
+        else:
+            self._propellers_revs = np.zeros((self._n_propellers, self.solver._B), dtype=gs.np_float)
         self._prev_prop_t = None
 
     def set_propellers_rpm(self, propellers_rpm):

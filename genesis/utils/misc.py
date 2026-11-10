@@ -2,6 +2,7 @@ import ctypes
 import dataclasses
 import datetime
 import functools
+import glob
 import io
 import logging
 import math
@@ -18,7 +19,6 @@ from itertools import combinations
 from typing import Any, NoReturn
 
 import numpy as np
-import torch
 
 import cpuinfo
 import numba as nb
@@ -34,7 +34,17 @@ from quadrants.lang.kernel import Kernel
 from quadrants.types.enums import AutodiffMode
 
 import genesis as gs
-from genesis.typing import is_sequence
+from genesis.utils.device_buffer import (
+    DeviceInfo,
+    DeviceView,
+    copy_from_dlpack,
+    device_of,
+    dlpack_info,
+    qd_ptr,
+    view_of,
+    zero_copy_supported,
+)
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 
 LOGGER = logging.getLogger(__name__)
@@ -156,6 +166,10 @@ class ZeroCopyMode:
     a block asks for their kernel path through 'disabled', as the recording of a differentiable rollout does to capture
     the kernels of every accessor. The copy helpers (see 'qd_to_torch') read `is_supported` alone, so a copy stays a
     torch operation whichever path the accessors take.
+
+    Without PyTorch, the views are the DLPack `DeviceView`s of 'genesis.utils.device_buffer' instead of torch views,
+    and every copy helper that needs PyTorch raises (see 'require_torch'). Whether views exist at all, and the meaning
+    of `is_supported`, `disabled` and the boolean value are unchanged.
     """
 
     def __init__(self, is_supported: bool | None):
@@ -246,14 +260,184 @@ def set_random_seed(seed):
     # Therefore, we only allow deterministic Quadrants operations.
     random.seed(seed)
     np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if HAS_TORCH:
+        torch.manual_seed(seed)
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+
+
+_PYTORCH_INSTALL_URL = "https://pytorch.org/get-started/locally/"
+
+# Entry points and enumeration of the HIP runtime, as PyTorch is the only other source of the device layout it exposes.
+# The values below are the 'hipDeviceAttribute_t' entries queried by this module, read from the 'hip/hip_runtime_api.h'
+# header of ROCm 7.1 (/opt/rocm/include): the CUDA-compatible entries are numbered by insertion order and the
+# AMD-specific ones start at 10000. A release renumbering them would make a query answer an unrelated attribute, so
+# every answer is validated against a plausibility bound before use (see '_hip_device_attribute' and its callers), and
+# a rejected or failed query falls back on a documented estimate: these values only feed tile-size heuristics.
+_HIP_RUNTIME_LIB_NAME = "libamdhip64.so"
+_HIP_ATTRIBUTE_MULTIPROCESSOR_COUNT = 63
+_HIP_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR = 57
+_HIP_ATTRIBUTE_SHARED_MEMORY_PER_MULTIPROCESSOR = 10002
+_HIP_ATTRIBUTE_SHARED_MEMORY_PER_BLOCK_OPTIN = 75
+_HIP_ATTRIBUTE_WARP_SIZE = 87
+
+# Plausibility bounds of a device layout query, wide enough for every GPU vendor and tight enough to reject the value of
+# an attribute that a renumbering of the enumeration would have answered instead.
+_MAX_GPU_COMPUTE_UNITS = 4096
+_MAX_GPU_THREADS_PER_UNIT = 32768
+_MAX_GPU_SHARED_MEMORY_BYTES = 1024**2
+_AMD_WARP_SIZES = (32, 64)
+
+
+def _rocm_library_dirs() -> list[str]:
+    """Library directories of a ROCm installation, in priority order and without duplicates."""
+    roots = [os.environ[name] for name in ("ROCM_PATH", "ROCM_HOME") if os.environ.get(name)]
+    roots.append("/opt/rocm")
+    roots.extend(sorted(glob.glob("/opt/rocm-*")))
+    lib_dirs: list[str] = []
+    seen_realpaths = set()
+    for root in roots:
+        for subdir in ("lib", "lib64"):
+            lib_dir = os.path.join(root, subdir)
+            real_path = os.path.realpath(lib_dir)
+            if real_path not in seen_realpaths:
+                seen_realpaths.add(real_path)
+                lib_dirs.append(lib_dir)
+    return lib_dirs
+
+
+@functools.lru_cache(maxsize=1)
+def _hip_runtime():
+    """The HIP runtime of the system, or None when it cannot be loaded, for the PyTorch-free device queries.
+
+    PyTorch exposes the device layout through its own runtime, so the torch-free mode has to load the one the AMD driver
+    installs. The bare soname comes first, as the dynamic loader resolves it from the cache of the system; the ROCm
+    directories of the usual locations follow, for an installation that is not registered there. Loading the runtime
+    initializes it in this process, which the AMDGPU backend of Quadrants uses anyway.
+    """
+    candidates = [_HIP_RUNTIME_LIB_NAME]
+    for lib_dir in _rocm_library_dirs():
+        candidates.extend(sorted(glob.glob(os.path.join(lib_dir, f"{_HIP_RUNTIME_LIB_NAME}*"))))
+    for candidate in candidates:
+        try:
+            return ctypes.CDLL(candidate)
+        except OSError:
+            continue
+    return None
+
+
+def _hip_device_attribute(attribute: int, device_idx: int) -> int | None:
+    """One HIP device attribute of the given device, or None if the runtime cannot report it."""
+    runtime = _hip_runtime()
+    if runtime is None:
+        return None
+    value = ctypes.c_int()
+    try:
+        status = runtime.hipDeviceGetAttribute(ctypes.byref(value), attribute, device_idx)
+    except (AttributeError, OSError):
+        # A missing entry point fails only when it is looked up, which an older HIP runtime may well do
+        return None
+    if status != 0:
+        return None
+    return value.value
+
+
+def _hip_compute_unit_count(device_idx: int) -> int | None:
+    """Compute unit count of one AMD GPU, or None when the runtime cannot report a plausible one."""
+    compute_unit_count = _hip_device_attribute(_HIP_ATTRIBUTE_MULTIPROCESSOR_COUNT, device_idx)
+    if compute_unit_count is None or not 1 <= compute_unit_count <= _MAX_GPU_COMPUTE_UNITS:
+        return None
+    return compute_unit_count
+
+
+def _hip_total_memory_gib(device_idx: int) -> float | None:
+    """Total memory of one AMD GPU in GiB, or None when the runtime cannot report it.
+
+    The runtime reports the memory of the device it has current, which 'gs.init' makes the one of the scene, so the
+    requested index is only mirrored for the diagnostics of the caller.
+    """
+    runtime = _hip_runtime()
+    if runtime is None:
+        return None
+    free_bytes, total_bytes = ctypes.c_size_t(), ctypes.c_size_t()
+    try:
+        status = runtime.hipMemGetInfo(ctypes.byref(free_bytes), ctypes.byref(total_bytes))
+    except (AttributeError, OSError):
+        return None
+    if status != 0 or total_bytes.value <= 0:
+        return None
+    return total_bytes.value / 1024**3
+
+
+def _hip_device_name(device_idx: int) -> str:
+    """Name of one AMD GPU, as the runtime reports it, or else as the driver exposes it."""
+    runtime = _hip_runtime()
+    if runtime is not None:
+        name = ctypes.create_string_buffer(256)
+        try:
+            status = runtime.hipDeviceGetName(name, len(name), device_idx)
+        except (AttributeError, OSError):
+            status = -1
+        if status == 0 and name.value:
+            return name.value.decode(errors="replace")
+    for path in sorted(glob.glob("/sys/class/drm/card*/device/product_name")):
+        try:
+            with open(path, encoding="utf-8") as file:
+                name = file.read().strip()
+        except OSError:
+            continue
+        if name:
+            return name
+    return "AMD GPU"
+
+
+def _sysfs_vram_total_gib() -> float | None:
+    """Total memory of the single AMD GPU the machine exposes through sysfs, in GiB, or None otherwise.
+
+    The amdgpu driver reports the memory of every device in its DRM entry, which spares the HIP runtime, but the DRM
+    numbering does not follow the device order of the runtime, so the value is only trusted when one AMD GPU exposes a
+    memory size, which that report then designates unambiguously.
+    """
+    totals: dict[str, int] = {}
+    for path in sorted(glob.glob("/sys/class/drm/card*/device/mem_info_vram_total")):
+        try:
+            with open(path, encoding="utf-8") as file:
+                total_bytes = int(file.read().strip())
+        except (OSError, ValueError):
+            continue
+        if total_bytes > 0:
+            # The compute partitions of one GPU each get a DRM entry of their own, sharing the device directory
+            totals[os.path.realpath(os.path.dirname(path))] = total_bytes
+    if len(totals) != 1:
+        return None
+    return next(iter(totals.values())) / 1024**3
+
+
+def _active_device_index() -> int:
+    """Index of the device the active backend runs on, 0 while 'gs.init' has not resolved it yet."""
+    device = gs.device
+    if device is None or device.index is None:
+        return 0
+    return device.index
+
+
+def _is_qd_arch_supported(arch) -> bool:
+    """Whether the Quadrants backend 'arch' runs on this machine, resolved without PyTorch."""
+    return qd.lang.misc.is_arch_supported(arch)
 
 
 def get_device(backend: gs.constants.backend, device_idx: int | None = None):
     if backend == gs.gpu:
-        if torch.cuda.is_available():
+        if not HAS_TORCH:
+            # Without PyTorch, the only GPU a backend is known to run on ahead of any probe is the AMD one Quadrants
+            # detects, as the CUDA runtime is reached through PyTorch alone.
+            if _is_qd_arch_supported(qd.amdgpu):
+                backend = gs.amdgpu
+            elif sys.platform == "darwin":
+                backend = gs.metal
+            else:
+                gs.raise_exception("No GPU device available.")
+        elif torch.cuda.is_available():
             if torch.version.hip:
                 backend = gs.amdgpu
             else:  # torch.version.cuda:
@@ -264,6 +448,30 @@ def get_device(backend: gs.constants.backend, device_idx: int | None = None):
             gs.raise_exception("No Torch GPU device available.")
 
     if backend in (gs.cuda, gs.amdgpu):
+        if not HAS_TORCH:
+            if backend == gs.cuda:
+                gs.raise_exception(
+                    "The 'cuda' backend requires PyTorch, which is not installed. Install PyTorch following the "
+                    f"instructions at {_PYTORCH_INSTALL_URL} to use it."
+                )
+            if not _is_qd_arch_supported(qd.amdgpu):
+                gs.raise_exception("No AMD GPU device available for backend 'amdgpu'.")
+            if device_idx is None:
+                device_idx = 0
+            # As on ROCm, where PyTorch reports the AMD GPU as a 'cuda' device, whose buffers are DLPack ROCm ones
+            device = DeviceInfo("cuda", device_idx)
+            device_name = _hip_device_name(device_idx)
+            total_mem = _hip_total_memory_gib(device_idx)
+            if total_mem is None:
+                total_mem = _sysfs_vram_total_gib()
+            if total_mem is None:
+                total_mem = 0.0
+                LOGGER.warning(
+                    "Failed to query the total memory of the AMD GPU, which the tile-size heuristics of the "
+                    "shared-memory kernels rely on: they fall back on their own bound. Install PyTorch or set "
+                    "'ROCM_PATH' to query it."
+                )
+            return device, device_name, total_mem, backend
         if (
             not torch.cuda.is_available()
             or (backend == gs.cuda and not torch.version.cuda)
@@ -277,6 +485,11 @@ def get_device(backend: gs.constants.backend, device_idx: int | None = None):
         device_name = device_property.name
         total_mem = device_property.total_memory / 1024**3
     elif backend == gs.metal:
+        if not HAS_TORCH:
+            gs.raise_exception(
+                "The 'metal' backend requires PyTorch, which is not installed. Install PyTorch following the "
+                f"instructions at {_PYTORCH_INSTALL_URL} to use it."
+            )
         # on mac, cpu and gpu are in the same physical hardware and sharing memory
         device, device_name, total_mem, _ = get_device(gs.cpu)
         assert not device_idx, "Specifying device index other than 0 is not support for Torch Metal device."
@@ -290,7 +503,7 @@ def get_device(backend: gs.constants.backend, device_idx: int | None = None):
         device_name = next(filter(None, map(cpu_info.get, ("brand_raw", "hardware_raw", "vendor_id_raw"))))
         total_mem = psutil.virtual_memory().total / 1024**3
         assert not device_idx, "Specifying device index other than 0 is not support for Torch CPU device."
-        device = torch.device("cpu")
+        device = torch.device("cpu") if HAS_TORCH else DeviceInfo("cpu", 0)
     return device, device_name, total_mem, backend
 
 
@@ -298,12 +511,13 @@ def get_gpu_cores_per_unit() -> int:
     """Return the number of compute cores per compute unit of the active GPU, -1 on the CPU backend.
 
     NVIDIA packs 128 CUDA cores per streaming multiprocessor (SM) and AMD/ROCm 64 stream processors per compute unit
-    (CU); Apple Silicon 128 ALUs per GPU core. Other GPU backends (e.g. Vulkan) take the AMD MI350X as a baseline.
+    (CU); Apple Silicon 128 ALUs per GPU core. Other GPU backends (e.g. Vulkan) take the AMD MI350X as a baseline. The
+    torch-free AMDGPU backend keeps the 64 stream processors of a CU, which no driver query reports.
     """
     if gs.backend == gs.cpu:
         return -1
     # FIXME: quadrants should expose a query of the GPU core count and layout for every backend.
-    if torch.cuda.is_available():
+    if HAS_TORCH and torch.cuda.is_available():
         return 64 if torch.version.hip else 128
     if gs.backend == gs.metal:
         return 128
@@ -316,15 +530,24 @@ def get_gpu_core_count() -> int:
     This is the env count above which one-thread-per-env already saturates the GPU, so cooperative or tiled kernels stop
     being worthwhile. Where the driver cannot be queried (Metal, or a GPU without a torch.cuda device) an upper-bound
     estimate of the compute unit count is used: 40 GPU cores on Apple Silicon, the 256 CUs of an AMD MI350X for other
-    GPU backends (e.g. Vulkan). The CPU backend gets -1, so no GPU shares its compiled kernels.
+    GPU backends (e.g. Vulkan). The CPU backend gets -1, so no GPU shares its compiled kernels. Without PyTorch, the
+    count of the AMDGPU backend comes from the HIP runtime of the system, and from the same estimate when it cannot.
     """
     if gs.backend == gs.cpu:
         return -1
     cores_per_unit = get_gpu_cores_per_unit()
-    if torch.cuda.is_available():
+    if HAS_TORCH and torch.cuda.is_available():
         return torch.cuda.get_device_properties(torch.cuda.current_device()).multi_processor_count * cores_per_unit
     if gs.backend == gs.metal:
         return 40 * cores_per_unit
+    if not HAS_TORCH and gs.backend == gs.amdgpu:
+        compute_unit_count = _hip_compute_unit_count(_active_device_index())
+        if compute_unit_count is not None:
+            return compute_unit_count * cores_per_unit
+        LOGGER.debug(
+            "Failed to query the compute unit count of the AMD GPU: falling back on 256 compute units, which is the "
+            "count of an AMD MI350X."
+        )
     # AMD MI350X: 256 compute units (https://www.amd.com/en/products/accelerators/instinct/mi350/mi350x.html). For
     # comparison, an RTX 6000 Blackwell has 188 SMs and an RTX 5090 170, of 128 cores each.
     return 256 * cores_per_unit
@@ -343,7 +566,8 @@ def get_gpu_shared_tile_sizes(max_n_sizes: int) -> tuple[int, ...]:
     tightest candidate, weighted by 1 / n so that every doubling of the size counts the same.
 
     Where the compute unit cannot be queried (Metal, Vulkan), it is taken to hold the shared memory of one block, which
-    then bounds the resident blocks alone. A row count above the largest size has no shared tile.
+    then bounds the resident blocks alone. A row count above the largest size has no shared tile. Without PyTorch, the
+    layout of the AMDGPU backend comes from the HIP runtime of the system, and from the same bound when it cannot.
     """
     if gs.backend == gs.cpu:
         gs.raise_exception("CPU backend not supported by this method.")
@@ -352,7 +576,7 @@ def get_gpu_shared_tile_sizes(max_n_sizes: int) -> tuple[int, ...]:
     # CDNA4 (gfx950) below what its 160 KiB per block holds.
     block_bytes = qd.lang.impl.get_max_shared_memory_bytes(is_lowerbound_ok=True)
     unit_bytes, reserved_bytes, granule_bytes, max_blocks = block_bytes, 0, 1, block_bytes // (8 * 9 * itemsize)
-    if torch.cuda.is_available():
+    if HAS_TORCH and torch.cuda.is_available():
         # CUDA and ROCm alike: a block of these tiles is one warp (wavefront), whose slots bound the resident blocks.
         device_property = torch.cuda.get_device_properties(torch.cuda.current_device())
         unit_bytes = device_property.shared_memory_per_multiprocessor
@@ -378,6 +602,35 @@ def get_gpu_shared_tile_sizes(max_n_sizes: int) -> tuple[int, ...]:
                 max_blocks = min(max_blocks, 24)
             else:
                 max_blocks = min(max_blocks, 32)
+    elif not HAS_TORCH and gs.backend == gs.amdgpu:
+        device_idx = _active_device_index()
+        block_optin_bytes = _hip_device_attribute(_HIP_ATTRIBUTE_SHARED_MEMORY_PER_BLOCK_OPTIN, device_idx)
+        unit_shared_bytes = _hip_device_attribute(_HIP_ATTRIBUTE_SHARED_MEMORY_PER_MULTIPROCESSOR, device_idx)
+        max_threads = _hip_device_attribute(_HIP_ATTRIBUTE_MAX_THREADS_PER_MULTIPROCESSOR, device_idx)
+        warp_size = _hip_device_attribute(_HIP_ATTRIBUTE_WARP_SIZE, device_idx)
+        if block_optin_bytes is not None and 0 < block_optin_bytes <= _MAX_GPU_SHARED_MEMORY_BYTES:
+            block_bytes = max(block_bytes, block_optin_bytes)
+        if unit_shared_bytes is not None and 0 < unit_shared_bytes <= _MAX_GPU_SHARED_MEMORY_BYTES:
+            unit_bytes = unit_shared_bytes
+            reserved_bytes = 0
+        if warp_size in _AMD_WARP_SIZES and max_threads is not None and 0 < max_threads <= _MAX_GPU_THREADS_PER_UNIT:
+            max_blocks = max_threads // warp_size
+        else:
+            max_blocks = block_bytes // (8 * 9 * itemsize)
+        # FIXME: the HIP runtime reports the allocation granularity of the local data share (LDS) only for a whole
+        # device, as a field of the device properties that no attribute exposes, so the 512-byte default is assumed
+        # rather than the granule the instruction set of the device sets.
+        granule_bytes = 512
+        if (
+            block_optin_bytes is None
+            or unit_shared_bytes is None
+            or warp_size not in _AMD_WARP_SIZES
+            or max_threads is None
+        ):
+            LOGGER.debug(
+                "Failed to query the shared-memory layout of the AMD GPU: falling back on the shared memory of a block "
+                "and the 512-byte allocation granule of its local data share."
+            )
 
     # The largest count of resident blocks of each candidate size
     resident_blocks: dict[int, int] = {}
@@ -459,7 +712,23 @@ def harmonic_mean(a, b):
     return 2 * (a * b) / (a + b)
 
 
+def _to_host_array(x) -> np.ndarray:
+    """Host NumPy array of a NumPy array, a torch-free device view or a Quadrants buffer (see 'tensor_to_array')."""
+    if isinstance(x, np.ndarray):
+        return x
+    if isinstance(x, (qd.Tensor, qd.Field, qd.Ndarray)):
+        return qd_to_numpy(x, copy=True)
+    if isinstance(x, DeviceView):
+        return x.to_numpy()
+    raise_exception(
+        f"Expecting a NumPy array, a device view or a Quadrants buffer, got an object of type '{type(x).__name__}'."
+    )
+
+
 def tensor_to_cpu(x):
+    if not HAS_TORCH:
+        # Without PyTorch there is no tensor to move, so the host copy of whatever buffer is given is the counterpart
+        return _to_host_array(x)
     if isinstance(x, torch.Tensor):
         x = x.detach().cpu()
     return x
@@ -473,23 +742,30 @@ def data_to_array(data, *, to_torch: bool = False, copy: bool | None = None):
     """Recursively move every tensor and Quadrants array nested in a container to a CPU numpy array, keeping its layout.
 
     With 'to_torch', each one becomes a torch tensor where it lives instead. With 'copy', the result shares no memory
-    with the tensor or Quadrants array it comes from. A numpy array is returned as it is. A named tuple, such as the
-    reading of a sensor with several outputs, becomes a dict mapping its field names to their values, which is the form
-    recorders label their data by.
+    with the tensor or Quadrants array it comes from. A numpy array is returned as it is, and so is the host copy of a
+    device view, which without PyTorch is the only form a buffer takes. A named tuple, such as the reading of a sensor
+    with several outputs, becomes a dict mapping its field names to their values, which is the form recorders label
+    their data by.
     """
-    if isinstance(data, torch.Tensor):
+    if HAS_TORCH and isinstance(data, torch.Tensor):
         if copy:
             data = data.clone()
         return data if to_torch else tensor_to_array(data)
     if isinstance(data, (qd.Tensor, qd.Field, qd.Ndarray)):
         return qd_to_torch(data, copy=copy) if to_torch else qd_to_numpy(data, copy=copy)
+    if isinstance(data, DeviceView):
+        return data.to_torch(copy=bool(copy)) if to_torch else data.to_numpy()
     if isinstance(data, np.ndarray):
         return data
     if isinstance(data, tuple) and (data_asdict := getattr(data, "_asdict", None)) is not None:
         return {k: data_to_array(v, to_torch=to_torch, copy=copy) for k, v in data_asdict().items()}
     if isinstance(data, Mapping):
         return {k: data_to_array(v, to_torch=to_torch, copy=copy) for k, v in data.items()}
-    if is_sequence(data):
+    # 'genesis.typing' imports PyTorch at module scope for its pydantic aliases, so a torch-free run reaches its helpers
+    # only once a container needs one
+    from genesis.typing import is_sequence as _is_sequence
+
+    if _is_sequence(data):
         return type(data)(data_to_array(v, to_torch=to_torch, copy=copy) for v in data)
     return data
 
@@ -603,6 +879,7 @@ def concat_with_tensor(
     tensor: torch.Tensor, value, expand: tuple[int, ...] | None = None, dim: int = 0, flatten: bool = False
 ):
     """Helper method to concatenate a value (not necessarily a tensor) with a tensor."""
+    require_torch("the concatenation of a value with a tensor, as 'genesis.utils.misc.concat_with_tensor' does")
     if not isinstance(value, torch.Tensor):
         if isinstance(value, (numbers.Real, np.floating, numbers.Integral, np.integer)):
             value = [value]
@@ -642,6 +919,10 @@ def make_tensor_field(shape: tuple[int, ...] = (), dtype_factory: Callable[[], t
     def _default_factory():
         nonlocal shape, dtype_factory
         dtype = dtype_factory() if dtype_factory is not None else gs.tc_float
+        if not HAS_TORCH:
+            # Quadrants refuses a field with a dimension of size 0, which every shape accepted here has, so the table is
+            # an empty placeholder field, the form an unused array takes as a kernel argument either way (see data.py).
+            return qd.field(dtype, shape=())
         return torch.empty(shape, dtype=dtype, device=gs.device)
 
     return field(default_factory=_default_factory)
@@ -864,6 +1145,75 @@ def _maybe_transpose_np(arr, value, transpose):
     return np.moveaxis(arr, len(value.shape) - 1, 0)
 
 
+def _host_view_of(device_view: DeviceView) -> np.ndarray:
+    """Zero-copy NumPy view over a torch-free device view of host memory, its offset, strides and shape included.
+
+    A DLPack import through 'numpy.from_dlpack' would give a read-only array and would refuse a non-contiguous layout,
+    so the memory of the view is wrapped into an array of its own. The caller keeps the Quadrants buffer alive, which
+    the views cached on it by 'qd_to_numpy' guarantee for as long as they are used.
+    """
+    if device_view.device.type != "cpu":
+        gs.raise_exception(
+            f"Cannot alias the memory of the non-host device '{device_view.device}' without PyTorch: "
+            "use 'copy=True' or 'view_of(...).to_numpy()' to read it back."
+        )
+    n_bytes = device_view.itemsize + sum(
+        (size - 1) * abs(stride) * device_view.itemsize for size, stride in zip(device_view.shape, device_view.strides)
+    )
+    buffer = (ctypes.c_ubyte * max(n_bytes, device_view.itemsize)).from_address(device_view.data_ptr)
+    byte_strides = tuple(stride * device_view.itemsize for stride in device_view.strides)
+    return np.ndarray(device_view.shape, dtype=device_view.dtype, buffer=buffer, strides=byte_strides)
+
+
+def _qd_to_numpy_torch_free(value, row_mask, col_mask, keepdim, transpose, copy) -> np.ndarray:
+    """Host copy or NumPy view of a Quadrants buffer without PyTorch (see 'qd_to_numpy')."""
+    if not gs.use_zerocopy.is_supported:
+        # See the copy without zero-copy support of 'qd_to_numpy', which only differs in going through torch
+        if copy is False:
+            gs.raise_exception("Specifying 'copy=False' is not supported if 'gs.use_zerocopy=False'.")
+        return _apply_masks(
+            _maybe_transpose_np(value.to_numpy(), value, transpose),
+            value,
+            row_mask,
+            col_mask,
+            keepdim,
+            copy,
+            to_torch=False,
+        )
+    if gs.backend != gs.cpu:
+        if copy is False:
+            gs.raise_exception("Specifying 'copy=False' is not supported by this method if 'gs.backend != gs.cpu'.")
+        view = view_of(value, transpose=transpose, row_mask=row_mask, col_mask=col_mask, keepdim=keepdim)
+        return view.to_numpy()
+    if row_mask is not None or col_mask is not None:
+        # A masked selection is read back instead of cached: unlike the whole buffer, it is not the layout a getter of
+        # the same buffer asks for next, and 'view_of' leaves it zero-copy whenever its indices are contiguous.
+        view = view_of(value, transpose=transpose, row_mask=row_mask, col_mask=col_mask, keepdim=keepdim)
+        try:
+            array = _host_view_of(view)
+        except (TypeError, ValueError, RuntimeError):
+            if copy is False:
+                raise
+            return view.to_numpy()
+        return array.copy() if copy else array
+    try:
+        array = value._T_np if transpose else value._np
+    except AttributeError:
+        try:
+            np_view = _host_view_of(DeviceView(value))
+        except (TypeError, ValueError, RuntimeError):
+            # A buffer whose memory DLPack does not describe, such as a field of a type it has no code for, is read back
+            if copy is False:
+                raise
+            return _maybe_transpose_np(value.to_numpy(), value, transpose)
+        value._np = np_view
+        value._T_np = _maybe_transpose_np(np_view, value, True)
+        if isinstance(value, qd.Ndarray):
+            value._reset = functools.partial(_reset_ndarray_with_views, value)
+        array = value._T_np if transpose else value._np
+    return array.copy() if copy else array
+
+
 def _apply_masks(out, value, row_mask, col_mask, keepdim, copy, *, to_torch):
     if row_mask is None and col_mask is None:
         return out
@@ -902,6 +1252,7 @@ def qd_to_torch(
         copy (bool, optional): Wether to enforce returning a copy no matter what. None to avoid copy if possible
         without raising an exception if not.
     """
+    require_torch("the conversion of a Quadrants buffer to a PyTorch tensor ('genesis.utils.misc.qd_to_torch')")
     if isinstance(value, qd.Tensor):
         value = value._unwrap()
 
@@ -965,6 +1316,11 @@ def qd_to_numpy(
 ) -> np.ndarray:
     """Converts a Quadrants field / ndarray instance to a Numpy array.
 
+    Without PyTorch, the array aliases the buffer whenever the backend shares its memory with the host (the CPU one) and
+    no copy is requested, and is read back through DLPack otherwise. A masked selection goes through 'view_of', which
+    only accepts slices and contiguous ascending index collections: a strided one would require a copy, so it is refused
+    with an exception instead of being materialized silently, unless 'copy' allows it.
+
     Args:
         value (qd.Field | qd.Ndarray): Field or Ndarray to be converted.
         row_mask (optional): Rows to extract from batch dimension after transpose if requested.
@@ -976,6 +1332,9 @@ def qd_to_numpy(
     """
     if isinstance(value, qd.Tensor):
         value = value._unwrap()
+
+    if not HAS_TORCH:
+        return _qd_to_numpy_torch_free(value, row_mask, col_mask, keepdim, transpose, copy)
 
     # Try efficient shortcut first and only fallback to standard branching if necessary.
     # FIXME: Ideally one should detect if slicing would require a copy to avoid enforcing copy here.
@@ -1115,6 +1474,7 @@ def qd_from_torch(value: qd.Tensor | qd.Field | qd.Ndarray, tensor: torch.Tensor
     On Metal, call `torch.mps.synchronize()` once after a batch of writes, before the next quadrants kernel reads the
     values (see qd_zero_grad).
     """
+    require_torch("the write of a PyTorch tensor into a Quadrants buffer ('genesis.utils.misc.qd_from_torch')")
     if isinstance(value, qd.Tensor):
         value = value._unwrap()
     if gs.use_zerocopy.is_supported:
@@ -1146,6 +1506,7 @@ def qd_add_grad(value: qd.Tensor, grad: torch.Tensor, row: int | None = None) ->
     then covering that entry alone. On Metal, call `torch.mps.synchronize()` once after a batch of additions, before the
     next quadrants kernel reads the adjoint.
     """
+    require_torch("the injection of a PyTorch gradient ('genesis.utils.misc.qd_add_grad')")
     value_grad = value.grad
     if gs.use_zerocopy.is_supported:
         if row is None:
@@ -1171,9 +1532,10 @@ def qd_zero_grad(value) -> None:
     Reverse-mode accumulation in Genesis writes through `qd.atomic_add`, so adjoint buffers must start at zero between
     consecutive `loss.backward()` calls. Solvers call this from `reset_grad` to clear all owned adjoint storage without
     enumerating fields by name. Zeroing goes through an in-place `zero_()` on the zero-copy torch view of each grad
-    buffer, a contiguous memset on the underlying device memory, and through `.fill` without zero-copy. The writes are
-    left unsynchronized so a caller can batch many calls under a single flush: on Metal, call `torch.mps.synchronize()`
-    after the batch and before the next quadrants kernel reads the buffers (see set_base_links_quat).
+    buffer, a contiguous memset on the underlying device memory, and through `.fill` without zero-copy or PyTorch. The
+    writes are left unsynchronized so a caller can batch many calls under a single flush: on Metal, call
+    `torch.mps.synchronize()` after the batch and before the next quadrants kernel reads the buffers (see
+    set_base_links_quat).
     """
     if value is None:
         return
@@ -1185,7 +1547,7 @@ def qd_zero_grad(value) -> None:
 
     if isinstance(value, (qd.Tensor, qd.Field, qd.Ndarray)):
         if value.has_grad():
-            if gs.use_zerocopy.is_supported:
+            if gs.use_zerocopy.is_supported and HAS_TORCH:
                 try:
                     grad_view = qd_to_torch(value.grad, copy=False)
                 except ValueError:
@@ -1195,6 +1557,7 @@ def qd_zero_grad(value) -> None:
                 else:
                     grad_view.zero_()
             else:
+                # Without zero-copy views, or without PyTorch to build them with, the buffer is zeroed whole
                 value.grad.fill(0.0)
         return
 
@@ -1233,6 +1596,7 @@ def sanitize_index(
     dim: int,
     name: str,
 ) -> torch.Tensor:
+    require_torch("the validation of an index into a PyTorch tensor ('genesis.utils.misc.sanitize_index')")
     is_bool_mask = False
     is_negative_wrap_required = False
     if index is None:
@@ -1307,6 +1671,7 @@ def get_last_occurrence(index: torch.Tensor) -> torch.Tensor:
     The positions are computed on the device of the index, without synchronizing it. A write given an index several
     times leaves the value of its last occurrence.
     """
+    require_torch("the deduplication of a PyTorch index ('genesis.utils.misc.get_last_occurrence')")
     n_entries = index.shape[-1]
     index_sorted, order = torch.sort(index, dim=-1, stable=True)
     is_last_sorted = torch.ones_like(index_sorted, dtype=torch.bool)
@@ -1331,6 +1696,7 @@ def drop_repeated_index(
     instead, which the kernels skip. A range, a slice, an integer or a boolean mask holds no repeated entry, and the
     index is returned as it is.
     """
+    require_torch("the compaction of a PyTorch index ('genesis.utils.misc.drop_repeated_index')")
     tensors = tuple(tensors)
     if isinstance(index_input, torch.Tensor):
         if index_input.dtype == torch.bool or index_input.numel() < 2:
@@ -1362,6 +1728,7 @@ def sanitize_indices(
     max_shape: Sequence[int],
     dim_names: tuple[str, ...] | list[str],
 ) -> tuple[torch.Tensor, ...]:
+    require_torch("the validation of indices into a PyTorch tensor ('genesis.utils.misc.sanitize_indices')")
     indices_: list[torch.Tensor] = []
     expected_shape = list(expected_shape)
     for i, dim_idx in enumerate(indices):
@@ -1377,6 +1744,7 @@ def broadcast_tensor(
     expected_shape: tuple[int, ...] | list[int],
     dim_names: tuple[str, ...] | list[str] | None = None,
 ) -> torch.Tensor:
+    require_torch("the broadcast of a value into a PyTorch tensor ('genesis.utils.misc.broadcast_tensor')")
     if dim_names is None:
         dim_names = ("",) * len(expected_shape)
 
@@ -1453,6 +1821,7 @@ def sanitize_indexed_tensor(
     dim_names: tuple[str, ...] | list[str],
     skip_allocation: bool = False,
 ) -> tuple[torch.Tensor | None, tuple[torch.Tensor, ...]]:
+    require_torch("the allocation of an indexed PyTorch tensor ('genesis.utils.misc.sanitize_indexed_tensor')")
     indices_ = sanitize_indices(indices, expected_shape, max_shape, dim_names)
 
     is_preallocated = tensor is not None
@@ -1465,6 +1834,7 @@ def sanitize_indexed_tensor(
 
 def get_indexed_shape(tensor_shape, indices):
     """Compute the resulting shape after advanced indexing without performing the operation."""
+    require_torch("the shape of an advanced PyTorch index ('genesis.utils.misc.get_indexed_shape')")
     ndim = len(tensor_shape)
 
     # Expand ellipsis if present
@@ -1509,6 +1879,7 @@ def assign_indexed_tensor(
     value: "np.typing.ArrayLike",
     dim_names: tuple[str, ...] | list[str] | None = None,
 ) -> None:
+    require_torch("the write of a value into an indexed PyTorch tensor ('genesis.utils.misc.assign_indexed_tensor')")
     if isinstance(tensor, np.ndarray):
         # See broadcast_tensor for arrays with negative strides
         if isinstance(value, np.ndarray) and any(stride < 0 for stride in value.strides):

@@ -2,7 +2,6 @@ import xml.etree.ElementTree as ET
 from pathlib import Path
 
 import numpy as np
-import torch
 
 import trimesh
 
@@ -24,6 +23,7 @@ from genesis.utils.hybrid import (
 from genesis.utils.mesh import load_mesh
 
 from .base_entity import Entity
+from .torch_free import as_device_index
 
 
 class HybridEntity(Entity):
@@ -348,7 +348,7 @@ class HybridEntity(Entity):
         # can only be called here (at sim build)
         if not self.material.use_default_coupling and self._muscle_group_cache is not None:
             self._part_soft.set_muscle(
-                muscle_group=torch.tensor(self._muscle_group_cache, dtype=gs.tc_int, device=gs.device)
+                muscle_group=as_device_index(self._muscle_group_cache)
                 # no muscle direction as the soft body is actuated by rigid parts
             )
 

@@ -2,7 +2,6 @@ import functools
 from pathlib import Path
 
 import numpy as np
-import torch
 
 import trimesh
 
@@ -13,6 +12,7 @@ import genesis.utils.geom as gu
 import genesis.utils.mesh as mu
 import genesis.utils.particle as pu
 from genesis.utils.misc import broadcast_tensor
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 from .base_entity import Entity
 
@@ -274,7 +274,11 @@ class ParticleEntity(Entity):
             origin = pos
 
         self._particles = np.asarray(particles, dtype=gs.np_float, order="C")
-        self._init_particles_offset = torch.tensor(self._particles - origin, dtype=gs.tc_float, device=gs.device)
+        # The initial offsets are read only to place the center of mass, which needs PyTorch for the broadcast
+        if HAS_TORCH:
+            self._init_particles_offset = torch.tensor(self._particles - origin, dtype=gs.tc_float, device=gs.device)
+        else:
+            self._init_particles_offset = np.asarray(self._particles - origin, dtype=gs.np_float)
         self._n_particles = len(self._particles)
 
         gs.logger.info(f"Sampled ~<{self._n_particles:,}>~ particles.")
@@ -299,6 +303,7 @@ class ParticleEntity(Entity):
         # A value without one entry per particle places the center of mass, each particle keeping its initial offset
         shape = np.shape(value)
         if len(shape) == 1 or (len(shape) == 2 and shape[0] != self._n_particles):
+            require_torch("ParticleEntity.set_position")
             value = self._init_particles_offset + broadcast_tensor(value, gs.tc_float, (*shape[:-1], 1, 3))
         self.set_particles_pos(value, envs_idx=envs_idx)
 
@@ -402,7 +407,10 @@ class ParticleEntity(Entity):
             The indices of the environments to set. If None, all environments will be considered. Defaults to None.
         """
         self.set_particles_active(actives, envs_idx=envs_idx)
-        self.active = bool((torch.as_tensor(actives) == gs.ACTIVE).any())
+        if HAS_TORCH:
+            self.active = bool((torch.as_tensor(actives) == gs.ACTIVE).any())
+        else:
+            self.active = bool((np.asarray(actives) == gs.ACTIVE).any())
 
     def activate(self):
         """
@@ -470,6 +478,8 @@ class ParticleEntity(Entity):
             The computed total mass.
         """
         particles_idx = self._get_global_idx(None, self._n_particles, self._particle_start, unsafe=True)
+        # Summing the mass of the particles of every environment needs a reduction over the device buffer
+        require_torch("ParticleEntity.get_mass")
         return torch.atleast_1d(self._solver.get_particles_mass(particles_idx, envs_idx).sum(dim=-1))
 
     # ------------------------------------------------------------------------------------
@@ -493,6 +503,8 @@ class ParticleEntity(Entity):
         closest_idx : torch.Tensor, shape (M,)
             The index of the closest particle.
         """
+        # Distances to every particle and their minimum need device-side linear algebra
+        require_torch("ParticleEntity.find_closest_particle")
         pos = broadcast_tensor(pos, gs.tc_float, (self._scene._B, 3), ("envs_idx", ""))
 
         cur_particles = self.get_particles_pos(envs_idx)

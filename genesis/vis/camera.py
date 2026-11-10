@@ -3,7 +3,6 @@ import time
 from functools import cached_property
 
 import numpy as np
-import torch
 
 import genesis as gs
 import genesis.utils.geom as gu
@@ -11,6 +10,7 @@ from genesis.constants import IMAGE_TYPE
 from genesis.repr_base import RBC
 from genesis.utils.image_exporter import as_grayscale_image
 from genesis.utils.misc import get_entry_point_name, tensor_to_array
+from genesis.utils.torch_compat import require_torch, torch
 from genesis.utils.video_encoder import VideoEncoder
 
 RECORDING_DEFAULT_FPS = 60
@@ -90,6 +90,9 @@ class Camera(RBC):
         env_idx=None,
         debug=False,
     ):
+        # A camera is created to render, and rendering only runs on PyTorch tensors
+        require_torch("camera rendering")
+
         self._idx = idx
         self._uid = gs.UID()
         self._model = model
@@ -455,6 +458,8 @@ class Camera(RBC):
             The rendered surface normal(s).
         """
         # Render the current frame
+        require_torch("camera rendering")
+
         rgb_arr, depth_arr, seg_arr, seg_color_arr, seg_idxc_arr, normal_arr = None, None, None, None, None, None
         if self._batch_renderer is not None:
             rgb_arr, depth_arr, seg_idxc_arr, normal_arr = self._batch_render(
@@ -550,6 +555,8 @@ class Camera(RBC):
             The valid depth mask. boolean array of same shape as depth_arr
         """
         # Compute the (denormalized) depth map
+        require_torch("camera rendering")
+
         if self._batch_renderer is not None:
             _, depth_arr, _, _ = self._batch_render(rgb=False, depth=True, segmentation=False, normal=False)
             # FIXME: Avoid converting to numpy

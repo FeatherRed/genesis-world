@@ -15,7 +15,6 @@ from functools import cached_property
 from typing import TYPE_CHECKING, BinaryIO, Literal, NamedTuple, overload
 
 import numpy as np
-import torch
 
 import trimesh
 
@@ -27,6 +26,7 @@ from genesis.engine.entities.rigid_entity import KinematicEntity
 from genesis.engine.force_fields import ForceField
 from genesis.engine.materials.base import Material
 from genesis.engine.states.solvers import SimState, SimulatorCheckpoint
+from genesis.engine.torch_free import INDEX_DTYPE, envs_index
 from genesis.options import (
     BaseCouplerOptions,
     FEMOptions,
@@ -50,9 +50,11 @@ from genesis.recorders.trajectory import Trajectory, save_checkpoint
 from genesis.repr_base import RBC
 from genesis.utils import serialization
 from genesis.utils.data import DataItem, Namespace, check_data, namespace
+from genesis.utils.device_buffer import DeviceView
 from genesis.utils.misc import sanitize_index, tensor_to_array
 from genesis.utils.serialization import ARRAY_MEMBER, MANIFEST_NAME, pixel_less_textures
 from genesis.utils.tools import RunningMean
+from genesis.utils.torch_compat import HAS_TORCH, no_grad, require_torch, torch
 from genesis.utils.warnings import warn_once
 from genesis.vis import Visualizer
 
@@ -245,6 +247,8 @@ class Scene(RBC):
         self._sample_periods_sum = 0.0
 
         # visualizer
+        if show_viewer:
+            require_torch("interactive viewer")
         self._visualizer = Visualizer(
             scene=self,
             show_viewer=show_viewer,
@@ -523,6 +527,7 @@ class Scene(RBC):
         cutoff : float
             The cutoff angle of the light in degrees. Range: [0.0, 180.0].
         """
+        require_torch("scene lights")
         if not isinstance(self.options.renderer, gs.renderers.RayTracer):
             gs.raise_exception(
                 "This method is only supported by RayTracer. Please use 'add_light' when using BatchRenderer."
@@ -571,6 +576,7 @@ class Scene(RBC):
             The attenuation factor of the light.
             Light intensity will attenuate by distance with (1 / (1 + attenuation * distance ^ 2))
         """
+        require_torch("scene lights")
         if not isinstance(self.options.renderer, gs.renderers.BatchRenderer):
             gs.raise_exception(
                 "This method is only supported by BatchRenderer. Please use 'add_mesh_light' when using RayTracer."
@@ -634,6 +640,7 @@ class Scene(RBC):
         recorder : Recorder
             The created recorder object.
         """
+        require_torch("scene recorder")
         return self._recorder_manager.add_recorder(data_func, rec_options)
 
     @gs.assert_unbuilt
@@ -654,6 +661,8 @@ class Scene(RBC):
         recorder : Recorder
             The created recorder object.
         """
+
+        require_torch("trajectory recording")
 
         def data_func() -> TrajectorySource:
             self._reject_unexportable()
@@ -744,6 +753,7 @@ class Scene(RBC):
         camera : genesis.Camera
             The created camera object.
         """
+        require_torch("scene cameras")
         if denoise is None:
             denoise = sys.platform != "darwin"
         return self._visualizer.add_camera(
@@ -907,7 +917,12 @@ class Scene(RBC):
 
         # true batch size
         self._B = max(1, self.n_envs)
-        self._envs_idx = torch.arange(self._B, dtype=gs.tc_int, device=gs.device)
+        # Without PyTorch the selection of every environment stays on the host, as the index arrays the entity and
+        # solver layers read (see 'genesis.engine.solvers.torch_free')
+        if HAS_TORCH:
+            self._envs_idx = torch.arange(self._B, dtype=gs.tc_int, device=gs.device)
+        else:
+            self._envs_idx = np.arange(self._B, dtype=INDEX_DTYPE)
 
         if self.n_envs_per_row is None:
             self.n_envs_per_row = math.ceil(math.sqrt(self._B))
@@ -996,7 +1011,7 @@ class Scene(RBC):
             emitter.reset()
 
     @gs.assert_built
-    def backward(self, loss: torch.Tensor, *args, **kwargs):
+    def backward(self, loss: "torch.Tensor", *args, **kwargs):
         """
         Differentiates `loss` through the recorded rollout and restores the pre-backward physics state.
 
@@ -1017,6 +1032,7 @@ class Scene(RBC):
         snapshot : SimState
             The physics state the scene was restored to.
         """
+        require_torch("scene backward pass")
         # Snapshot the current state before the backward pass rewinds the physics. The clocks go with it: the backward
         # pass of each step winds them down, and the restore below puts the physics back where they were.
         snapshot = self._get_state()
@@ -1031,7 +1047,7 @@ class Scene(RBC):
 
     def _get_state(self):
         # The scene keeps this state for itself, outside of the autograd graph of a differentiable rollout
-        with torch.no_grad():
+        with no_grad():
             return self._sim.get_state()
 
     @gs.assert_built
@@ -1073,7 +1089,7 @@ class Scene(RBC):
             # The recorders read the state a step starts from, with the inputs the step consumes: 'Simulator.step'
             # zeroes the applied forces at its end. The pre-step callbacks ran, so their inputs are read as well.
             # The recorders read the state for themselves, outside of the autograd graph of a differentiable rollout
-            with step_timer.phase("recorders"), torch.no_grad():
+            with step_timer.phase("recorders"), no_grad():
                 self._recorder_manager.step(self._sim.cur_step_global)
             self._sim.step()
 
@@ -1108,12 +1124,14 @@ class Scene(RBC):
                     gs.logger.info(f"Running at ~<{rate:.2f}>~ FPS.")
 
     @gs.assert_built
-    def get_error_envs_mask(self) -> torch.Tensor:
+    def get_error_envs_mask(self) -> "torch.Tensor | DeviceView":
         """
         Return whether each environment flagged an error since its last reset, such as an overflow of contacts or a 'nan'.
 
         A flagged error raises at the beginning of the next step, before anything else, until it is cleared: by resetting
-        the state of the environment, or with 'clear_errno'.
+        the state of the environment, or with 'clear_errno'. Without PyTorch the result is the zero-copy view of one
+        device-resident buffer, which the next call rewrites, where a torch scene returns a boolean tensor of its own.
+        Either form is accepted by 'clear_errno'.
         """
         return self._sim.get_error_envs_mask()
 
@@ -1448,6 +1466,7 @@ class Scene(RBC):
         The density parameter reduces FK computational load by sampling fewer points, with 1.0 representing the whole
         trajectory.
         """
+        require_torch("scene debug drawing")
         with self._visualizer.viewer_lock:
             N = len(qposs)
             density = np.clip(density, 0.0, 1.0)
@@ -1734,6 +1753,7 @@ class Scene(RBC):
         path : str or os.PathLike
             The '.gstraj' file to write.
         """
+        require_torch("scene checkpoint")
         self._reject_unexportable()
         save_checkpoint(path, TrajectorySource(self._sim, self.desc, self._layout))
 
@@ -1769,6 +1789,7 @@ class Scene(RBC):
         scene : Scene
             The built scene, in the recorded state.
         """
+        require_torch("scene checkpoint")
         trajectory = Trajectory(path, None, show_viewer, viewer_options, vis_options, renderer)
         trajectory.seek(len(trajectory) - 1)
         return trajectory.scene
@@ -1805,6 +1826,7 @@ class Scene(RBC):
         trajectory : Trajectory
             The trajectory, holding the built scene as 'Trajectory.scene'.
         """
+        require_torch("trajectory recording")
         return Trajectory(path, None, show_viewer, viewer_options, vis_options, renderer)
 
     @classmethod
@@ -1857,12 +1879,20 @@ class Scene(RBC):
 
     def _sanitize_envs_idx(
         self, envs_idx: int | range | slice | tuple[int, ...] | list[int] | torch.Tensor | np.ndarray | None
-    ) -> torch.Tensor:
+    ) -> "torch.Tensor | np.ndarray":
         if envs_idx is None:
             return self._envs_idx
 
         if self.n_envs == 0:
             gs.raise_exception("`envs_idx` is not supported for non-parallelized scene.")
+
+        if not HAS_TORCH:
+            # Without PyTorch the selection is what the entity and solver layers read: a contiguous 'int32' host array
+            if isinstance(envs_idx, (int, np.integer)):
+                n_envs = self.n_envs
+                if not -n_envs <= envs_idx < n_envs:
+                    gs.raise_exception(f"`envs_idx` out of range: {envs_idx} not in [{-n_envs}, {n_envs}).")
+            return envs_index(envs_idx, self.n_envs)
 
         if isinstance(envs_idx, slice):
             if envs_idx.step is not None and envs_idx.step < 0:

@@ -3,7 +3,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import quadrants as qd
 
@@ -11,6 +10,7 @@ import genesis as gs
 import genesis.utils.geom as gu
 from genesis.options.sensors.tactile import TactileProbeSensorOptionsMixin
 from genesis.utils.misc import concat_with_tensor, make_tensor_field, tensor_to_array
+from genesis.utils.torch_compat import torch
 
 if TYPE_CHECKING:
     from genesis.ext.pyrender.mesh import Mesh

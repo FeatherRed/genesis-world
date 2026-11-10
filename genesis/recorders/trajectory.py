@@ -22,7 +22,6 @@ import zlib
 from typing import TYPE_CHECKING, NamedTuple
 
 import numpy as np
-import torch
 
 import numba as nb
 import zstandard
@@ -37,6 +36,7 @@ from genesis.utils import serialization
 from genesis.utils.data import ArrayItem, ConfigItem, DataKind, ScalarItem, StaticConfig
 from genesis.utils.misc import data_to_array, tensor_to_array
 from genesis.utils.tools import Rate
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 from .file_writers import BaseFileWriter
 from .recorder_manager import register_recording
@@ -75,10 +75,15 @@ SLOT_BYTES = 2**22
 # than the device takes to encode them.
 DEVICE_ENCODED_FRAME_BYTES = 2**19
 # Whether the CUDA graphs of the frame copies record the events of the slots, which spares a launch per frame. Torch
-# records an event inside a graph capture on ROCm from torch 2.13 with ROCm 7.0 on.
-IS_GRAPH_EVENT_SUPPORTED = not torch.version.hip or (
-    torch.torch_version.TorchVersion(torch.__version__.split("+", 1)[0]) >= (2, 13)
-    and int(torch.version.hip.split(".", 1)[0]) >= 7
+# records an event inside a graph capture on ROCm from torch 2.13 with ROCm 7.0 on. Without PyTorch there is no graph
+# to capture, and the setting stands.
+IS_GRAPH_EVENT_SUPPORTED = (
+    not HAS_TORCH
+    or not torch.version.hip
+    or (
+        torch.torch_version.TorchVersion(torch.__version__.split("+", 1)[0]) >= (2, 13)
+        and int(torch.version.hip.split(".", 1)[0]) >= 7
+    )
 )
 # The bytes of the completed chunks waiting for the I/O thread at most, one chunk being let through whatever its size. A
 # chunk holds many frames compressed, so this absorbs a slow disk far more cheaply than frame slots would, and the
@@ -521,6 +526,8 @@ class TrajectoryFileWriter(BaseFileWriter):
     """
 
     def build(self):
+        # A frame is copied through PyTorch buffers, so recording a trajectory needs PyTorch
+        require_torch("trajectory recording (TrajectoryFile)")
         self._source: TrajectorySource = self._data_func()
         sim = self._source.sim
         # The frames of the steps leave the unused arrays out, as they are read once per step. The last record holds

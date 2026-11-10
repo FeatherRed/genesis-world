@@ -1,5 +1,4 @@
 import numpy as np
-import torch
 
 import trimesh
 
@@ -9,6 +8,7 @@ import genesis as gs
 import genesis.utils.geom as gu
 import genesis.utils.mesh as mu
 from genesis.engine.entities.particle_entity import ParticleEntity
+from genesis.utils.torch_compat import HAS_TORCH, torch
 
 
 class PBDBaseEntity(ParticleEntity):
@@ -297,9 +297,12 @@ class PBD2DEntity(PBDTetEntity):
         self._mass = self._vmesh.area * self.material.rho
 
         self._particles = np.asarray(self._mesh.verts, dtype=gs.np_float)
-        self._init_particles_offset = torch.tensor(
-            self._particles - self._sampled_pos, dtype=gs.tc_float, device=gs.device
-        )
+        # The initial offsets are read only to place the center of mass, which needs PyTorch for the broadcast
+        offsets = self._particles - self._sampled_pos
+        if HAS_TORCH:
+            self._init_particles_offset = torch.tensor(offsets, dtype=gs.tc_float, device=gs.device)
+        else:
+            self._init_particles_offset = np.asarray(offsets, dtype=gs.np_float)
 
         self._edges = np.asarray(self._mesh.get_unique_edges(), dtype=gs.np_int)
 
@@ -414,9 +417,12 @@ class PBD3DEntity(PBDTetEntity):
         tet_cfg = mu.generate_tetgen_config_from_morph(self.morph)
         particles, elems, *_ = self._mesh.tetrahedralize(tet_cfg)
         self._particles = particles.astype(gs.np_float, copy=False)
-        self._init_particles_offset = torch.tensor(
-            self._particles - self._sampled_pos, dtype=gs.tc_float, device=gs.device
-        )
+        # The initial offsets are read only to place the center of mass, which needs PyTorch for the broadcast
+        offsets = self._particles - self._sampled_pos
+        if HAS_TORCH:
+            self._init_particles_offset = torch.tensor(offsets, dtype=gs.tc_float, device=gs.device)
+        else:
+            self._init_particles_offset = np.asarray(offsets, dtype=gs.np_float)
 
         self._elems = elems.astype(gs.np_int, copy=False)
         self._edges = np.array(
