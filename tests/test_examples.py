@@ -20,15 +20,19 @@ IGNORE_SCRIPT_PATTERNS = {
     "*_env.py",
     "behavior_cloning.py",
     "quadcopter_controller.py",
-    # shared helper modules, not runnable demos
+    # Shared helper modules, not runnable demos: named helpers first, then the two device patterns, which are generic on
+    # purpose so the Go2 and drone device graphs/rollouts can never be executed as demos the moment they land. Those
+    # patterns match the POSIX path relative to 'examples/', so '*' crosses '/' and they cover every subdirectory.
     "go2_evox_kernels.py",
     "go2_legacy_reference.py",
     "go2_neat_kernels.py",
-    "go2_device_rollout.py",
     "hover_kernels.py",
     "hover_legacy_reference.py",
-    "hover_device_rollout.py",
+    "*_device_kernels.py",
+    "*_device_rollout.py",
     "neuroevolution/*.py",  # shared neuroevolution layer, including its 'selfcheck.py'
+    # '*_train.py' above already excludes the Torch-free trainer entry points 'go2_neat_train.py' and
+    # 'hover_neat_train.py', so they get no (inert) 'EXAMPLE_DEPENDENCIES' entry.
 }
 
 # Map example scripts or directories to their required optional dependencies.
