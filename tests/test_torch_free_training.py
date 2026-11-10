@@ -11,8 +11,7 @@ whose meta-path blocker refuses ``torch`` and every ``torch.*`` name before anyt
   through the torch-free ``DeviceView`` bridge, with no torch in the child -- on whichever GPU the host exposes,
   since ``gs.gpu`` is the vendor-agnostic enum member that resolves to the AMD, CUDA or Metal backend;
 * the static half: nothing on the torch-free training path imports PyTorch, which now includes the pilots' device
-  residency modules (``go2_device_*.py``, ``hover_device_*.py``), except the sanctioned ``genesis/`` files and one
-  transitional drone module that is allowlisted only while the torch-free drone kernels are missing;
+  residency modules (``go2_device_*.py``, ``hover_device_*.py``), except the sanctioned ``genesis/`` files;
 * the state boundary agrees bit for bit between a torch-free and a torch-present child running the very same scene,
   including one control write with a host NumPy array, which is what a training loop does every step;
 * the Go2 NEAT walking pilot itself trains, in a torch-free child, two generations of eight policies to the numbers
@@ -106,18 +105,6 @@ TORCH_IMPORT_ALLOWLIST = (
     # The differentiable-simulation bridge, which imports 'torch.autograd' on use only: both call sites are below a
     # 'require_torch' guard, so nothing is imported until a gradient-enabled scene asks for it.
     GENESIS_DIR / "grad" / "bridge.py",
-)
-
-#: TRANSITIONAL, and self-cleaning: the drone's zero-copy device rollout still bridges its operands through torch's
-#: DLPack (five lazy 'import torch' statements in the staging and export helpers), unlike the Go2 one, which the pilot
-#: already rewrote torch-free ('go2_device_rollout.py').  It sits on the 'hover_device_*.py' glob, and a lazy import is
-#: still an import, so it cannot pass the scan as it stands.  The exemption exists only while the drone pilot's
-#: torch-free kernels module ('hover_device_kernels.py') is missing: as soon as that module lands, this tuple is empty
-#: and a torch import in the drone rollout fails the scan like any other.  No other pilot file may ever be exempted.
-_TRANSITIONAL_DRONE_ALLOWLIST = (
-    ((EXAMPLES_DIR / "drone" / "hover_device_rollout.py"),)
-    if not (EXAMPLES_DIR / "drone" / "hover_device_kernels.py").exists()
-    else ()
 )
 
 #: Vendored third-party code, which is not part of the torch-free contract.
@@ -644,6 +631,6 @@ def test_no_torch_imports_on_the_training_path():
 
     assert_no_torch_imports(
         TRAINING_PATH,
-        allowlist=(*TORCH_IMPORT_ALLOWLIST, *_TRANSITIONAL_DRONE_ALLOWLIST),
+        allowlist=TORCH_IMPORT_ALLOWLIST,
         exclude=TORCH_IMPORT_EXCLUDES,
     )
