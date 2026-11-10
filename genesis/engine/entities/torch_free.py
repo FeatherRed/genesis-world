@@ -4,8 +4,8 @@ The entity layer must stay importable and usable where PyTorch is not installed:
 through torch-free device views and hand index collections back to the solvers as contiguous NumPy arrays. Every
 helper below keeps the exact PyTorch behaviour when PyTorch is installed, so a call site can use it unconditionally.
 
-Importing this module touches PyTorch only through 'genesis.utils.torch_compat'; in particular it never imports
-'genesis.utils.device_buffer', which loads Quadrants, and recognizes a device view by duck typing instead.
+Importing this module touches PyTorch only through 'genesis.utils.torch_compat', and it imports the device-buffer
+module lazily, so that the entity layer keeps importing before Quadrants is initialized.
 """
 
 from __future__ import annotations
@@ -14,10 +14,17 @@ import numpy as np
 
 from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
-__all__ = ["as_device_index", "as_index_array", "first_row", "stack_values", "to_numpy"]
+__all__ = ["as_device_index", "as_index_array", "first_row", "is_device_view", "stack_values", "to_numpy"]
 
 # Host dtype of an index collection: 'gs.tc_int' is 32-bit wide whatever the simulation precision.
 _INDEX_DTYPE = np.int32
+
+
+def is_device_view(value) -> bool:
+    """Whether 'value' is a torch-free device view, which is the zero-copy read of a solver buffer."""
+    from genesis.utils.device_buffer import DeviceView  # local import: this module loads before Quadrants is initialized
+
+    return isinstance(value, DeviceView)
 
 
 def first_row(value):
