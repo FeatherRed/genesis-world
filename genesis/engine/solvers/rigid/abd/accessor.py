@@ -344,6 +344,7 @@ def kernel_set_links_pos_staged(
     rigid_config: qd.template(),
     is_broadcast: qd.template(),
     is_tile: qd.template(),
+    is_row: qd.template(),
 ):
     """Write the staged link positions into the given links of the given environments, `pos` being batch-first.
 
@@ -351,6 +352,8 @@ def kernel_set_links_pos_staged(
     the selection, in its order: the value written to the link `links_idx[i_l_]` of the environment `envs_idx[i_b_]` is
     `pos[i_b_, i_l_ * 3 + j]` when the buffer holds one row per environment named by `envs_idx`, in its order.
     A broadcast producer holds a single row, which every selected environment takes.
+    A bare-row producer of a single dimension holds the run of components itself, `pos[i_l_ * 3 + j]`, which every
+    selected environment takes as well.
     A whole-tile producer holds one row per environment of the solver, and each selected environment takes the row of
     its own index, `pos[envs_idx[i_b_], i_l_ * 3 + j]`, the rows of the environments it leaves out being ignored.
     """
@@ -365,11 +368,14 @@ def kernel_set_links_pos_staged(
 
         if dyn_info.links.parent_idx[I_l] == -1 and dyn_info.links.is_fixed[I_l]:
             for j in qd.static(range(3)):
-                dyn_state.links.pos[i_l, i_b][j] = pos[i_b_values, i_l_ * 3 + j]
+                # A producer of a single dimension holds the run of components itself, which every environment takes
+                pos_j = pos[i_l_ * 3 + j] if qd.static(is_row) else pos[i_b_values, i_l_ * 3 + j]
+                dyn_state.links.pos[i_l, i_b][j] = pos_j
         else:
             q_start = dyn_info.links.q_start[I_l]
             for j in qd.static(range(3)):
-                rigid_info.qpos[q_start + j, i_b] = pos[i_b_values, i_l_ * 3 + j]
+                pos_j = pos[i_l_ * 3 + j] if qd.static(is_row) else pos[i_b_values, i_l_ * 3 + j]
+                rigid_info.qpos[q_start + j, i_b] = pos_j
 
 
 @qd.kernel(fastcache=True)
@@ -383,6 +389,7 @@ def kernel_set_links_quat_staged(
     rigid_config: qd.template(),
     is_broadcast: qd.template(),
     is_tile: qd.template(),
+    is_row: qd.template(),
 ):
     """Write the staged link orientations into the given links of the given environments, `quat` being batch-first.
 
@@ -390,6 +397,8 @@ def kernel_set_links_quat_staged(
     the selection, in its order: the value written to the link `links_idx[i_l_]` of the environment `envs_idx[i_b_]` is
     `quat[i_b_, i_l_ * 4 + j]` when the buffer holds one row per environment named by `envs_idx`, in its order.
     A broadcast producer holds a single row, which every selected environment takes.
+    A bare-row producer of a single dimension holds the run of components itself, `quat[i_l_ * 4 + j]`, which every
+    selected environment takes as well.
     A whole-tile producer holds one row per environment of the solver, and each selected environment takes the row of
     its own index, `quat[envs_idx[i_b_], i_l_ * 4 + j]`, the rows of the environments it leaves out being ignored.
     """
@@ -404,11 +413,14 @@ def kernel_set_links_quat_staged(
 
         if dyn_info.links.parent_idx[I_l] == -1 and dyn_info.links.is_fixed[I_l]:
             for j in qd.static(range(4)):
-                dyn_state.links.quat[i_l, i_b][j] = quat[i_b_values, i_l_ * 4 + j]
+                # A producer of a single dimension holds the run of components itself, which every environment takes
+                quat_j = quat[i_l_ * 4 + j] if qd.static(is_row) else quat[i_b_values, i_l_ * 4 + j]
+                dyn_state.links.quat[i_l, i_b][j] = quat_j
         else:
             q_start = dyn_info.links.q_start[I_l]
             for j in qd.static(range(4)):
-                rigid_info.qpos[q_start + j + 3, i_b] = quat[i_b_values, i_l_ * 4 + j]
+                quat_j = quat[i_l_ * 4 + j] if qd.static(is_row) else quat[i_b_values, i_l_ * 4 + j]
+                rigid_info.qpos[q_start + j + 3, i_b] = quat_j
 
 
 @qd.func

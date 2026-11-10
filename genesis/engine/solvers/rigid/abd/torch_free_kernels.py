@@ -110,22 +110,29 @@ def kernel_set_qpos_rows_staged(
     rigid_config: qd.template(),
     is_broadcast: qd.template(),
     is_tile: qd.template(),
+    is_row: qd.template(),
 ):
     """Write the staged qpos values into the given qpos of the given environments, `values` being batch-first.
 
-    The kernel mirrors 'kernel_set_qpos' for a staged buffer: the value written to the qpos `qs_idx[i_q_]` of the
-    environment `envs_idx[i_b_]` is `values[i_b_, i_q_]` when the buffer holds one row per environment named by
-    `envs_idx`, in its order.
-    A broadcast producer holds a single row, which every selected environment takes.
-    A whole-tile producer holds one row per environment of the solver, and each selected environment takes the row of
+    The kernel mirrors 'kernel_set_qpos' for a staged buffer, which holds one of four forms of rows of values:
+    a bare element row of shape (len(qs_idx),), which every selected environment takes;
+    a single row of shape (1, len(qs_idx)), which every selected environment takes as well;
+    one row per environment named by `envs_idx`, in its order, whose value written to the qpos `qs_idx[i_q_]` of the
+    environment `envs_idx[i_b_]` is `values[i_b_, i_q_]`;
+    and the whole tile of the solver, which holds one row per environment, each selected environment taking the row of
     its own index, `values[envs_idx[i_b_], i_q_]`, the rows of the environments it leaves out being ignored.
     """
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_q_, i_b_ in qd.ndrange(qs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(rigid_info.qpos))):
-        # The row a selected environment takes is its own row of the whole tile, row 0 of a broadcast producer, and its
-        # position in the selection otherwise
-        i_b_values = envs_idx[i_b_] if qd.static(is_tile) else (0 if qd.static(is_broadcast) else i_b_)
-        rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[i_b_values, i_q_]
+        # A producer of a single dimension holds the element itself, which every selected environment takes
+        if qd.static(is_row):
+            value = values[i_q_]
+        else:
+            # The row a selected environment takes is its own row of the whole tile, row 0 of a broadcast producer, and
+            # its position in the selection otherwise
+            i_b_values = envs_idx[i_b_] if qd.static(is_tile) else (0 if qd.static(is_broadcast) else i_b_)
+            value = values[i_b_values, i_q_]
+        rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = value
 
 
 @qd.kernel(fastcache=True)
