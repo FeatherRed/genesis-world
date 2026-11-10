@@ -27,7 +27,7 @@ from genesis.options.solvers import KinematicOptions
 from genesis.utils.data import ConfigItem, DataItem, DataKind, iter_data
 from genesis.utils.device_buffer import view_of
 from genesis.utils.misc import assign_indexed_tensor, broadcast_tensor, indices_to_mask, qd_to_numpy, qd_to_torch
-from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
+from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, require_torch, torch
 
 from .base_solver import Solver
 from .rigid.abd.accessor import (
@@ -360,15 +360,15 @@ class KinematicSolver(Solver):
             self._links_offset_pos_is_identity = self._links_offset_pos_is_identity.all(axis=0)
         # The link offset tensors are allocated even when every link is identity, so the getter kernels can take them
         # unconditionally. They are device buffers the kernels read in either case, PyTorch making no difference.
-        self._links_offset_pos = _device_buffer_from_numpy(links_offset_pos)
-        self._links_offset_quat = _device_buffer_from_numpy(links_offset_quat)
+        self._links_offset_pos = _offset_buffer_from_numpy(links_offset_pos)
+        self._links_offset_quat = _offset_buffer_from_numpy(links_offset_quat)
         self._vgeoms_offset_pos = self._vgeoms_offset_quat = None
         if not (
             np.allclose(vgeoms_offset_pos, 0.0, atol=gs.EPS)
             and np.allclose(gu.quat_to_xyz(vgeoms_offset_quat), 0.0, atol=gs.EPS)
         ):
-            self._vgeoms_offset_pos = _device_buffer_from_numpy(vgeoms_offset_pos)
-            self._vgeoms_offset_quat = _device_buffer_from_numpy(vgeoms_offset_quat)
+            self._vgeoms_offset_pos = _offset_buffer_from_numpy(vgeoms_offset_pos)
+            self._vgeoms_offset_quat = _offset_buffer_from_numpy(vgeoms_offset_quat)
 
         self.n_qs_ = max(1, self.n_qs)
         self.n_dofs_ = max(1, self.n_dofs)
