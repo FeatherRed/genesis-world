@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import numpy as np
-import torch
+from genesis.utils.torch_compat import torch
 
 import genesis as gs
 from genesis.options.renderers import BatchRenderer as BatchRendererOptions
@@ -227,6 +227,9 @@ class BaseCameraSensor(KinematicSensorMixin, Sensor[OptionsT, None, SharedSensor
     """
 
     uses_ring_pipeline: ClassVar[bool] = False
+
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "camera sensor"
 
     def __init__(
         self,

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
-import torch
+from genesis.utils.torch_compat import torch
 
 import quadrants as qd
 
@@ -119,6 +119,9 @@ class IMUReturnType(NamedTuple):
 
 
 class IMUSensor(RigidSensorMixin[IMUSharedMetadata], SimpleSensor[IMUOptions, None, IMUSharedMetadata, IMUReturnType]):
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "IMU sensor"
+
     def __init__(
         self,
         options: IMUOptions,

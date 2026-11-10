@@ -1,4 +1,4 @@
-import torch
+from genesis.utils.torch_compat import torch
 
 from genesis.options.sensors import DepthCamera as DepthCameraOptions
 
@@ -11,6 +11,9 @@ from .raycaster import RaycastContext, RaycasterReturnType, RaycasterSensor, Ray
 class DepthCameraSensor(
     RaycasterSensor, Sensor[DepthCameraOptions, RaycastContext, RaycasterSharedMetadata, RaycasterReturnType]
 ):
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "depth camera sensor"
+
     def build(self):
         super().build()
 
