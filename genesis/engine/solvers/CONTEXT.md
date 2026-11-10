@@ -5,7 +5,8 @@ It defines the common `Solver` base class (lifecycle, state I/O, error/errno han
 `rigid/` is the project's REFERENCE implementation: the largest, most mature solver, whose `func_*`/`kernel_*` naming and Quadrants kernel structure the other solvers follow.
 
 ## File Map
-- `base_solver.py` (720 lines) — `TimeBasedMixin`, `merge_errno`, `BoundaryItems`, `GravityMixin`, `Solver`, `kernel_set_gravity`.
+- `base_solver.py` (923 lines) — `TimeBasedMixin`, `merge_errno`, `BoundaryItems`, `GravityMixin`, `Solver`, `kernel_set_gravity`, the errno kernels and `ERRNO_CHECK_INTERVAL`.
+- `torch_free.py` — the shared torch-free helpers every solver uses (`read_view`, `DlpackStager`, `broadcast_values`, `index_field`, `qd_field`, `is_dlpack_source`, ...); see "Torch-free mode" below.
 - `kinematic_solver.py` — `KinematicSolver`: forward kinematics, rendering, state get/set, Jacobians/IK for articulated entities; base of `RigidSolver`.
 - `particle_solver.py` — `ParticleSolver`: base of MPM/SPH/PBD; particle state accessors + the `add_vverts` render-skinning kernel. NOT exported from `__init__.py`.
 - `rigid/` — `RigidSolver` + the `abd/`, `collider/`, `constraint/` kernel subpackages (see routing table).
@@ -39,6 +40,7 @@ Framed solvers (MPM, FEM) additionally expose `copy_frame(source, target)`; `Tim
 `register_errors(errno, messages)` declares one bit per error and its message; `update_errno()` merges the device flags into `_errno_latched` once per step (a numba-jitted `merge_errno` runs the CPU merge).
 `check_errno(blocking, context)` raises the first flagged error; non-blocking CUDA checks read a pinned copy enqueued one call earlier.
 `flag_errno`/`clear_errno`/`get_error_envs_mask` set/clear/read per-env flags; `ErrorCode` bits live in `genesis/utils/array_class.py`.
+Without PyTorch the latch stays a `gs.tc_int` qd field and a device-side mask kernel maintains it, so `get_error_envs_mask()` returns a device-resident `DeviceView` and a non-blocking check reads the host only once every `ERRNO_CHECK_INTERVAL` (64) steps (see "Torch-free mode").
 `build()` registers `ErrorCode.INVALID_GRAD_NAN` for differentiable scenes (NaN/inf adjoint of the state).
 
 ### Autodiff hooks
@@ -67,6 +69,16 @@ Solver kernels reach gravity through the solver object, so gravity must be a `qd
 Particle-based solvers (`ParticleSolver`) share particle accessors and reorder particles via a spatial hash; MPM/PBD/SPH each define their own grid/hash layout.
 Differentiable solvers store state in frames (`has_frames`) or use per-substep boundary checkpoints (rigid) so the backward pass can replay each substep.
 
+## Torch-free mode
+Every solver module imports PyTorch through `genesis/utils/torch_compat.py` (`HAS_TORCH`, the `torch` placeholder, `require_torch(feature)`), never as `import torch`: under `HAS_TORCH is False` the `torch` name is a placeholder, so annotations and `isinstance` checks stay valid while every executed torch call sits inside `if HAS_TORCH:` or after a `require_torch` statement.
+`torch_free.py` holds everything the torch-free path shares, so no solver repeats it.
+Reads: `Solver._read_data` keeps `qd_to_torch(..., copy=True)` when torch is present and returns `view_of(field, transpose=True, row_mask=envs_idx, col_mask=idx)` otherwise — a zero-copy `DeviceView` (batch axis LAST in the qd buffer, `transpose=True` moves it first, never a host copy); getters that are one read return that view, and `get_links_vel`/`get_links_acc` gather through a kernel into a qd ndarray as before.
+Writes from a numpy source: `Solver._sanitize_io_variables` has a numpy branch returning the values as a qd tensor plus int32 index arrays, so the existing `kernel_set_*`/`kernel_control_*` entrypoints accept them unchanged; `Solver._broadcast_values` is the numpy counterpart of `broadcast_tensor`.
+Writes from a DLPack producer: a qd field cannot be a `copy_from_dlpack` destination, because fields are contiguous along their first axis and so not contiguous in the batch-last layout, hence `DlpackStager.stage(src, num_values, num_envs, envs_idx=...)` copies the `(n_envs, n_values)` producer device-to-device into a cached contiguous batch-last buffer and the `kernel_*_staged` kernels of `rigid/abd/torch_free_kernels.py` scatter it into the field (including the `ctrl_mode`/`ctrl_vel` bookkeeping); this costs one HIP device synchronize per write, moves no data to the host, and a masked write needs the selection on the host because the bridge splits the copy into contiguous runs.
+`Solver.build` raises `require_torch("differentiable simulation")` for a torch-free `requires_grad` build, and the checkpoint protocol raises `require_torch("differentiable simulation checkpoint")`: frames, recording, boundary checkpoints and gradients are torch-only.
+Reusable helper names: `read_view`, `broadcast_values`, `broadcast_tensor`, `device_tensor_from_numpy`, `index_field`, `qd_field`, `is_dlpack_source`, `is_full_env_selection`, `envs_selection`, `mps_synchronize`, `sanitize_io_variables`, `DlpackStager`, plus `Solver._read_data`/`Solver._sanitize_io_variables`/`Solver._broadcast_values`.
+Still torch-only, each raising `require_torch` with a precise feature name: `get_links_jacobian`, inverse kinematics, terrain height query, the device-arithmetic getters (`get_dofs_actuator_force`, `get_dofs_kp`/`get_dofs_kv`, the energy getters, `get_AABB`, `get_mass_mat` with a dof selection), the COM frame and the relative-pose variants with a non-identity morph offset, contact and equality-constraint introspection, `control_dofs_position_velocity` from two distinct DLPack producers, FEM vertex constraints and MPM state readout.
+
 ## Known Issues / Gotchas
 FEM implicit vs explicit paths: `FEMOptions.use_implicit_solver` selects them, and under `IPCCoupler` the FEM substep is skipped entirely (IPC handles FEM).
 FEM's implicit path solves to round-off in differentiable scenes (`pcg_threshold_rel` differs for f32/f64); its backward pass is the adjoint of the solve root.
@@ -82,6 +94,7 @@ The `FIXME` in `GravityMixin._build_gravity`: Quadrants cannot resolve an ndarra
 
 ## Routing Table
 - `rigid/` -> `RigidSolver` and the ABD compute kernels; the reference implementation. Delegates further to `rigid/abd/`, `rigid/collider/`, `rigid/constraint/` (see its own CONTEXT.md).
+- `torch_free.py` -> the shared torch-free helpers (`read_view`, `DlpackStager`, `broadcast_values`, `index_field`, `qd_field`, `is_dlpack_source`) that every solver and every entity caller routes through (this level).
 - `base_solver.py` -> common solver base, mixins, errno, checkpointing (this level).
 - `kinematic_solver.py` -> articulated FK/state accessors shared with the rigid solver (this level).
 - `particle_solver.py` -> shared particle accessors/skinning for MPM/SPH/PBD (this level).
@@ -98,7 +111,6 @@ The `FIXME` in `GravityMixin._build_gravity`: Quadrants cannot resolve an ndarra
 ## Notes for Agents
 In this sandbox `rg` sometimes returns only one match per file and plain `git grep -n` prints nothing; use `git grep -o -n -E "pattern"` to list definitions with line numbers, and the `read` tool (raise `max_bytes` to 131072 for large files; long lines are clipped).
 Treat the `rigid/CONTEXT.md` (and its `abd/`, `collider/`, `constraint/` children) as authoritative for that subtree; keep this file a routing table plus cross-cutting lifecycle/layout/convention notes.
-Do not modify source code in this task; CONTEXT.md updates only.
 
 ## Test Strategy
 No unit tests live under `solvers/`; physics and differentiable-simulation correctness is exercised by end-to-end scene/example tests elsewhere in the repo.

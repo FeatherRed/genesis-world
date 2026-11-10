@@ -2,7 +2,6 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import quadrants as qd
 
@@ -22,6 +21,7 @@ from genesis.engine.solvers.rigid.data import DynInfo, DynState, RigidErrorCode,
 from genesis.grad.bridge import no_grad
 from genesis.utils.data import DataItem, eoa, iter_data
 from genesis.utils.misc import assign_indexed_tensor, indices_to_mask, qd_to_numpy, qd_to_torch
+from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, require_torch, torch
 
 from ..collider.contact import func_add_contacts_force_to_links
 from . import backward as backward_constraint_solver, linesearch, noslip as constraint_noslip
@@ -135,7 +135,7 @@ if TYPE_CHECKING:
     from genesis.engine.solvers.rigid.rigid_solver import RigidSolver
 
 
-IS_OLD_TORCH = tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8)
+IS_OLD_TORCH = HAS_TORCH and tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8)
 
 
 class ConstraintSolver:
@@ -307,7 +307,8 @@ class ConstraintSolver:
     def reset(self, envs_idx=None):
         self._eq_const_info_cache.clear()
 
-        if gs.use_zerocopy:
+        # Without torch the zero-copy views are unavailable, and the kernel below clears the very same arrays
+        if HAS_TORCH and gs.use_zerocopy:
             envs_mask = indices_to_mask(envs_idx)
             dofs_mask = (slice(None), *envs_mask)
             is_warmstart = qd_to_torch(self.constraint_state.is_warmstart, copy=False)
@@ -324,8 +325,10 @@ class ConstraintSolver:
     def clear(self, envs_idx=None):
         self.reset(envs_idx)
 
-        if gs.use_zerocopy and (
-            not isinstance(envs_idx, torch.Tensor) or (not IS_OLD_TORCH or envs_idx.dtype == torch.bool)
+        if (
+            HAS_TORCH
+            and gs.use_zerocopy
+            and (not is_torch_tensor(envs_idx) or (not IS_OLD_TORCH or envs_idx.dtype == torch.bool))
         ):
             n_constraints = qd_to_torch(self.constraint_state.n_constraints, copy=False)
             n_constraints_equality = qd_to_torch(self.constraint_state.n_constraints_equality, copy=False)
@@ -333,13 +336,13 @@ class ConstraintSolver:
             n_constraints_cone = qd_to_torch(self.constraint_state.n_constraints_cone, copy=False)
             qd_n_equalities = qd_to_torch(self.constraint_state.qd_n_equalities, copy=False)
             n_eq = self._solver._n_equalities
-            if isinstance(envs_idx, torch.Tensor) and envs_idx.dtype == torch.bool:
+            if is_torch_tensor(envs_idx) and envs_idx.dtype == torch.bool:
                 n_constraints.masked_fill_(envs_idx, 0)
                 n_constraints_equality.masked_fill_(envs_idx, 0)
                 n_constraints_frictionloss.masked_fill_(envs_idx, 0)
                 n_constraints_cone.masked_fill_(envs_idx, 0)
                 qd_n_equalities.masked_fill_(envs_idx, n_eq)
-            elif isinstance(envs_idx, torch.Tensor):
+            elif is_torch_tensor(envs_idx):
                 n_constraints.scatter_(0, envs_idx, 0)
                 n_constraints_equality.scatter_(0, envs_idx, 0)
                 n_constraints_frictionloss.scatter_(0, envs_idx, 0)
@@ -356,9 +359,9 @@ class ConstraintSolver:
                 torch.mps.synchronize()
             return
 
-        if not isinstance(envs_idx, torch.Tensor):
+        if not is_torch_tensor(envs_idx):
             envs_idx = self._solver._scene._sanitize_envs_idx(envs_idx)
-        if isinstance(envs_idx, torch.Tensor) and envs_idx.dtype == torch.bool:
+        if is_torch_tensor(envs_idx) and envs_idx.dtype == torch.bool:
             fn = constraint_solver_kernel_masked_clear
         else:
             fn = constraint_solver_kernel_clear
@@ -411,6 +414,9 @@ class ConstraintSolver:
         )
 
     def get_equality_constraints(self, as_tensor: bool = True, to_torch: bool = True):
+        # The readout is built as torch tensors, and 'get_weld_constraints' selects them the same way
+        require_torch("rigid equality constraint introspection")
+
         # Early return if already pre-computed
         eq_const_info = self._eq_const_info_cache.get((as_tensor, to_torch))
         if eq_const_info is not None:
@@ -498,6 +504,8 @@ class ConstraintSolver:
         self, eq_type, link1_idx, link2_idx, anchor_link_idx, anchor_pos, eq_data_tail, envs_idx=None
     ):
         """Register a dynamic constraint between two links in the selected envs (see kernel_add_dynamic_constraint)."""
+        # The duplicate checks below read the equality constraints back as torch tensors
+        require_torch("rigid dynamic constraints")
         # An env selected twice would pass the checks below twice against the same count, then be written twice.
         envs_idx = torch.unique(self._solver._scene._sanitize_envs_idx(envs_idx))
         link1_idx, link2_idx = int(link1_idx), int(link2_idx)
@@ -539,6 +547,8 @@ class ConstraintSolver:
         )
 
     def delete_dynamic_constraint(self, eq_type, link1_idx, link2_idx, envs_idx=None):
+        # The envs are deduplicated as a torch tensor, as in 'add_dynamic_constraint'
+        require_torch("rigid dynamic constraints")
         envs_idx = torch.unique(self._solver._scene._sanitize_envs_idx(envs_idx))
         self._eq_const_info_cache.clear()
         kernel_delete_dynamic_constraint(
