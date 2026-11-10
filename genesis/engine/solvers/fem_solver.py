@@ -3,7 +3,6 @@
 from enum import auto
 
 import numpy as np
-import torch
 
 import igl
 
@@ -20,6 +19,7 @@ from genesis.grad.bridge import custom_backward, no_grad
 from genesis.utils.data import ArrayItem, DataKind
 from genesis.utils.geom import qd_inv_quat, qd_transform_by_quat, qd_transform_quat_by_quat
 from genesis.utils.misc import broadcast_tensor, get_gpu_core_count, qd_isfinite, qd_to_numpy, qd_zero_grad
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 from .base_solver import GravityMixin, Solver, ErrorCode, TimeBasedMixin
 
@@ -1419,7 +1419,8 @@ class FEMSolver(GravityMixin, TimeBasedMixin, Solver):
         it raises an exception.
 
         Returns:
-            torch.Tensor : shape (B, n_vertices, 3) where B is batch size
+            torch.Tensor or qd.Ndarray : shape (B, n_vertices, 3) where B is batch size, a Quadrants ndarray in a build
+            without PyTorch
         """
         if not self.is_active:
             return None
@@ -1434,7 +1435,7 @@ class FEMSolver(GravityMixin, TimeBasedMixin, Solver):
         # rotation of each element from this state.
         if self._use_implicit_solver:
             self.precompute_material_data(0)
-        forces = torch.zeros((self._B, self.n_vertices, 3), dtype=gs.tc_float, device=gs.device)
+        forces = _zeros_buffer(self._B, self.n_vertices, 3)
         self._kernel_get_forces(0, forces)
         return forces
 
@@ -1699,9 +1700,11 @@ class FEMSolver(GravityMixin, TimeBasedMixin, Solver):
             self._kernel_get_verts_pos(0, verts_idx, envs_idx, target_poss)
 
         if link_idx < 0:
-            link_init_pos = torch.zeros((len(envs_idx), 3), dtype=gs.tc_float, device=gs.device)
-            link_init_quat = torch.zeros((len(envs_idx), 4), dtype=gs.tc_float, device=gs.device)
+            link_init_pos = _zeros_buffer(len(envs_idx), 3)
+            link_init_quat = _zeros_buffer(len(envs_idx), 4)
         else:
+            # The frame of the link is read as PyTorch tensors, so following a link is not available without PyTorch
+            require_torch("FEM vertex constraints")
             rigid_solver = self._sim.rigid_solver
             links_envs_idx = envs_idx if self._scene.n_envs > 0 else None
             # The attachment is a configuration of the constraint, which carries no gradient
@@ -1999,3 +2002,12 @@ class FEMSolver(GravityMixin, TimeBasedMixin, Solver):
             i_b = envs_idx[i_b_]
             i_v = verts_idx[i_b_, i_v_]
             self.vertex_constraints[i_v, i_b].is_constrained = False
+
+
+def _zeros_buffer(*shape: int) -> "torch.Tensor | qd.Ndarray":
+    """Allocate a zero-filled buffer of the given shape, as a device tensor or, without PyTorch, a Quadrants ndarray."""
+    if HAS_TORCH:
+        return torch.zeros(shape, dtype=gs.tc_float, device=gs.device)
+    buffer = qd.ndarray(gs.qd_float, shape=shape)
+    buffer.fill(0.0)
+    return buffer

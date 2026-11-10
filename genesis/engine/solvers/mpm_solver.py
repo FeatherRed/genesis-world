@@ -2,7 +2,6 @@ from enum import auto
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import quadrants as qd
 
@@ -21,6 +20,7 @@ from genesis.options.solvers import MPMOptions
 from genesis.utils.data import ArrayItem, DataKind, opt_in
 from genesis.utils.misc import DeprecationError, broadcast_tensor, qd_isfinite, qd_to_torch, qd_zero_grad
 from genesis.utils.sdf import SDFInfo
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 from .particle_solver import ParticleSolver
 
@@ -611,13 +611,15 @@ class MPMSolver(ParticleSolver):
         # safe to wipe here. Forward-only; backward composes p2g/g2p through autodiff and uses reset_grid_and_grad.
         if not self._sim.requires_grad:
             self.reset_dirty_cells(f)
-            if gs.use_zerocopy:
+            if HAS_TORCH and gs.use_zerocopy:
                 grid_dirty_count = qd_to_torch(self.grid_dirty_count, copy=False)
                 grid_dirty_count.zero_()
                 # The next kernel reads the count (see qd_zero_grad in misc.py)
                 if gs.backend == gs.metal:
                     torch.mps.synchronize()
             else:
+                # Without PyTorch there is no tensor view to clear, so the count takes the scalar write of the
+                # non zero-copy build.
                 self.grid_dirty_count[0] = 0
 
         self._kernel_freeze_invalid_envs(f)
@@ -735,6 +737,7 @@ class MPMSolver(ParticleSolver):
             copy=True,
         )
         # The actuation and the activity are inputs of the step, which carry no gradient back
+        require_torch("MPM solver state readout")
         actu, active = [
             qd_to_torch(field, row_mask=0, keepdim=False).movedim(1, 0).clone(memory_format=torch.contiguous_format)
             for field in (self.particles.actu, self.particles_ng.active)
@@ -1041,6 +1044,8 @@ class MPMSolver(ParticleSolver):
             gs.raise_exception("link_idx must be an integer.")
         if not self._constraints_initialized:
             self.init_constraints()
+        # The mask and the frame of the link are PyTorch tensors, so the constraint is not available without it
+        require_torch("MPM particle constraints")
         particles_mask = broadcast_tensor(
             particles_mask, gs.tc_bool, (self._B, -1), ("envs_idx", "particles_idx")
         ).contiguous()
