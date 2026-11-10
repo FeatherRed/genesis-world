@@ -37,6 +37,9 @@ Recorders are created through the `RecorderManager` owned by `Scene`; their whol
 - `.gstraj` format (magic `GSTRAJ4\n`): scene description (as `Scene.export`) + JSON manifest + chunked frames; every part carries length + CRC32, so a crash leaves every completed chunk readable and readers stop at the first untrusted record.
 - Frames are stored block-sparse as XOR differences from the previous frame (256-byte blocks) and zstd-compressed at level 1; a three-thread pipeline (step→slot copy, compression, file I/O) keeps recording off the stepping thread unless compression/disk falls behind.
 - `mode="exact"` stores STATE+DERIVED for bit-for-bit replay; `mode="minimal"` stores STATE only and recomputes DERIVED on seek; the default auto-selects minimal when the exact frame exceeds 4 MiB.
+- Every recorder module imports PyTorch from `genesis.utils.torch_compat`, never directly, so the subtree imports without PyTorch installed.
+- `RecorderManager` constructs, builds, steps, records, resets and stops torch-free when no recorder is registered, and its `record` runs under `torch_compat.no_grad()`.
+- Every file writer and the trajectory writer calls `require_torch` in `build`, before opening any file, so an actual recording raises a clear GenesisException naming the recorder in torch-free mode.
 
 ## Known issues / gotchas
 - The trajectory writer appends a final `LAST` record holding every array but CONSTANT (scratch included) for crash analysis; this is also the checkpoint format (`Scene.save_checkpoint` = a one-frame trajectory).
