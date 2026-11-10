@@ -19,6 +19,8 @@ public entry points it owns are re-exported lazily at the very end of this file,
 module unchanged and keeps both import orders free of cycles.
 
 Nothing here imports PyTorch: 'to_torch' is the only entry point that requires it, and it asks 'torch_compat' first.
+The C++ DLPack export of Quadrants does import it, for every buffer at a nonzero byte offset, so a buffer whose export
+fails for that reason is described from the buffer itself (see '_qd_buffer_info') and still gets a capsule of its own.
 """
 
 from __future__ import annotations
@@ -284,6 +286,8 @@ def dlpack_info(value: Any) -> DLTensorInfo:
     'value' is either a 'dltensor' PyCapsule or any object exporting 'DLPack', including a Quadrants field, ndarray or
     tensor and a NumPy array. The returned record borrows the description of the producer: it stays valid only as long
     as 'value' is alive, and it says nothing about who owns the buffer or how long it lives.
+    A Quadrants buffer whose own DLPack export requires PyTorch, which the C++ layer demands for every buffer at a
+    nonzero byte offset, is described from the buffer itself instead (see '_qd_buffer_info').
 
     Args:
         value: DLPack capsule or DLPack-capable object.
@@ -291,10 +295,22 @@ def dlpack_info(value: Any) -> DLTensorInfo:
     Returns:
         The parsed tensor description, with strides in elements and the byte offset of the data pointer.
     """
-    capsule = _capsule_of(value)
+    if isinstance(value, (qd.Field, qd.Ndarray, qd.Tensor)):
+        try:
+            capsule = _capsule_of(value)
+        except ImportError:
+            # Only the C++ DLPack export of Quadrants needs PyTorch, and only for a nonzero byte offset, so every other
+            # failure, such as an unsupported dtype, keeps surfacing as itself.
+            return _qd_buffer_info(value)
+        return _capsule_info(capsule)
+    return _capsule_info(_capsule_of(value))
+
+
+def _capsule_info(capsule) -> DLTensorInfo:
+    """Description carried by a DLPack v0 capsule, borrowed and never consumed."""
     pointer = _py_capsule_get_pointer(capsule, _DLPACK_CAPSULE_NAME)
     if not pointer:
-        _raise_genesis_error(f"Failed to read the DLPack description carried by '{type(value).__name__}'.")
+        _raise_genesis_error("Failed to read the DLPack description carried by a DLPack capsule.")
     tensor = _DLTensor.from_address(pointer)
     shape = tuple(int(tensor.shape[axis]) for axis in range(tensor.ndim))
     if tensor.strides:
@@ -384,6 +400,154 @@ def _qd_program():
     if program is None:
         _raise_genesis_error("Quadrants has not been initialized yet: call 'gs.init' or 'qd.init' first.")
     return program
+
+
+# ------------------------------------------------------------------------------------------------
+# Torch-free buffer description
+# ------------------------------------------------------------------------------------------------
+
+
+# Scalars this module can describe, keyed by the name Quadrants prints for the dtype. Genesis allocates floats and
+# integers as 'f32'/'f64'/'i32'/'i64' and booleans as 'i8', so this covers every buffer its solvers hold.
+_QD_DTYPES = {
+    "f16": np.dtype(np.float16),
+    "f32": np.dtype(np.float32),
+    "f64": np.dtype(np.float64),
+    "i8": np.dtype(np.int8),
+    "i16": np.dtype(np.int16),
+    "i32": np.dtype(np.int32),
+    "i64": np.dtype(np.int64),
+    "u1": np.dtype(np.bool_),
+    "u8": np.dtype(np.uint8),
+    "u16": np.dtype(np.uint16),
+    "u32": np.dtype(np.uint32),
+    "u64": np.dtype(np.uint64),
+}
+
+
+def _qd_element_shape(value) -> tuple[int, ...]:
+    """Trailing element dimensions of a Quadrants buffer: the vector or matrix of a compound one, none otherwise."""
+    if isinstance(value, qd.Ndarray):
+        return tuple(int(size) for size in value.element_shape)
+    if isinstance(value, qd.MatrixField):
+        return (int(value.n), int(value.m))[: value.ndim]
+    if isinstance(value, qd.ScalarField):
+        return ()
+    _raise_genesis_error(
+        f"The Quadrants buffer of type '{type(value).__name__}' has no DLPack counterpart without PyTorch: only "
+        "scalar, vector and matrix fields and ndarrays are supported."
+    )
+
+
+def _qd_dtype(value) -> np.dtype:
+    """NumPy dtype of one value of a Quadrants buffer, refused rather than guessed when unknown."""
+    name = str(value.dtype)
+    dtype = _QD_DTYPES.get(name)
+    if dtype is None:
+        _raise_genesis_error(
+            f"The Quadrants dtype '{name}' of '{type(value).__name__}' has no DLPack counterpart without PyTorch."
+        )
+    return dtype
+
+
+def _qd_strides(shape: tuple[int, ...], layout: tuple[int, ...] | None) -> tuple[int, ...]:
+    """Strides of a Quadrants buffer, in elements, as its own DLPack export reports them.
+
+    'layout' lists the canonical axes in physical order, so a tagged buffer is contiguous over its permuted physical
+    shape; the canonical strides are that row-major pattern permuted back, and the trailing element dimensions of a
+    compound buffer, which are innermost in both orders, keep theirs.
+    """
+    if layout is None:
+        return _contiguous_strides(shape)
+    num_axes = len(layout)
+    physical_strides = _contiguous_strides(tuple(shape[axis] for axis in layout) + shape[num_axes:])
+    positions = [0] * num_axes
+    for position, axis in enumerate(layout):
+        positions[axis] = position
+    return tuple(physical_strides[positions[axis]] for axis in range(num_axes)) + physical_strides[num_axes:]
+
+
+def _qd_layout(value) -> tuple[int, ...] | None:
+    """Axis permutation a Quadrants buffer is stored with, or None when it is stored in canonical order."""
+    layout = value.layout
+    return None if layout is None else tuple(int(axis) for axis in layout)
+
+
+def _qd_snode_offset(node) -> int:
+    """Byte offset of an SNode in the buffer of its tree, the sum of its offsets in the cells of its ancestors."""
+    offset = 0
+    while node is not None:
+        offset += int(node.offset_bytes_in_parent_cell)
+        node = node.parent
+    return offset
+
+
+def _qd_snode_leaf(node):
+    """First SNode of a subtree carrying a concrete dtype, below the 'gen' nodes holding its children."""
+    while str(node.data_type()) == "gen":
+        if node.get_num_ch() == 0:
+            _raise_genesis_error("A Quadrants SNode tree carries no leaf, so its buffer cannot be described.")
+        node = node.get_ch(0)
+    return node
+
+
+def _qd_field_base(value) -> tuple[int, int, int]:
+    """Base address of the tree buffer a field lives in, and the DLPack device that buffer sits on.
+
+    Quadrants allocates the buffer of a tree once and reports it as the data pointer of every field of the tree, the
+    byte offset of the field separating them. Its export reaches the PyTorch version check only for a field at a nonzero
+    offset, so the leading node of the tree, which sits at offset zero, still exports without PyTorch, and its capsule
+    carries the address of the whole buffer. That address is re-read on every call rather than cached, so a tree whose
+    buffer is replaced by a later materialization can never be described by a stale address.
+    """
+    node = _qd_snode_leaf(_qd_program().get_snode_root(value._snode._snode_tree_id))
+    try:
+        capsule = _qd_program().field_to_dlpack(node, 0, 0, 0)
+    except RuntimeError as e:
+        _raise_genesis_error(
+            f"The Quadrants buffer of '{type(value).__name__}' cannot be described without PyTorch: the buffer of its "
+            "SNode tree is not exportable either.",
+            cause=e,
+        )
+    tensor = _DLTensor.from_address(_py_capsule_get_pointer(capsule, _DLPACK_CAPSULE_NAME))
+    return (
+        int(tensor.data) + int(tensor.byte_offset) - _qd_snode_offset(node),
+        int(tensor.device.device_type),
+        int(tensor.device.device_id),
+    )
+
+
+def _qd_device() -> tuple[int, int]:
+    """DLPack device of the active Quadrants backend, for the buffers no capsule describes."""
+    backend = _runtime_backend()
+    device = DeviceInfo(type="cpu" if backend == "cpu" else "cuda", index=0)
+    return device.dlpack_device_type, device.index
+
+
+def _qd_buffer_info(value) -> DLTensorInfo:
+    """Description of a Quadrants buffer read off the buffer itself, for the ones DLPack only describes with PyTorch."""
+    qd.lang.impl.get_runtime().materialize()
+    source = _unwrap_qd(value)
+    shape = tuple(int(size) for size in source.shape) + _qd_element_shape(source)
+    dtype = _qd_dtype(source)
+    if isinstance(source, qd.Ndarray):
+        data_ptr = _qd_program().get_ndarray_data_ptr_as_int(source.arr)
+        byte_offset = 0
+        device_type, device_id = _qd_device()
+    else:
+        data_ptr, device_type, device_id = _qd_field_base(source)
+        byte_offset = _qd_snode_offset(source._snode.ptr)
+    return DLTensorInfo(
+        data_ptr=data_ptr,
+        device_type=device_type,
+        device_id=device_id,
+        shape=shape,
+        strides=_qd_strides(shape, _qd_layout(source)),
+        dtype=dtype,
+        itemsize=dtype.itemsize,
+        nbytes=_nbytes(shape, dtype.itemsize),
+        byte_offset=byte_offset,
+    )
 
 
 def device_of(value: Any) -> DeviceInfo:
@@ -571,9 +735,17 @@ class DeviceView:
 
     def to_dlpack(self, *, versioned: bool = False):
         """Export the view as a fresh DLPack capsule, which the caller must hand over to a single consumer."""
-        if self.is_base_view:
-            if isinstance(self._source, (qd.Field, qd.Ndarray, qd.Tensor)):
+        if self.is_base_view and isinstance(self._source, (qd.Field, qd.Ndarray, qd.Tensor)):
+            try:
                 return self._source.to_dlpack(versioned=versioned)
+            except ImportError:
+                # The C++ export of Quadrants needs PyTorch for any buffer at a nonzero byte offset, while the capsule
+                # built from the description of this view needs nothing: only a v1 capsule has no torch-free builder.
+                if versioned:
+                    _raise_genesis_error(
+                        "A DLPack v1 capsule of a Quadrants buffer at a nonzero byte offset requires PyTorch."
+                    )
+                return _export_capsule(self)
         if versioned:
             _raise_genesis_error(
                 "A DLPack v1 capsule can only be exported for a whole Quadrants buffer, not for a partial view."
