@@ -72,6 +72,7 @@ from .torch_free import (
     broadcast_values,
     device_tensor_from_numpy,
     index_field,
+    index_tensor,
     is_dlpack_source,
     owned_view,
     read_view,
@@ -1312,7 +1313,7 @@ class KinematicSolver(Solver):
             )
             is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
             is_dof_set[to_numpy_values(dofs_idx)] = 1
-            is_dof_set = device_tensor_from_numpy(is_dof_set, gs.tc_int)
+            is_dof_set = index_tensor(is_dof_set)
             write_envs_idx = index_field(None, self._B, "envs_idx")
         else:
             position, dofs_idx, envs_idx = self._sanitize_io_variables(
@@ -1340,7 +1341,7 @@ class KinematicSolver(Solver):
                 kernel_scatter_dofs_pos(positions, dofs_idx, envs_idx, _batch_last_values(position, self.n_envs))
                 is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
                 is_dof_set[to_numpy_values(dofs_idx)] = 1
-                is_dof_set = device_tensor_from_numpy(is_dof_set, gs.tc_int)
+                is_dof_set = index_tensor(is_dof_set)
                 write_envs_idx = index_field(None, self._B, "envs_idx")
         kernel_set_dofs_position(
             is_dof_set, write_envs_idx, positions, self.dyn_info, self.rigid_info, self.rigid_config

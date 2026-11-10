@@ -6,7 +6,8 @@ This module holds what replaces it on the torch-free path, so that no solver rep
 
 - 'broadcast_values' and 'broadcast_tensor', the numpy and device counterparts of 'genesis.utils.misc.broadcast_tensor'.
 - 'sanitize_index_values' and 'sanitize_io_variables', the numpy counterpart of the index sanitizing of a getter.
-- 'device_tensor_from_numpy', 'index_field' and 'qd_field', the allocation of a kernel argument and of a solver buffer.
+- 'device_tensor_from_numpy', 'index_field', 'index_tensor' and 'qd_field', the allocation of a kernel argument and of
+  a solver buffer, the index tensors being cached per selection so that a training loop uploads none of them twice.
 - 'read_view', 'owned_copy', 'owned_view', 'is_dlpack_source', 'stage_kernel_values' and 'DlpackStager', the
   device-buffer bridge of 'genesis.utils.device_buffer'.
 - 'envs_selection' and 'mps_synchronize', which read the environments of a call and flush the stream after a write.
@@ -17,15 +18,18 @@ The batch (environment) dimension is the LAST one of a Quadrants buffer, as ever
 
 import ctypes
 import functools
+from collections import OrderedDict
 from itertools import combinations
 
 import numpy as np
 
 import quadrants as qd
 
+from quadrants.lang import impl as qd_impl
 from quadrants.lang.util import to_numpy_type
 
 import genesis as gs
+from genesis.utils.cache import register_cache_clear
 from genesis.utils.device_buffer import (
     _DLPACK_CAPSULE_NAME,
     _DLPACK_VERSIONED_CAPSULE_NAME,
@@ -50,6 +54,7 @@ __all__ = [
     "envs_index_tensor",
     "envs_selection",
     "index_field",
+    "index_tensor",
     "is_dlpack_source",
     "is_full_env_selection",
     "kernel_copy_values",
@@ -147,6 +152,61 @@ def _qd_type(dtype):
     if array_dtype not in _QD_TYPES:
         gs.raise_exception(f"Cannot allocate a device buffer holding values of dtype '{array_dtype}'.")
     return _QD_TYPES[array_dtype]
+
+
+# ------------------------------------------------------------------------------------------------
+# Index tensors
+# ------------------------------------------------------------------------------------------------
+
+# The largest number of index selections the cache holds, the least recently used one being evicted first. A training
+# loop names the same handful of selections at every step, so a few entries cover it, and a scene handing random masks
+# to the setters of a state cannot grow the cache past this bound.
+_INDEX_TENSOR_CACHE_MAX_ENTRIES = 32
+
+# The device tensors uploaded for the index selections seen so far, keyed by the exact values of the selection (see
+# 'index_tensor'). Ordered from the least to the most recently used one, which is the eviction order of an LRU cache.
+_INDEX_TENSOR_CACHE: "OrderedDict[tuple, qd.Ndarray]" = OrderedDict()
+
+
+def index_tensor(values) -> "qd.Ndarray | np.ndarray":
+    """Upload the sanitized int32 `values` of an index selection, handing back the tensor already uploaded for it.
+
+    The selection of a training loop is the same at every step, and a host-to-device copy of it serializes the loop
+    (see 'device_tensor_from_numpy'), so the tensor uploaded for a selection is cached and handed out again, which
+    leaves a steady-state loop with no index upload at all.
+    The cache key is the exact content of the sanitized values, so a selection that changed, whatever the object holding
+    it, misses the cache, and an entry can never be mistaken for another selection: a caller mutating its own index
+    array in place is written to the device again. The tensors handed out are read-only, which is what every kernel
+    taking an index argument does with it ('qd.types.ndarray()' entries are read, never written).
+    The cache is bounded to '_INDEX_TENSOR_CACHE_MAX_ENTRIES' entries, the least recently used one evicted first, and is
+    cleared on 'qd.reset()' ('_clear_index_tensors'), which frees the device memory every entry was allocated in.
+    A selection naming no entry holds no device memory to cache and is returned as the host array the kernels take.
+    """
+    values = np.ascontiguousarray(values, dtype=numpy_dtype(gs.tc_int))
+    if not values.size:
+        return values
+    key = (values.shape, values.tobytes())
+    tensor = _INDEX_TENSOR_CACHE.get(key)
+    if tensor is not None:
+        _INDEX_TENSOR_CACHE.move_to_end(key)
+        return tensor
+    tensor = device_tensor_from_numpy(values, gs.tc_int)
+    _INDEX_TENSOR_CACHE[key] = tensor
+    while len(_INDEX_TENSOR_CACHE) > _INDEX_TENSOR_CACHE_MAX_ENTRIES:
+        _INDEX_TENSOR_CACHE.popitem(last=False)
+    return tensor
+
+
+def _clear_index_tensors() -> None:
+    """Drop every cached index tensor, whose device memory 'qd.reset()' frees."""
+    _INDEX_TENSOR_CACHE.clear()
+
+
+# A Quadrants program owns the device memory of the index tensors, so the cache goes away with it, whether the program
+# is reset by 'gs.destroy' or by a bare 'qd.reset'. The cache is also registered as an asset cache of Genesis, which is
+# the teardown hook every other cross-scene cache of the engine uses.
+qd_impl.on_reset(_clear_index_tensors)
+register_cache_clear(_clear_index_tensors)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -358,8 +418,12 @@ def sanitize_index_values(index, expected_size: int, max_size: int, dim: int, na
 
 
 def index_field(index, size: int, name: str = "index"):
-    """Sanitize the `index` selection of `size` entries and upload it as the device tensor a kernel iterates over."""
-    return device_tensor_from_numpy(sanitize_index_values(index, -1, size, 0, name), gs.tc_int)
+    """Sanitize the `index` selection of `size` entries and return it as the device tensor a kernel iterates over.
+
+    The tensor is the one cached for that selection, so a loop naming the same entries at every step uploads it once
+    (see 'index_tensor').
+    """
+    return index_tensor(sanitize_index_values(index, -1, size, 0, name))
 
 
 def envs_selection(scene, envs_idx) -> np.ndarray:
@@ -374,11 +438,12 @@ def envs_index_tensor(scene, envs_idx):
 
     None is returned when the selection names no environment at all: Quadrants has no zero-length buffer, and a write
     over no environment leaves every one of them as it is, so the caller returns without launching anything.
+    The tensor is the one cached for that selection, as 'index_field' returns (see 'index_tensor').
     """
     values = sanitize_index_values(envs_idx, -1, scene._B, 0, "envs_idx")
     if not values.size:
         return None
-    return device_tensor_from_numpy(values, gs.tc_int)
+    return index_tensor(values)
 
 
 # ------------------------------------------------------------------------------------------------
@@ -513,6 +578,8 @@ def sanitize_io_variables(
     call that is not batched: no environment is selected then, Quadrants having no zero-length buffer, so it is None,
     which every such caller discards already. A selection naming no environment or no entry at all is a no-op: its
     buffers hold no entry, which the loops of the kernels skip (see 'device_tensor_from_numpy').
+    The index tensors are the ones cached for the selections of the call, which a training loop hands over unchanged at
+    every step and which costs an upload the first time only (see 'index_tensor').
 
     The values a masked write takes are those of the torch path: one row per selected environment, one row per
     environment of the scene (out of which the mask flags the rows written), a single row, or none at all, which the
@@ -550,8 +617,8 @@ def sanitize_io_variables(
             )
         return (
             _device_values(tensor_values, dtype),
-            device_tensor_from_numpy(inputs_values, gs.tc_int),
-            device_tensor_from_numpy(envs_idx_, gs.tc_int),
+            index_tensor(inputs_values),
+            index_tensor(envs_idx_),
         )
 
     if n_envs == 0 or not batched:
@@ -595,8 +662,8 @@ def sanitize_io_variables(
 
     return (
         _device_values(tensor_values, dtype),
-        device_tensor_from_numpy(inputs_values, gs.tc_int),
-        None if envs_idx_ is None else device_tensor_from_numpy(envs_idx_, gs.tc_int),
+        index_tensor(inputs_values),
+        None if envs_idx_ is None else index_tensor(envs_idx_),
     )
 
 
@@ -794,6 +861,10 @@ def stage_kernel_values(value, dtype):
       'genesis.utils.device_buffer' can write them, which it does for at most two dimensions and without casting, and
       through the host otherwise, the state layouts holding the components of a vector as a third dimension.
 
+    The device-to-device copy is issued on the stream Quadrants launches its kernels on and is ordered by that stream
+    after the kernels launched before it, so staging costs no device synchronization at all (see
+    '_copy_after_pending_work'); the copy of the bridge stays the fallback of a layout, a dtype or a backend it cannot
+    take, and reports a producer it refuses with its own message.
     Every call stages into a buffer of its own rather than into a cached one, because the arrays of one state share their
     shapes: the velocities and the accelerations of a solver have the same shape and dtype, and a buffer cached per shape
     would make the kernel write the accelerations into the velocities as well.
@@ -807,7 +878,8 @@ def stage_kernel_values(value, dtype):
     if is_dlpack_source(value):
         if _is_copyable_on_device(value, dtype):
             buffer = qd.ndarray(_qd_type(dtype), shape=tuple(value.shape))
-            copy_from_dlpack(buffer, value, transpose=False)
+            if not _copy_after_pending_work(value, buffer):
+                copy_from_dlpack(buffer, value, transpose=False)
             return buffer
         return device_tensor_from_numpy(_host_values(value), dtype)
     return device_tensor_from_numpy(to_numpy_values(value), dtype)
@@ -871,6 +943,66 @@ def _hip_async_copies() -> _HipAsyncCopies:
     return _HipAsyncCopies()
 
 
+def _device_copy_plan(src, dst):
+    """The two ends of a device-to-device copy, or None when the stream cannot issue it.
+
+    `dst` is the contiguous device buffer of at most two dimensions the copy writes, and the DLPack producer `src` must
+    hold the same dtype with a contiguous layout of its own, on the device of `dst`. A producer exposing no layout of
+    its own, as a raw capsule does, a backend without the asynchronous transfer, as the CPU and Metal ones, and a buffer
+    holding no byte at all are refused, and the caller falls back on 'copy_from_dlpack'.
+    """
+    if gs.backend != gs.amdgpu:
+        return None
+    dst_view = view_of(dst)
+    if not dst_view.is_contiguous or dst_view.ndim > 2 or not dst_view.nbytes:
+        return None
+    src_info = dlpack_info(src)
+    if src_info.dtype != dst_view.dtype or src_info.strides != _contiguous_strides(src_info.shape):
+        return None
+    device = dst_view.device
+    if (src_info.device_type, src_info.device_id) != (device.dlpack_device_type, device.index):
+        return None
+    return dst_view, src_info
+
+
+def _copy_after_pending_work(src, dst) -> bool:
+    """Copy the DLPack producer `src` into the contiguous device buffer `dst` of the same shape, without any host wait.
+
+    This is the copy a state setter stages its values with, which it hands to a kernel as the 'qd.types.ndarray()'
+    argument filling the state (see 'stage_kernel_values'). The two buffers hold the same values in the same order, so a
+    single transfer covers the whole payload, and neither the shape nor the values reach the host.
+
+    Like the transposed copy of the staged setters, the transfer is issued on the stream Quadrants launches its kernels
+    on, so it is ordered after every kernel launched before it and before every kernel launched after it: the kernel
+    reading the buffer sees the values without any device synchronization, and staging a state drains nothing (see
+    '_copy_transposed_after_pending_work').
+
+    Returns False, having issued nothing, when the copy cannot be taken this way: another backend, or a producer the
+    bridge does not copy device to device (a layout, a dtype or a device mismatch), so that the caller falls back on
+    'copy_from_dlpack', which reports a producer it refuses with its own message.
+    """
+    plan = _device_copy_plan(src, dst)
+    if plan is None:
+        return False
+    dst_view, src_info = plan
+    if src_info.shape != dst_view.shape:
+        return False
+    shape = dst_view.shape
+    itemsize = dst_view.itemsize
+    # One row of 'num_cols' values per row of the payload, a one-dimensional payload being a single row of its values
+    num_cols = shape[-1]
+    num_rows = shape[0] if len(shape) == 2 else 1
+    _hip_async_copies().copy_2d(
+        dst_view.data_ptr,
+        num_cols * itemsize,
+        src_info.data_ptr + src_info.byte_offset,
+        num_cols * itemsize,
+        num_cols * itemsize,
+        num_rows,
+    )
+    return True
+
+
 def _copy_transposed_after_pending_work(src, dst, envs_idx) -> bool:
     """Copy the DLPack producer `src` of shape (num_envs, num_values) into the batch-last `dst`, without any host wait.
 
@@ -890,19 +1022,14 @@ def _copy_transposed_after_pending_work(src, dst, envs_idx) -> bool:
     bridge does not copy device to device (a layout, a dtype or a device mismatch), so that the caller falls back on
     'copy_from_dlpack', which reports a producer it refuses with its own message.
     """
-    if gs.backend != gs.amdgpu:
+    plan = _device_copy_plan(src, dst)
+    if plan is None:
         return False
-    dst_view = view_of(dst)
-    if not dst_view.is_contiguous or dst_view.ndim != 2:
+    dst_view, src_info = plan
+    if dst_view.ndim != 2:
         return False
     num_values, num_envs = dst_view.shape
-    src_info = dlpack_info(src)
-    if src_info.shape != (num_envs, num_values) or src_info.dtype != dst_view.dtype:
-        return False
-    if src_info.strides != _contiguous_strides(src_info.shape):
-        return False
-    device = dst_view.device
-    if (src_info.device_type, src_info.device_id) != (device.dlpack_device_type, device.index):
+    if src_info.shape != (num_envs, num_values):
         return False
     copies = _hip_async_copies()
     dst_ptr = dst_view.data_ptr
