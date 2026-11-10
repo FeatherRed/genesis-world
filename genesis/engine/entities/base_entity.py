@@ -9,7 +9,7 @@ from genesis.options.morphs import Morph
 from genesis.repr_base import RBC
 from genesis.utils.torch_compat import HAS_TORCH, torch
 
-from .torch_free import as_device_index, to_numpy
+from .torch_free import as_device_index, is_device_view, to_numpy
 
 if TYPE_CHECKING:
     from genesis.engine.scene import Scene
@@ -218,8 +218,8 @@ class Entity(RBC):
                 else:
                     is_negative_wrap_required = idx_local.dtype.is_signed
                     where = torch.where
-            elif isinstance(idx_local, np.ndarray) or (hasattr(idx_local, "to_numpy") and hasattr(idx_local, "shape")):
-                if not isinstance(idx_local, np.ndarray):
+            elif isinstance(idx_local, np.ndarray) or is_device_view(idx_local):
+                if is_device_view(idx_local):
                     # A device view carries no host dtype until it is copied, and index collections belong on the host
                     idx_local = to_numpy(idx_local)
                 if np.issubdtype(idx_local.dtype, np.bool_):

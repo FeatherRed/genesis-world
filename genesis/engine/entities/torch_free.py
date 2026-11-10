@@ -41,8 +41,8 @@ def first_row(value):
 
 def as_index_array(values):
     """Contiguous 'int32' host array of an index collection, which the solvers accept without PyTorch."""
-    if not isinstance(values, np.ndarray) and hasattr(values, "to_numpy"):
-        values = values.to_numpy()
+    if is_device_view(values) or (HAS_TORCH and isinstance(values, torch.Tensor)):
+        values = to_numpy(values)
     return np.ascontiguousarray(values, dtype=_INDEX_DTYPE)
 
 
@@ -61,7 +61,7 @@ def to_numpy(value):
         from genesis.utils.misc import tensor_to_array  # local import: 'misc' imports PyTorch at module scope
 
         return np.asarray(tensor_to_array(value))
-    if hasattr(value, "to_numpy"):
+    if is_device_view(value):
         return np.asarray(value.to_numpy())
     return np.asarray(value)
 
