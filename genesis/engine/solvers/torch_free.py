@@ -23,7 +23,15 @@ import quadrants as qd
 from quadrants.lang.util import to_numpy_type
 
 import genesis as gs
-from genesis.utils.device_buffer import DeviceView, _normalize_mask, copy_from_dlpack, view_of
+from genesis.utils.device_buffer import (
+    _DLPACK_CAPSULE_NAME,
+    _DLPACK_VERSIONED_CAPSULE_NAME,
+    DeviceView,
+    _normalize_mask,
+    _py_capsule_is_valid,
+    copy_from_dlpack,
+    view_of,
+)
 from genesis.utils.torch_compat import HAS_TORCH, torch
 
 __all__ = [
@@ -35,6 +43,7 @@ __all__ = [
     "envs_selection",
     "index_field",
     "is_dlpack_source",
+    "is_full_env_selection",
     "last_occurrence",
     "mps_synchronize",
     "numpy_dtype",
@@ -449,10 +458,44 @@ def mps_synchronize() -> None:
         torch.mps.synchronize()
 
 
+def is_full_env_selection(selection, num_envs: int) -> bool:
+    """Whether `selection` names every environment of the solver, in their own order, as no selection at all does.
+
+    `None` selects every environment, and so does any selection that sanitizes to 'range(num_envs)', whatever the form
+    it is given in: a slice, a range, an integer, a sequence, an array, a boolean mask, on the host or on the device.
+    The order matters, because a copy maps the row of the source of an environment onto the column of that same
+    environment: a permutation of every environment is not a full selection.
+    A selection the sanitizing of a write refuses is not full, and the copy raises that error itself.
+    """
+    if selection is None:
+        return True
+    if isinstance(selection, slice):
+        return selection.indices(num_envs) == (0, num_envs, 1)
+    try:
+        values = sanitize_index_values(selection, -1, num_envs, 0, "envs_idx")
+    except gs.GenesisException:
+        return False
+    return bool(np.array_equal(values, np.arange(num_envs, dtype=values.dtype)))
+
+
 def is_dlpack_source(value) -> bool:
-    """Whether `value` can be the source of a DLPack device copy, which a numpy array cannot."""
+    """Whether `value` is a DLPack producer, which a copy takes device to device rather than through the host.
+
+    A producer implements the DLPack protocol itself, as a torch tensor and a zero-copy device view do, or carries a
+    DLPack capsule, which is what a compiled graph hands over.
+    The 'qd.Tensor' and 'qd.Ndarray' buffers export such a capsule through 'to_dlpack', without implementing the
+    protocol's '__dlpack__'.
+    A 'qd.Field' stays a host source, its batch-last layout being the one a copy writes into rather than reads from.
+    A NumPy array and a plain sequence are host sources as well, which the accessors broadcast and upload instead.
+    """
     if isinstance(value, np.ndarray):
         return False
+    if isinstance(value, (qd.Tensor, qd.Ndarray)):
+        return True
+    if _py_capsule_is_valid(value, _DLPACK_CAPSULE_NAME):
+        return True
+    if _py_capsule_is_valid(value, _DLPACK_VERSIONED_CAPSULE_NAME):
+        return True
     return hasattr(value, "__dlpack__")
 
 
@@ -495,15 +538,21 @@ class DlpackStager:
         because the producer may still have writes pending on its own queue, and it moves no data to the host.
         The dtype of `src` must be that of the buffer, 'gs.qd_float' for a float state, since the bridge casts nothing
         and reports a mismatch with its own message.
+        A selection covering every environment in order is dropped, so that the copy takes the whole buffer and no
+        selection reaches the host.
+        A masked write still needs its selection on the host, where the bridge splits the copy into contiguous runs, so
+        a selection given on the device costs one host read of its indices, and a backend without a device copy, as the
+        CPU one, reads the buffer back once more to patch it.
         """
         buffer = self._buffers.get((num_values, num_envs))
         if buffer is None:
             buffer = qd.ndarray(gs.qd_float, shape=(num_values, num_envs))
             self._buffers[(num_values, num_envs)] = buffer
-        # The bridge needs the selection on the host, where it splits the copy into contiguous runs
         selection = envs_idx
         if isinstance(selection, (qd.Tensor, qd.Field, qd.Ndarray)):
             selection = to_numpy_values(selection)
+        if is_full_env_selection(selection, num_envs):
+            selection = None
         copy_from_dlpack(buffer, src, transpose=True, envs_idx=selection)
         return buffer
 
