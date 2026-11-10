@@ -2,7 +2,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import quadrants as qd
 
@@ -12,6 +11,7 @@ from genesis.engine.solvers.rigid.data import DynState
 from genesis.options.sensors import SurfaceDistanceProbe as SurfaceDistanceProbeOptions
 from genesis.utils.misc import concat_with_tensor, make_tensor_field, tensor_to_array
 from genesis.utils.raycast_qd import closest_point_on_triangle
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, SimpleSensor, SimpleSensorMetadata
 from .probe import ProbeSensorMetadataMixin, ProbeSensorMixin, func_noised_probe_radius, get_measured_bufs
@@ -328,6 +328,9 @@ class SurfaceDistanceProbeSensor(
     SimpleSensor[SurfaceDistanceProbeOptions, None, SurfaceDistanceProbeMetadata, tuple],
 ):
     """Surface distance probe: distance and nearest point from probe positions to tracked mesh surfaces."""
+
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "surface distance probe sensor"
 
     def __init__(
         self, options: SurfaceDistanceProbeOptions, idx: int, shared_context, shared_metadata, manager: "SensorManager"
