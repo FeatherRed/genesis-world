@@ -94,6 +94,16 @@ after a few hundred steps.  Every in-process rollout here is therefore short (13
 and the 1000-step case is delegated to ``tests.torch_block.run_python_checked``, where torch is
 blocked and the system runtime is the one that gets loaded.
 
+Known limitation of one process, one module
+-------------------------------------------
+Every test here passes on its own (measured call time: 60 s, 60 s, 33 s, 22 s and 106 s) and the whole
+module has also passed in one process (~230 s), but that single-process run is not reliable on this
+host: the fifth or sixth Go2 scene of a process occasionally aborts or segfaults inside
+``qd_destroy_data``/``launch_kernel`` while the Genesis HSA repair is warn-only (see the caveat above)
+and the GPU is shared with other jobs.  It is a Genesis/Quadrants teardown hazard of piling up many
+24-row Go2 scenes in one process, not an assertion failure, so the suite's default ``-n auto``
+distribution (one test per worker) is the reliable way to run this module; with ``-n 0`` run one
+``-k`` selection at a time.
 Example::
 
     PYTHONPATH=$PWD:/tmp/gs-pytest-libs /root/evox-robotics/.venv/bin/python -m pytest \\
