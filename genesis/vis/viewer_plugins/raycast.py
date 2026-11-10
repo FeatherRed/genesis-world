@@ -2,13 +2,13 @@ from threading import Lock
 from typing import TYPE_CHECKING, NamedTuple, override
 
 import numpy as np
-import torch
 
 import genesis as gs
 from genesis.ext.pyrender.camera import OrthographicCamera
 from genesis.utils.misc import qd_to_numpy, qd_to_torch, with_lock
 from genesis.utils.raycast import Ray, RayHit
 from genesis.utils.raycast_qd import RaycastResult
+from genesis.utils.torch_compat import require_torch, torch
 
 from .base import ViewerPlugin
 
@@ -54,6 +54,8 @@ class Raycaster:
     """
 
     def __init__(self, scene: "Scene", use_visual_geom: bool = False):
+        require_torch("viewer raycasting")
+
         # NOTE: delayed imports to avoid pulling in rigid_solver before gs is fully initialized.
         from genesis.engine.bvh import get_bvh_data
 

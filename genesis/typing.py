@@ -5,11 +5,13 @@ from pathlib import PurePath
 from typing import TYPE_CHECKING, Annotated, Any, TypeVar, get_args
 
 import numpy as np
-import torch
 
 from frozendict import frozendict
 from pydantic import BeforeValidator, Field, GetCoreSchemaHandler, GetPydanticSchema
 from pydantic_core import PydanticCustomError, core_schema
+
+from .utils.device_buffer import DeviceView
+from .utils.torch_compat import is_torch_tensor
 
 
 def _coerce_int(v):
@@ -42,9 +44,11 @@ def _normalize(vec):
 
 
 def _to_float_grid(v):
-    """Coerce a nested sequence, an array or a tensor to a two-dimensional float64 array."""
-    if isinstance(v, torch.Tensor):
+    """Coerce a nested sequence, an array, a tensor or a device view to a two-dimensional float64 array."""
+    if is_torch_tensor(v):
         v = v.detach().cpu()
+    elif isinstance(v, DeviceView):
+        v = v.to_numpy()
     grid = np.asarray(v, dtype=np.float64)
     if grid.ndim != 2:
         raise PydanticCustomError("invalid_type", "Input should be a two-dimensional grid", {"value": v})

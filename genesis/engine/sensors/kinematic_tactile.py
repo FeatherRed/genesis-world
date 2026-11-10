@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
-import torch
-
 import quadrants as qd
 
 import genesis as gs
@@ -20,6 +18,7 @@ from genesis.options.sensors import (
 from genesis.utils.misc import concat_with_tensor, make_tensor_field
 from genesis.utils.raycast_qd import closest_point_on_triangle, get_triangle_vertices, triangle_face_normal
 from genesis.utils.sdf import SDFInfo
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, SimpleSensor, SimpleSensorMetadata
 from .contact_force import ContactFilterMetadataMixin, _func_link_is_filtered
@@ -987,6 +986,9 @@ class ContactDepthProbeSensor(
     Returns contact depth in meters per probe.
     """
 
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "contact depth probe sensor"
+
     def build(self):
         super().build()
         # Re-allocate the per-(env, sensor) contact prefilter buffers to absorb the newly-registered sensor.
@@ -1126,6 +1128,8 @@ class ContactProbeSensor(
     cleanly with the env (the manager zeros the ring on reset).
     """
 
+    _torch_feature = "contact probe sensor"
+
     def build(self):
         super().build()
         self._shared_metadata.contact_threshold = concat_with_tensor(
@@ -1227,6 +1231,7 @@ class KinematicTaxelSensor(
     # Two channel groups: force xyz followed by torque xyz (probe-major within each group). See
     # ``ProbeSensorMixin._taxel_channel_groups`` for how this drives dead-taxel cache-col -> probe mapping.
     _taxel_channel_groups: int = 2
+    _torch_feature = "kinematic taxel sensor"
 
     def __init__(
         self, options: KinematicTaxelOptions, idx: int, shared_context, shared_metadata, manager: "SensorManager"

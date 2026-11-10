@@ -68,6 +68,7 @@ The pyrender viewer's `render_lock` is re-entrant; `ViewerLock` relies on that r
 
 ## Dependencies
 - `pyglet` (windowing), `PyOpenGL`, `OpenGL`, `trimesh`, `numpy`, `torch`.
+- PyTorch is imported through `genesis.utils.torch_compat` (`HAS_TORCH`/`torch`/`require_torch`), so every module here imports without PyTorch installed; rendering stays torch-only and `Camera(...)`, `Camera.render`, `Raycaster(...)` and `BatchRenderer(...)` raise a GenesisException naming the missing feature when it is absent.
 - `genesis.ext.pyrender` — vendored pyrender with JIT renderer, ImGui overlay, and pyglet viewer.
 - `LuisaRenderPy` (from the `genesis/ext/LuisaRender` git submodule build) — raytracer backend.
 - `gs_madrona` — batch renderer backend, optional (Linux x86-64 CUDA only).

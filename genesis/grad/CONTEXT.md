@@ -9,7 +9,7 @@ It does not define any physics: the solvers (see `../engine/solvers/`) implement
 
 ### bridge.py — the autograd graph and the launch recorder
 - `Operation` — abstract node body with `forward(*inputs) -> tuple` and `backward(*outputs_grad) -> tuple`; implemented by `StepOperation` (defined in `../engine/simulator.py`), and by `SegmentOperation` / `ReadOperation` here.
-- `OperationNode(torch.autograd.Function)` — the single torch node type wrapping every `Operation`.
+- `OperationNode` — the single torch node type wrapping every `Operation`: a `torch.autograd.Function` subclass when PyTorch is installed, a stub raising `require_torch("differentiable rollout")` otherwise.
   `forward` holds a weak reference to the graph and returns the next state handle plus the operation's outputs; `backward` is `@once_differentiable` and routes output grads into `operation.backward`.
 - `RolloutGraph` — the per-scene autograd graph.
   - `__init__(requires_grad, on_pass_start, on_pass_end)`, `restart()`, `is_recording` (property).
@@ -22,6 +22,14 @@ It does not define any physics: the solvers (see `../engine/solvers/`) implement
   - `__enter__`/`__exit__`, `insert(kernel, args)` (the launch hook), `entry(backward, *args, restore=..., autodiff=...)` (group launches into one entry), `reverse(start, stop)`.
 - `custom_backward(backward, *args)` — context manager grouping the launches of a block into one entry; a no-op outside a recorded step.
 - `is_recording_launches()` — whether the currently launched kernels are recorded for a backward pass.
+
+### PyTorch-free mode (PyTorch not installed)
+`bridge.py` imports and works without PyTorch, through `genesis.utils.torch_compat` (`HAS_TORCH`, `torch`, `require_torch`); `once_differentiable` and `increment_version` are imported inside the two helpers that use them (`_once_differentiable`, `_increment_version`).
+The simulator builds a `RolloutGraph` for every scene, so with `requires_grad=False` the graph allocates no tensor, `is_recording` is `False`, `restart` / `mark_state_changed` / `invalidate` are no-ops and `run_call` runs the method through unrecorded.
+`RolloutGraph(requires_grad=True, ...)` raises `GenesisException` naming "differentiable simulation"; `record`, `record_step`, `record_read`, `OperationNode.apply` and `LaunchRecorder()` raise one naming "differentiable rollout".
+`no_grad`, `register_custom_backward` and `reversed_with` return the kernel untouched (nothing records launches, so nothing registers a backward), which is what lets the solvers import them.
+`custom_backward` stays a no-op context manager and `is_recording_launches()` stays `False`, since no recorder is ever installed on the Quadrants runtime.
+`isinstance(value, torch.Tensor)` and the `torch.Tensor` annotations remain legal torch-free, the compat placeholder turning them into sentinel types.
 
 ### kernel_writes.py — write-set analysis of Quadrants kernels
 - `get_written_paths(fn, owner=None) -> frozenset[tuple[str, ...]]` — static AST analysis of a kernel/func's Python source returning the parameter paths (e.g. `("dyn_state", "dofs", "vel")`) it may write.
@@ -45,6 +53,7 @@ This is a bridge, not a physics module: do not add solver logic here — new sol
 Kernels passed to `get_written_paths` must be importable and source-readable (`inspect.getsource`); lambdas and dynamically generated kernels break the write-set analysis.
 `reversed_with` arguments must be native Python scalars (`bool`/`int`/`float`), and the overwritten variant must not write any array the original launch leaves untouched.
 The kernel-backward tags (`no_grad` / `register_custom_backward` / `reversed_with`) must sit above `@qd.kernel`, not below it, because the decorator receives the `QuadrantsCallable` and indexes by `kernel.fn`.
+Nothing in this directory imports PyTorch directly: import `HAS_TORCH` / `torch` / `require_torch` from `genesis.utils.torch_compat`, and import any other torch symbol inside the function or branch that needs it, so that a non-recording scene runs torch-free.
 
 ## Known Issues / Gotchas
 Backward on a scene destroyed since the rollout raises; backward after the state was set while torch recorded no gradient, after a model modification, or after a reset also raises (read the saved-tensor error to distinguish).
@@ -56,8 +65,8 @@ On Metal with zero-copy, restores must `torch.mps.synchronize()` before the next
 `run_call` refuses an input tensor that tracks gradients when `differentiable=False`; nested tagged calls are part of the outermost call, not separate nodes.
 
 ## Dependencies
-External (via `pyproject.toml`): `quadrants==1.4.0` (the kernel compiler / autodiff frontend) and `torch` (the autograd engine).
-Cross-package, read from this module: `genesis.utils.cache.OwnedCache`, `genesis.utils.data.iter_state_arrays`, `genesis.utils.misc.qd_from_torch` / `qd_to_torch` / `qd_add_grad`.
+External (via `pyproject.toml`): `quadrants==1.4.0` (the kernel compiler / autodiff frontend) and `torch` (the autograd engine), which is optional — only a scene with `requires_grad=True` needs it, and `bridge.py` imports without it.
+Cross-package, read from this module: `genesis.utils.cache.OwnedCache`, `genesis.utils.data.iter_state_arrays`, `genesis.utils.misc.qd_from_torch` / `qd_to_torch` / `qd_add_grad`, `genesis.utils.torch_compat` (`HAS_TORCH` / `torch` / `require_torch`).
 `genesis.engine` is imported only under `TYPE_CHECKING` here; the runtime integration lives on the engine side.
 
 ## Test Strategy

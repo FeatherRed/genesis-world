@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Type
 
 import numpy as np
 import quadrants as qd
-import torch
 
 import genesis as gs
 from genesis.options.sensors import Contact as ContactSensorOptions
@@ -11,6 +10,7 @@ from genesis.options.sensors import ContactForce as ContactForceSensorOptions
 from genesis.utils.geom import inv_transform_by_quat, qd_inv_transform_by_quat, transform_by_quat
 from genesis.utils.misc import concat_with_tensor, make_tensor_field, qd_to_torch, tensor_to_array
 from genesis.utils.ring_buffer import TensorRingBuffer
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, Sensor, SimpleSensor, SimpleSensorMetadata
 
@@ -149,6 +149,9 @@ class ContactSensor(SimpleSensor[ContactSensorOptions, None, ContactSensorMetada
     Sensor that returns bool based on whether associated RigidLink is in contact.
     """
 
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "contact sensor"
+
     def __init__(
         self, options: ContactSensorOptions, idx: int, shared_context, shared_metadata, manager: "SensorManager"
     ):
@@ -248,6 +251,8 @@ class ContactForceSensor(
     """
     Sensor that returns the total contact force being applied to the associated RigidLink in its local frame.
     """
+
+    _torch_feature = "contact force sensor"
 
     def build(self):
         super().build()

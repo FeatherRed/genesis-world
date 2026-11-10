@@ -1,12 +1,11 @@
 import functools
 
-import torch
-
 import quadrants as qd
 
 import genesis as gs
 from genesis.engine.states.entities import MPMEntityState
 from genesis.utils.misc import broadcast_tensor
+from genesis.utils.torch_compat import require_torch, torch
 
 from .particle_entity import ParticleEntity, assert_active
 
@@ -269,6 +268,8 @@ class MPMEntity(ParticleEntity):
         mask : torch.Tensor, shape (n_envs, n_particles)
             Boolean mask where True indicates particle is within the bounding box.
         """
+        # The bounding-box test compares every particle to the bounds on device, then reduces along the last axis
+        require_torch("MPMEntity.get_particles_in_bbox")
         bbox_min = torch.as_tensor(bbox_min, dtype=gs.tc_float, device=gs.device)
         bbox_max = torch.as_tensor(bbox_max, dtype=gs.tc_float, device=gs.device)
 
@@ -297,6 +298,8 @@ class MPMEntity(ParticleEntity):
         stiffness : float
             Spring stiffness for the constraint.
         """
+        # The mask is broadcast over the environments and particles of the solver, which needs PyTorch
+        require_torch("MPMEntity.set_particle_constraints")
         particles_mask = broadcast_tensor(
             particles_mask, gs.tc_bool, (self._sim._B, self._n_particles), ("envs_idx", "particles_idx")
         )
@@ -312,6 +315,8 @@ class MPMEntity(ParticleEntity):
         particles_mask : None | array_like, shape ([n_envs,] n_particles), optional
             Boolean mask indicating which particles to unconstrain. If None, removes all constraints for this entity.
         """
+        # The mask is broadcast over the environments and particles of the solver, which needs PyTorch
+        require_torch("MPMEntity.remove_particle_constraints")
         particles_mask = broadcast_tensor(
             True if particles_mask is None else particles_mask,
             gs.tc_bool,

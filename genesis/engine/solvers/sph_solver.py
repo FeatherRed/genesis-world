@@ -750,9 +750,17 @@ class SPHSolver(ParticleSolver):
 
     def set_state(self, f, state, envs_idx=None):
         if self.is_active:
-            self._kernel_set_state(f, state.pos, state.vel, state.active)
+            # See 'Solver._stage_kernel_values': a torch-free getter reads zero-copy device views, which the kernel takes
+            # only as the device buffers a setter stages them into
+            if HAS_TORCH:
+                pos, vel, active, pressure = state.pos, state.vel, state.active, state.pressure
+            else:
+                pos, vel = [self._stage_kernel_values(value) for value in (state.pos, state.vel)]
+                active = self._stage_kernel_values(state.active, gs.qd_bool)
+                pressure = self._stage_kernel_values(state.pressure) if self._pressure_solver == "DFSPH" else None
+            self._kernel_set_state(f, pos, vel, active)
             if self._pressure_solver == "DFSPH":
-                self._kernel_set_pressure(state.pressure)
+                self._kernel_set_pressure(pressure)
 
     @qd.kernel
     def _kernel_set_state(

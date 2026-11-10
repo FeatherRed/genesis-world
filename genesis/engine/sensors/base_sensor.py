@@ -4,7 +4,6 @@ from functools import partial
 from typing import TYPE_CHECKING, ClassVar, Generic, NamedTuple, TypeVar, get_args, get_origin
 
 import numpy as np
-import torch
 
 from typing_extensions import TypeVar as TypeVarWithDefault
 
@@ -14,6 +13,7 @@ from genesis.repr_base import RBC
 from genesis.typing import NumArrayType, NumericType
 from genesis.utils.geom import euler_to_quat
 from genesis.utils.misc import broadcast_tensor, concat_with_tensor, make_tensor_field
+from genesis.utils.torch_compat import require_torch, torch
 
 if TYPE_CHECKING:
     from genesis.engine.entities.rigid_entity.rigid_link import RigidLink
@@ -192,6 +192,8 @@ class Sensor(RBC, Generic[OptionsT, SharedSensorContextT, SharedSensorMetadataT,
     # The changes of state, made outside of a step, that make the data of this sensor stale until the next step updates
     # it. Every kind of change by default, which a sensor depending on part of the state only may narrow.
     invalidated_by: ClassVar[frozenset[StateChange]] = frozenset(StateChange)
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature: ClassVar[str] = "sensor"
 
     def __init_subclass__(cls, **kwargs):
         super().__init_subclass__(**kwargs)
@@ -238,6 +240,7 @@ class Sensor(RBC, Generic[OptionsT, SharedSensorContextT, SharedSensorMetadataT,
         shared_metadata: SharedSensorMetadataT,
         manager: "SensorManager",
     ):
+        require_torch(self._torch_feature)
         self._options: "SensorOptions" = options
         self._idx: int = idx
         # The per-type metadata and cross-type context a sensor needs are passed in explicitly so sensors never

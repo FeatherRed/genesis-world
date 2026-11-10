@@ -37,6 +37,7 @@ from genesis.engine.solvers.rigid.data import (
 from genesis.options.solvers import SAPCouplerOptions
 from genesis.repr_base import RBC
 from genesis.utils.misc import tensor_to_array
+from genesis.utils.torch_compat import HAS_TORCH
 
 if TYPE_CHECKING:
     from genesis.engine.simulator import Simulator
@@ -320,8 +321,19 @@ class SAPCoupler(RBC):
         ]
         if ground_geoms:
             ground_geom, *other_ground_geoms = ground_geoms
-            ground_quat = self.rigid_solver.get_geoms_quat(ground_geom.idx)[..., 0, :]
-            ground_normal = gu.transform_by_quat(ground_quat.new_tensor(ground_geom.data[:3]), ground_quat)
+            if HAS_TORCH:
+                ground_quat = self.rigid_solver.get_geoms_quat(ground_geom.idx)[..., 0, :]
+                ground_normal = gu.transform_by_quat(ground_quat.new_tensor(ground_geom.data[:3]), ground_quat)
+            else:
+                # Without PyTorch the read is a zero-copy device view, which only a slice or an integer index selects,
+                # and this one-time check of the ground plane takes the few values it needs to the host, where it
+                # compares them anyway
+                ground_quat = self.rigid_solver.get_geoms_quat(ground_geom.idx)
+                if not isinstance(ground_quat, np.ndarray):
+                    ground_quat = ground_quat[(slice(None), 0, slice(None))].to_numpy()
+                ground_normal = gu.transform_by_quat(
+                    np.asarray(ground_geom.data[:3], dtype=gs.np_float), np.asarray(ground_quat, dtype=gs.np_float)
+                )
             if (
                 other_ground_geoms
                 or ground_geom.type == gs.GEOM_TYPE.TERRAIN

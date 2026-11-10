@@ -19,27 +19,32 @@ os.environ.setdefault("QD_ENABLE_PYBUF", "0" if sys.stdout is sys.__stdout__ els
 with redirect_stdout(_qd_outputs):
     import quadrants as qd
 
-try:
-    import torch
-except ImportError as e:
-    raise ImportError(
-        "'torch' module not available. Please install pytorch manually: https://pytorch.org/get-started/locally/"
-    ) from e
 import numpy as np
 
 from .constants import backend as _gs_backend
 from .logging import Logger
 from .utils import ZeroCopyMode, get_device, redirect_libc_stderr, set_environ, set_random_seed
 from .utils.hsa import ensure_system_hsa_runtime, inspect_hsa_runtime
+from .utils.torch_compat import HAS_TORCH, require_torch, torch
 from .version import __version__
 
 
-_IS_OLD_TORCH = tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8)
-# FIXME: qd.Field does not support zero-copy on Metal for 'torch<=2.9.1'.
-# See: https://github.com/pytorch/pytorch/pull/168193
-_TORCH_MPS_SUPPORT_DLPACK_FIELD = torch.torch_version.TorchVersion(torch.__version__.split("+", 1)[0]) > (2, 9, 1)
-if _IS_OLD_TORCH:
-    warn("'torch<2.8.0' is not supported. Please upgrade pytorch manually: https://pytorch.org/get-started/locally/")
+# PyTorch is optional: everything that needs it asks for it (see 'require_torch'), and its version gates only apply to
+# it.
+if HAS_TORCH:
+    _IS_OLD_TORCH = tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8)
+    # FIXME: qd.Field does not support zero-copy on Metal for 'torch<=2.9.1'.
+    # See: https://github.com/pytorch/pytorch/pull/168193
+    _TORCH_MPS_SUPPORT_DLPACK_FIELD = torch.torch_version.TorchVersion(torch.__version__.split("+", 1)[0]) > (2, 9, 1)
+    if _IS_OLD_TORCH:
+        warn(
+            "'torch<2.8.0' is not supported. Please upgrade pytorch manually: https://pytorch.org/get-started/locally/"
+        )
+else:
+    # Without PyTorch there is no version to gate on, and the Metal zero-copy support it reports is moot because the
+    # torch-free device-buffer bridge does not support Metal at all.
+    _IS_OLD_TORCH = False
+    _TORCH_MPS_SUPPORT_DLPACK_FIELD = False
 
 
 # Global state
@@ -47,6 +52,7 @@ _initialized: bool = False
 _scene_registry: list[weakref.ReferenceType["Scene"]] = []
 _module_registry: set[tuple[Callable[[], None], Callable[[], None]]] = set()
 logger: Logger | None = None
+# A 'torch.device' when PyTorch is installed, and the torch-free 'genesis.utils.device_buffer.DeviceInfo' otherwise.
 device: torch.device | None = None
 backend: _gs_backend | None = None
 use_ndarray: bool | None = None
@@ -116,7 +122,7 @@ def init(
     globals()["backend"] = backend
 
     # Fallback to Torch CPU device if requested
-    if backend != _gs_backend.cpu and os.environ.get("GS_TORCH_FORCE_CPU_DEVICE") == "1":
+    if HAS_TORCH and backend != _gs_backend.cpu and os.environ.get("GS_TORCH_FORCE_CPU_DEVICE") == "1":
         device, device_name, total_mem, _backend = get_device(_gs_backend.cpu)
 
     # Configure Quadrants fast cache and array type
@@ -127,27 +133,42 @@ def init(
 
     # Unlike dynamic vs static array mode, and fastcache, zero-copy can be toggle on/off between init without issue
     _use_zerocopy = bool(int(os.environ["GS_ENABLE_ZEROCOPY"])) if "GS_ENABLE_ZEROCOPY" in os.environ else None
-    if _use_zerocopy:
-        if backend == _gs_backend.metal and not _use_ndarray and not _TORCH_MPS_SUPPORT_DLPACK_FIELD:
-            raise_exception("Zero-copy not supported for static array mode on Apple Metal if 'torch<=2.9.1'.")
-        if (backend == _gs_backend.metal and device.type != "mps") or (
-            backend in (_gs_backend.cuda, _gs_backend.amdgpu) and device.type != "cuda"
-        ):
-            raise_exception(
-                f"Genesis backend '{backend}' not consistent with Torch device type '{device.type}'. Zero-copy "
-                "not supported."
-            )
+    if HAS_TORCH:
+        if _use_zerocopy:
+            if backend == _gs_backend.metal and not _use_ndarray and not _TORCH_MPS_SUPPORT_DLPACK_FIELD:
+                raise_exception("Zero-copy not supported for static array mode on Apple Metal if 'torch<=2.9.1'.")
+            if (backend == _gs_backend.metal and device.type != "mps") or (
+                backend in (_gs_backend.cuda, _gs_backend.amdgpu) and device.type != "cuda"
+            ):
+                raise_exception(
+                    f"Genesis backend '{backend}' not consistent with Torch device type '{device.type}'. Zero-copy "
+                    "not supported."
+                )
 
-    if (
-        (backend == gs.cpu and device.type == "cpu")
-        or (backend in (_gs_backend.cuda, _gs_backend.amdgpu) and device.type == "cuda")
-        or (backend == _gs_backend.metal and device.type == "mps" and (_use_ndarray or _TORCH_MPS_SUPPORT_DLPACK_FIELD))
-    ):
+        if (
+            (backend == gs.cpu and device.type == "cpu")
+            or (backend in (_gs_backend.cuda, _gs_backend.amdgpu) and device.type == "cuda")
+            or (
+                backend == _gs_backend.metal
+                and device.type == "mps"
+                and (_use_ndarray or _TORCH_MPS_SUPPORT_DLPACK_FIELD)
+            )
+        ):
+            if _use_zerocopy is None:
+                _use_zerocopy = True
+        else:
+            if _use_zerocopy:
+                raise_exception(f"Zero-copy not supported on {backend} backend.")
+    else:
+        # Without PyTorch, zero-copy goes through the DLPack device views of 'genesis.utils.device_buffer', which exist
+        # on every backend they support, that is all of them but Apple Metal.
+        if backend == _gs_backend.metal and _use_zerocopy is not False:
+            raise_exception(
+                "Zero-copy is not supported on the Apple Metal backend without PyTorch. Disable it with "
+                "'GS_ENABLE_ZEROCOPY=0' to run on copies alone."
+            )
         if _use_zerocopy is None:
             _use_zerocopy = True
-    else:
-        if _use_zerocopy:
-            raise_exception(f"Zero-copy not supported on {backend} backend.")
     use_zerocopy = ZeroCopyMode(_use_zerocopy)
 
     # Reproducing a rollout means settling the runtime-measured choices the simulation would otherwise keep revisiting
@@ -159,23 +180,25 @@ def init(
     globals()["debug"] = debug
 
     # Define the right dtypes in accordance with selected backend and precision
+    # The torch dtypes fall back on their Quadrants counterpart when PyTorch is not installed, because no 'torch.dtype'
+    # exists then, and the tensors of the accessors are the Quadrants buffers themselves.
     global qd_float, np_float, tc_float
     if precision == "32":
         qd_float = qd.f32
         np_float = np.float32
-        tc_float = torch.float32
+        tc_float = torch.float32 if HAS_TORCH else qd_float
     else:  # precision == "64":
         if backend == _gs_backend.metal:
             raise_exception("64bits precision is not supported on Apple Metal GPU.")
         qd_float = qd.f64
         np_float = np.float64
-        tc_float = torch.float64
+        tc_float = torch.float64 if HAS_TORCH else qd_float
 
     # All int uses 32-bit precision, unless under special circumstances
     global qd_int, np_int, tc_int
     qd_int = qd.i32
     np_int = np.int32
-    tc_int = torch.int32
+    tc_int = torch.int32 if HAS_TORCH else qd_int
 
     # Bool
     # Note that `qd.u1` is broken on Apple Metal.
@@ -183,11 +206,11 @@ def init(
     if backend == _gs_backend.metal:
         qd_bool = qd.i32
         np_bool = np.int32
-        tc_bool = torch.int32
+        tc_bool = torch.int32 if HAS_TORCH else qd_bool
     else:
         qd_bool = qd.u1
         np_bool = np.bool_
-        tc_bool = torch.bool
+        tc_bool = torch.bool if HAS_TORCH else qd_bool
 
     # Let's use GLSL convention: https://learnwebgl.brown37.net/12_shader_language/glsl_data_types.html
     global qd_vec2, qd_vec3, qd_vec4, qd_vec6, qd_vec7, qd_vec18, qd_mat3, qd_mat4, qd_ivec2, qd_ivec3, qd_ivec4
@@ -220,6 +243,10 @@ def init(
     elif logger.level == _logging.DEBUG:
         qd_init_kwargs.update(log_level=qd.INFO)
     if debug:
+        # Debug mode is torch-only: its deterministic-algorithm guarantees are PyTorch settings of the torch operations
+        # that the accessors and the recording rely on, so there is nothing to configure without it.
+        if not HAS_TORCH:
+            require_torch("deterministic algorithms in debug mode")
         if backend != _gs_backend.cpu:
             logger.warning("Debug mode is partially supported for GPU backend.")
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -254,9 +281,12 @@ def init(
     # Environment variables read by Quadrants while initializing, set for the duration of its initialization only.
     # FIXME: quadrants#983 - Buffers from the HIP memory pool fault on their first write on RDNA4 GPUs (gfx12), so
     # Quadrants allocates through plain hipMalloc there, at the cost of reserving its device memory budget at init.
+    # The GPU architecture is queried through PyTorch, so the torch-free path skips this check, which only concerns
+    # gfx12 RDNA4 GPUs.
     qd_init_environ = {}
     if (
         backend == _gs_backend.amdgpu
+        and HAS_TORCH
         and "QD_ENABLE_HIP_MEMPOOL" not in os.environ
         and torch.cuda.get_device_properties().gcnArchName.startswith("gfx12")
     ):

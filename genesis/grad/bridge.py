@@ -27,10 +27,6 @@ import weakref
 from collections.abc import Callable, Iterator
 from typing import TYPE_CHECKING, NamedTuple
 
-import torch
-from torch.autograd.function import once_differentiable
-from torch.autograd.graph import increment_version
-
 from quadrants.lang import impl
 
 import genesis as gs
@@ -38,10 +34,25 @@ from genesis.grad.kernel_writes import get_written_paths
 from genesis.utils.cache import OwnedCache
 from genesis.utils.data import iter_state_arrays
 from genesis.utils.misc import qd_from_torch, qd_to_torch
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 if TYPE_CHECKING:
     from genesis.engine.solvers.base_solver import Solver
     from genesis.engine.state_change import StateChange
+
+
+def _once_differentiable(function: Callable) -> Callable:
+    """Apply 'torch.autograd.function.once_differentiable', imported on use since it is torch-only."""
+    from torch.autograd.function import once_differentiable
+
+    return once_differentiable(function)
+
+
+def _increment_version(tensor) -> None:
+    """Increment the version counter of a tensor, with the torch helper imported on use since it is torch-only."""
+    from torch.autograd.graph import increment_version
+
+    increment_version(tensor)
 
 
 class Operation:
@@ -60,39 +71,61 @@ class Operation:
         raise NotImplementedError
 
 
-class OperationNode(torch.autograd.Function):
-    @staticmethod
-    def forward(ctx, graph: "RolloutGraph", operation: Operation, state_handle, model_handle, *inputs: torch.Tensor):
-        # The simulator owns the graph, so a strong reference would make a cycle that crosses the C++ autograd graph,
-        # which the garbage collector cannot traverse: the scene would never be freed.
-        ctx.graph = weakref.ref(graph)
-        ctx.operation = operation
-        ctx.set_materialize_grads(False)
-        outputs = graph._run(operation.forward, *inputs)
-        next_state_handle = state_handle.detach().clone()
-        ctx.save_for_backward(next_state_handle, model_handle)
-        return next_state_handle, *outputs
+if HAS_TORCH:
 
-    @staticmethod
-    @once_differentiable
-    def backward(ctx, state_handle_grad: torch.Tensor | None, *outputs_grad: torch.Tensor | None):
-        graph = ctx.graph()
-        if graph is None:
-            gs.raise_exception("Calling backward on a scene that has been destroyed since the rollout.")
-        try:
-            _ = ctx.saved_tensors
-        except RuntimeError as e:
-            gs.raise_exception_from(
-                "The scene changed since this operation was recorded: its state was set while torch recorded no "
-                "gradient, its model was modified, or it was reset. Call backward before any of them.",
-                e,
-            )
-        graph._enter_pass()
-        inputs_grad = graph._run(ctx.operation.backward, *outputs_grad)
-        # The previous node runs its backward only if it receives a gradient for the state handle it returned
-        if state_handle_grad is None:
-            state_handle_grad = torch.zeros((), dtype=gs.tc_float, device=gs.device)
-        return None, None, state_handle_grad, None, *inputs_grad
+    class OperationNode(torch.autograd.Function):
+        @staticmethod
+        def forward(
+            ctx, graph: "RolloutGraph", operation: Operation, state_handle, model_handle, *inputs: torch.Tensor
+        ):
+            # The simulator owns the graph, so a strong reference would make a cycle that crosses the C++ autograd
+            # graph, which the garbage collector cannot traverse: the scene would never be freed.
+            ctx.graph = weakref.ref(graph)
+            ctx.operation = operation
+            ctx.set_materialize_grads(False)
+            outputs = graph._run(operation.forward, *inputs)
+            next_state_handle = state_handle.detach().clone()
+            ctx.save_for_backward(next_state_handle, model_handle)
+            return next_state_handle, *outputs
+
+        @staticmethod
+        @_once_differentiable
+        def backward(ctx, state_handle_grad: torch.Tensor | None, *outputs_grad: torch.Tensor | None):
+            graph = ctx.graph()
+            if graph is None:
+                gs.raise_exception("Calling backward on a scene that has been destroyed since the rollout.")
+            try:
+                _ = ctx.saved_tensors
+            except RuntimeError as e:
+                gs.raise_exception_from(
+                    "The scene changed since this operation was recorded: its state was set while torch recorded no "
+                    "gradient, its model was modified, or it was reset. Call backward before any of them.",
+                    e,
+                )
+            graph._enter_pass()
+            inputs_grad = graph._run(ctx.operation.backward, *outputs_grad)
+            # The previous node runs its backward only if it receives a gradient for the state handle it returned
+            if state_handle_grad is None:
+                state_handle_grad = torch.zeros((), dtype=gs.tc_float, device=gs.device)
+            return None, None, state_handle_grad, None, *inputs_grad
+
+else:
+
+    class OperationNode:
+        """
+        Stand-in for the torch node type wrapping an operation, where PyTorch is not installed.
+
+        Only a differentiable scene records operations, and it needs PyTorch, so applying the node names the missing
+        feature instead of failing on the placeholder 'torch' module. The name exists all the same, since the graph
+        refers to it whether or not PyTorch is installed.
+        """
+
+        def __init__(self, *args, **kwargs):
+            require_torch("differentiable rollout")
+
+        @classmethod
+        def apply(cls, *args, **kwargs):
+            require_torch("differentiable rollout")
 
 
 class RolloutGraph:
@@ -105,6 +138,8 @@ class RolloutGraph:
     """
 
     def __init__(self, requires_grad: bool, on_pass_start: Callable[[], None], on_pass_end: Callable[[], None]):
+        if requires_grad:
+            require_torch("differentiable simulation")
         self._requires_grad = requires_grad
         self._on_pass_start = on_pass_start
         self._on_pass_end = on_pass_end
@@ -123,8 +158,9 @@ class RolloutGraph:
     def restart(self):
         """Begin a new rollout, invalidating every operation of the previous one."""
         if self._requires_grad:
+            require_torch("differentiable simulation")
             if self._model_handle is not None:
-                increment_version(self._model_handle)
+                _increment_version(self._model_handle)
             self._state_handle = torch.zeros((), dtype=gs.tc_float, device=gs.device, requires_grad=True)
             self._model_handle = torch.zeros((), dtype=gs.tc_float, device=gs.device)
             self._recorder = None
@@ -135,9 +171,10 @@ class RolloutGraph:
         Whether the operations on the state are recorded.
 
         A differentiable scene records them while torch records gradients, except those an operation being recorded
-        runs itself, which it reverses as part of its own.
+        runs itself, which it reverses as part of its own. Nothing is recorded where PyTorch is not installed, since a
+        scene can only be differentiable with it.
         """
-        return self._requires_grad and torch.is_grad_enabled() and not self._is_running_operation
+        return HAS_TORCH and self._requires_grad and torch.is_grad_enabled() and not self._is_running_operation
 
     def record(self, operation: Operation, *inputs: torch.Tensor) -> list[torch.Tensor]:
         """Run an operation on the state as one node of the graph, and return its outputs."""
@@ -159,9 +196,10 @@ class RolloutGraph:
         arrays a call overwrites that an earlier one used are saved (see LaunchRecorder). The queries of the state the
         call makes cut it into segments, each one node of the graph between the nodes of the queries, which takes the
         torch tensors its launches used as inputs. An input tracking gradients that is not `differentiable` is refused.
-        A call made by another one is part of it.
+        A call made by another one is part of it. Nothing is recorded where PyTorch is not installed, so the call runs
+        as it is.
         """
-        if self._is_calling:
+        if self._is_calling or not HAS_TORCH:
             return method(owner, *args, **kwargs)
         if not differentiable and any(
             isinstance(value, torch.Tensor) and value.requires_grad for value in (*args, *kwargs.values())
@@ -194,8 +232,8 @@ class RolloutGraph:
 
     def mark_state_changed(self):
         """Invalidate the last operation recorded, for a change of the state torch records no gradient of."""
-        if self._requires_grad and not self._is_running_operation:
-            increment_version(self._state_handle)
+        if HAS_TORCH and self._requires_grad and not self._is_running_operation:
+            _increment_version(self._state_handle)
 
     def invalidate(self, change: "StateChange | None" = None, envs_idx=None):
         """
@@ -204,8 +242,8 @@ class RolloutGraph:
         The simulator subscribes this method to the changes of the model of the differentiable solvers (see
         'Simulator.build'), whose Subscriber callbacks take these arguments.
         """
-        if self._requires_grad and not self._is_running_operation:
-            increment_version(self._model_handle)
+        if HAS_TORCH and self._requires_grad and not self._is_running_operation:
+            _increment_version(self._model_handle)
 
     def _enter_pass(self):
         """Start a backward pass from zero adjoints the first time one of its nodes runs."""
@@ -237,9 +275,11 @@ def no_grad(kernel: Callable) -> Callable:
     Declare that the launches of a kernel carry no gradient, such as the reset of a warm start or of error flags.
 
     A recorded launch of it is reversed by nothing, its overwrites being restored all the same (see LaunchRecorder). The
-    tag goes above the kernel decorator.
+    tag goes above the kernel decorator. Nothing records launches where PyTorch is not installed, so the kernel comes
+    back untouched and the solvers importing it run all the same.
     """
-    _KERNELS_BACKWARD[kernel.fn] = None
+    if HAS_TORCH:
+        _KERNELS_BACKWARD[kernel.fn] = None
     return kernel
 
 
@@ -248,11 +288,13 @@ def register_custom_backward(backward: Callable[..., None]) -> Callable[[Callabl
     Declare the backward reversing the launches of a kernel, which autodiff cannot derive.
 
     The backward is called with the arguments of the launch, from the values it left (see LaunchRecorder). The tag goes
-    above the kernel decorator.
+    above the kernel decorator. Nothing records launches where PyTorch is not installed, so the kernel comes back
+    untouched.
     """
 
     def decorator(kernel: Callable) -> Callable:
-        _KERNELS_BACKWARD[kernel.fn] = backward
+        if HAS_TORCH:
+            _KERNELS_BACKWARD[kernel.fn] = backward
         return kernel
 
     return decorator
@@ -265,11 +307,14 @@ def reversed_with(**overwrites: bool | int | float) -> Callable[[Callable], Call
     The arguments `overwrites` names select a variant of the kernel computing the same values from the same arrays,
     which autodiff can reverse where the variant the launch runs syncs the lanes of a block. The reverse reads the
     values the launch left (see LaunchRecorder), so the variant must write no array the launch leaves untouched. The
-    values are native Python scalars, as static arguments take. The tag goes above the kernel decorator.
+    values are native Python scalars, as static arguments take. The tag goes above the kernel decorator. Nothing records
+    launches where PyTorch is not installed, so the kernel comes back untouched.
     """
     assert all(isinstance(value, (bool, int, float)) for value in overwrites.values())
 
     def decorator(kernel: Callable) -> Callable:
+        if not HAS_TORCH:
+            return kernel
         names = list(inspect.signature(kernel.fn).parameters)
         overwrites_by_position = {names.index(name): value for name, value in overwrites.items()}
 
@@ -302,6 +347,7 @@ class LaunchRecorder:
     """
 
     def __init__(self):
+        require_torch("differentiable rollout")
         self.entries: list[RecordedEntry] = []
         self._previous_tape = None
         self._warnings_context: warnings.catch_warnings | None = None

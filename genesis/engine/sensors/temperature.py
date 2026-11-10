@@ -3,7 +3,6 @@ from enum import IntEnum
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import trimesh
 
@@ -16,6 +15,7 @@ from genesis.engine.solvers.rigid.data import DynState
 from genesis.options.sensors import TemperatureGrid as TemperatureGridOptions, TemperatureProperties
 from genesis.utils.misc import concat_with_tensor, make_tensor_field, tensor_to_array
 from genesis.utils.ring_buffer import TensorRingBuffer
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, SimpleSensor, SimpleSensorMetadata
 
@@ -509,6 +509,9 @@ class TemperatureGridSensor(
     RigidSensorMixin[TemperatureGridSensorMetadata],
     SimpleSensor[TemperatureGridOptions, None, TemperatureGridSensorMetadata, TemperatureGridSensorMetadata],
 ):
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "temperature grid sensor"
+
     def __init__(
         self, options: TemperatureGridOptions, idx: int, shared_context, shared_metadata, manager: "SensorManager"
     ):

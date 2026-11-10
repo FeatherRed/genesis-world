@@ -11,6 +11,7 @@ from genesis.options.recorders import (
     NPZFile as NPZFileWriterOptions,
     VideoFile as VideoFileWriterOptions,
 )
+from genesis.utils.torch_compat import require_torch
 from genesis.utils.video_encoder import VideoEncoder
 
 from .base_recorder import Recorder
@@ -26,6 +27,10 @@ class BaseFileWriter(Recorder):
     """
 
     def build(self):
+        # A recorded sample is read through the torch caches the accessors expose, so writing a file requires PyTorch.
+        # The check comes before the file is opened, so that a torch-free recording fails instead of leaving an empty
+        # file behind.
+        require_torch(f"{type(self._options).__name__} recording")
         super().build()
 
         os.makedirs(os.path.abspath(os.path.dirname(self._options.filename)), exist_ok=True)

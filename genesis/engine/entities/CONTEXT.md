@@ -86,7 +86,20 @@ PBD variants map to solver material constants: `PBD2DEntity`→CLOTH, `PBD3DEnti
 - `pbd_entity.py` → PBD entity family (tet/2D/3D/particle/free-particle).
 - `emitter.py` → `Emitter` particle emission.
 - `hybrid_entity.py` → `HybridEntity` rigid+soft coupling and default instantiation helpers.
+- `torch_free.py` → shared torch-free helpers for the whole subtree (`first_row`, `as_device_index`, `as_index_array`, `is_device_view`, `to_numpy`, `stack_values`); see "Torch-free mode".
 - `rigid_entity/` → Rigid-body entities, links, joints, geoms, equalities, and their descriptions (see its CONTEXT.md).
+
+# Torch-free mode
+PyTorch is optional for the whole subtree: every module imports it as `from genesis.utils.torch_compat import HAS_TORCH, torch, require_torch` and never as `import torch`, so `import genesis.engine.entities` works with no PyTorch installed.
+Reads: getters forward to the solver, which returns either a torch tensor (torch present) or a `genesis.utils.device_buffer.DeviceView` zero-copy DLPack view (torch absent); entities never materialize a host copy on a hot path.
+Index selection on a read (base link of a multi-link result) goes through `torch_free.first_row`, the equivalent of `value[..., 0, :]` that also works on a `DeviceView` (which has no `...` support).
+Writes: entity setters forward the user value untouched to the solver setter, so a numpy array and any DLPack producer (`__dlpack__`/`__dlpack_device__`, e.g. a compiled-graph output) both reach the device without a host roundtrip.
+Index bookkeeping: `Entity._get_global_idx` normalizes local index collections through `torch_free.as_device_index` (`torch.as_tensor(..., dtype=gs.tc_int, device=gs.device)` under torch, a contiguous `int32` host array otherwise) and accepts numpy/`DeviceView` boolean masks.
+Build-time buffers that used to be `torch.tensor`/`torch.arange`/`torch.from_numpy` (`_init_particles_offset`, `init_positions`, `_free_verts_idx_local`, `_terrain_height_field`, drone propeller tables, `RigidVisGeom._init_pos_tc`) each have a NumPy branch selected by `HAS_TORCH`.
+Genuinely torch-only device math raises `require_torch("<feature>")` with a precise feature name, keeping the torch body byte-identical: entity AABB/vertex readouts, contacts and net contact force, total-mass get/set, friction-ratio assignment, multi-link IK, path planning, particle `get_mass`/`find_closest_particle`/bbox queries, FEM muscle actuation, and the `broadcast_tensor`-based COM placement (`ParticleEntity.set_position`, `FEMEntity.set_position`).
+`gs.use_zerocopy` is `ZeroCopyMode(True)` without torch, so the solver reads are DLPack views; boolean Quadrants buffers read back as `DeviceView`s of `np.bool_` (`device_buffer` accepts the DLPack `kDLBool` code `6`), so a mask may stay device-resident too.
+Every vec3 read depends on `view_of(..., transpose=True)`, which moves the batch axis, `grid_ndim - 1`, to the front and leaves the element axes trailing: Quadrants exports a `Vector.field(3, shape=(m, n))` as DLPack `(m, n, 3)` with `lanes=1`, so a transposed read holds `(n, m, 3)` and never `(3, m, n)`.
+Torch-present behaviour is unchanged and byte-identical; a call site may therefore use these helpers unconditionally.
 
 # Test Strategy
 No dedicated tests live here; entity behavior is exercised through the engine's scene integration tests and example scripts.

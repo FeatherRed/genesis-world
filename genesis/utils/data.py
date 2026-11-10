@@ -14,7 +14,6 @@ from enum import IntEnum, StrEnum
 from typing import Annotated, Any, ClassVar, NamedTuple, dataclass_transform
 
 import numpy as np
-import torch
 
 import pydantic
 from pydantic import TypeAdapter
@@ -24,7 +23,9 @@ from quadrants.lang.util import to_numpy_type
 
 import genesis as gs
 from genesis.typing import StrictBool, StrictInt, ValidFloat
+from genesis.utils.device_buffer import DeviceView, copy_from_dlpack
 from genesis.utils.misc import data_to_array, get_own_annotations
+from genesis.utils.torch_compat import HAS_TORCH, torch
 
 
 def eoa(tensor):
@@ -948,12 +949,18 @@ def fill_data(
     the device. On Metal these writes stay on the torch stream, so the caller must call 'torch.mps.synchronize' once
     before the next kernel. A scalar is set back as the Python native the host code reading it expects. With
     `frame_only`, the frame 0 alone of each array is written (see 'check_data').
+
+    Without PyTorch, a record is a numpy array, a device view or a Quadrants array, and is written through the
+    torch-free device bridge, which synchronizes the copy itself, so no explicit sync is needed before the next kernel.
     """
     for item in check_data(items, values, frame_only=frame_only):
         value = values[item.name]
         if isinstance(item, ScalarItem):
             # 'check_data' admits a boolean record for an integer, so the value takes the native type of the attribute
             setattr(item.owner, item.attr, type(getattr(item.owner, item.attr))(value.item()))
+            continue
+        if not HAS_TORCH:
+            _fill_array_without_torch(item, value, frame_only=frame_only)
             continue
         view = None
         if isinstance(item.array, torch.Tensor):
@@ -976,3 +983,58 @@ def fill_data(
             item.array.from_torch(value)
         else:
             item.array.from_numpy(value)
+
+
+def _record_host_array(item: ArrayItem, value) -> np.ndarray:
+    """Return the host array a recorded value holds, read back without PyTorch (see 'fill_data').
+
+    A value that is neither a numpy array nor a buffer a host copy of which the torch-free bridge can take raises,
+    rather than failing later on an attribute that no such value has.
+    """
+    if isinstance(value, np.ndarray):
+        return value
+    if isinstance(value, (DeviceView, qd.Tensor, qd.Field, qd.Ndarray)):
+        return value.to_numpy()
+    gs.raise_exception(
+        f"'{item.name}' holds a {type(value).__name__}, which cannot be written without PyTorch: a record is a numpy "
+        "array, a device view or a Quadrants array."
+    )
+
+
+def _is_device_copy_supported(item: ArrayItem, value) -> bool:
+    """Whether a DLPack copy alone writes a recorded device value into the array of 'item' (see 'fill_data').
+
+    The torch-free write direction reaches a contiguous batch-last buffer of at most two dimensions, on a GPU backend,
+    without gathering, casting nor leaving the device, which a recorded device view of the very dtype of the array is.
+    A destination of more dimensions is a buffer of element shape, which only a host write reaches.
+    """
+    return (
+        isinstance(value, DeviceView)
+        and value.device.type != "cpu"
+        and value.is_contiguous
+        and value.ndim <= 2
+        and len(item.array.shape) <= 2
+        and value.dtype == np.dtype(to_numpy_type(item.array.dtype))
+    )
+
+
+def _fill_array_without_torch(item: ArrayItem, value, *, frame_only: bool) -> None:
+    """Write the recorded value of an array item into its array without PyTorch (see 'fill_data').
+
+    A device-resident value the DLPack bridge reaches stays on the device. Every other value goes back through the
+    host, where 'from_numpy' casts it to the dtype of the array as the torch path does and applies its layout, the
+    environment dimension being first in memory on CPU. The copy is synchronized, so the next kernel reads it.
+    """
+    array = item.array
+    if not frame_only and _is_device_copy_supported(item, value):
+        copy_from_dlpack(array, value, transpose=False, sync=True)
+        return
+    # A value is cast to the dtype of its array as it reaches the device, which may support no other precision
+    dtype = np.dtype(to_numpy_type(array.dtype))
+    source = np.ascontiguousarray(_record_host_array(item, value), dtype=dtype)
+    if frame_only:
+        # The array is written whole, its other frames as they are
+        frames = np.asarray(array.to_numpy(), dtype=dtype)
+        frames[0] = source
+        source = frames
+    array.from_numpy(source)

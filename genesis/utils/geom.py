@@ -2,8 +2,6 @@ import math
 from typing import Literal, NamedTuple
 
 import numpy as np
-import torch
-import torch.nn.functional as F
 
 import numba as nb
 
@@ -12,6 +10,13 @@ import quadrants as qd
 import genesis as gs
 from genesis.typing import Vec3FType
 from genesis.utils.cache import register_cache_clear
+from genesis.utils.device_buffer import DeviceView
+from genesis.utils.torch_compat import require_torch, torch
+
+# The 'torch' re-exported by 'torch_compat' is a module-like placeholder when PyTorch is missing, whose every attribute
+# access yields a sentinel type. Binding 'F' from it therefore stays import-safe: only the '_tc_*' helpers dereference
+# it, and only real torch tensors ever reach them.
+F = torch.nn.functional
 
 # ------------------------------------------------------------------------------------
 # ------------------------------------- Quadrants ----------------------------------------
@@ -848,6 +853,19 @@ def imp_aref_grad(params, neg_penetration):
 # ------------------------------------------------------------------------------------
 
 
+def _as_numpy(value):
+    """Return 'value' as a numpy array when it is a zero-copy device buffer view, and unchanged otherwise.
+
+    The helpers below dispatch on the type of their inputs, but a caller running Genesis without PyTorch holds Quadrants
+    buffers rather than torch tensors, and 'genesis.utils.device_buffer.DeviceView' is how such a buffer reaches host
+    code. Converting it up front lets every helper keep its numpy path, and is a no-op for numpy arrays as well as for
+    torch tensors, which leaves the existing dispatch untouched.
+    """
+    if isinstance(value, DeviceView):
+        return value.to_numpy()
+    return value
+
+
 class GeomConstants(NamedTuple):
     """Constant tensors of the torch geometry helpers, on one device and for one dtype.
 
@@ -938,23 +956,25 @@ def _tc_geom_constants(device: torch.device, dtype: torch.dtype) -> GeomConstant
 
 
 def inv_quat(quat):
+    quat = _as_numpy(quat)
     if isinstance(quat, torch.Tensor):
         return quat * _tc_geom_constants(quat.device, quat.dtype).quat_conjugate_signs
     elif isinstance(quat, np.ndarray):
         _quat = quat.copy()
         _quat[..., 1:] *= -1
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(quat)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(quat)=}")
     return _quat
 
 
 def inv_T(T):
+    T = _as_numpy(T)
     if isinstance(T, torch.Tensor):
         T_inv = torch.zeros_like(T)
     elif isinstance(T, np.ndarray):
         T_inv = np.zeros_like(T)
     else:
-        gs.raise_exception(f"the input must be torch.Tensor or np.ndarray. got: {type(T)=}")
+        gs.raise_exception(f"the input must be torch.Tensor, np.ndarray or DeviceView. got: {type(T)=}")
 
     trans, R = T[..., :3, 3], T[..., :3, :3]
     T_inv[..., 3, 3] = 1.0
@@ -965,12 +985,13 @@ def inv_T(T):
 
 
 def normalize(x, eps: float = 1e-12):
+    x = _as_numpy(x)
     if isinstance(x, torch.Tensor):
         return x / torch.linalg.vector_norm(x, ord=2, dim=-1, keepdim=True).clamp(min=eps, max=None)
     elif isinstance(x, np.ndarray):
         return x / np.maximum(np.linalg.norm(x, axis=-1, keepdims=True), eps)
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(x)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(x)=}")
 
 
 def rot6d_to_R(d6):
@@ -985,6 +1006,7 @@ def rot6d_to_R(d6):
 
     [1] http://arxiv.org/abs/1812.07035
     """
+    d6 = _as_numpy(d6)
     if isinstance(d6, torch.Tensor):
         a1, a2 = d6[..., :3], d6[..., 3:]
         b1 = F.normalize(a1, dim=-1)
@@ -1001,7 +1023,7 @@ def rot6d_to_R(d6):
         b3 = np.cross(b1, b2, axis=-1)
         return np.stack((b1, b2, b3), axis=-2)
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(d6)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(d6)=}")
 
 
 def R_to_rot6d(R):
@@ -1016,12 +1038,13 @@ def R_to_rot6d(R):
 
     [1] http://arxiv.org/abs/1812.07035
     """
+    R = _as_numpy(R)
     if isinstance(R, torch.Tensor):
         return R[..., :2, :].flatten(start_dim=-2)
     elif isinstance(R, np.ndarray):
         return R[..., :2, :].reshape((*R.shape[:-2], 6))
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(R)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(R)=}")
 
 
 @nb.jit(nopython=True, cache=True)
@@ -1067,6 +1090,7 @@ def _tc_xyz_to_quat(xyz: torch.Tensor, rpy: bool = False) -> torch.Tensor:
 
 
 def xyz_to_quat(xyz, rpy=False, degrees=False):
+    xyz = _as_numpy(xyz)
     if isinstance(xyz, torch.Tensor):
         if degrees:
             xyz = torch.deg2rad(xyz)
@@ -1076,7 +1100,7 @@ def xyz_to_quat(xyz, rpy=False, degrees=False):
             xyz = np.deg2rad(xyz)
         return _np_xyz_to_quat(xyz, rpy)
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(xyz)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(xyz)=}")
 
 
 @nb.jit(nopython=True, cache=True)
@@ -1124,6 +1148,7 @@ def _tc_quat_to_R(quat: torch.Tensor) -> torch.Tensor:
 def quat_to_R(quat, *, out=None):
     # NOTE: Ignore zero-norm quaternion for efficiency
 
+    quat = _as_numpy(quat)
     if all(isinstance(e, torch.Tensor) for e in (quat, out) if e is not None):
         R = _tc_quat_to_R(quat)
         if out is None:
@@ -1133,7 +1158,7 @@ def quat_to_R(quat, *, out=None):
     elif all(isinstance(e, np.ndarray) for e in (quat, out) if e is not None):
         return _np_quat_to_R(quat, out=out)
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(quat)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(quat)=}")
 
 
 @nb.jit(nopython=True, cache=True)
@@ -1206,6 +1231,7 @@ def _tc_quat_to_xyz(quat: torch.Tensor, eps: float, rpy: bool = False) -> torch.
 
 
 def quat_to_xyz(quat, rpy=False, degrees=False):
+    quat = _as_numpy(quat)
     if isinstance(quat, torch.Tensor):
         rpy = _tc_quat_to_xyz(quat, gs.EPS, rpy)
         if degrees:
@@ -1215,7 +1241,7 @@ def quat_to_xyz(quat, rpy=False, degrees=False):
         if degrees:
             rpy = np.rad2deg(rpy)
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(quat)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(quat)=}")
     return rpy
 
 
@@ -1276,6 +1302,7 @@ def _tc_R_to_quat(R: torch.Tensor) -> torch.Tensor:
 
 
 def R_to_quat(R, *, out=None):
+    R = _as_numpy(R)
     if all(isinstance(e, torch.Tensor) for e in (R, out) if e is not None):
         quat = _tc_R_to_quat(R)
         if out is None:
@@ -1284,7 +1311,7 @@ def R_to_quat(R, *, out=None):
     elif all(isinstance(e, np.ndarray) for e in (R, out) if e is not None):
         return _np_R_to_quat(R, out=out)
     else:
-        gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(R)=}")
+        gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(R)=}")
 
 
 def R_to_xyz(R, rpy=False, degrees=False):
@@ -1292,6 +1319,7 @@ def R_to_xyz(R, rpy=False, degrees=False):
 
 
 def trans_R_to_T(trans=None, R=None, *, out=None):
+    trans, R = _as_numpy(trans), _as_numpy(R)
     args = tuple(e for e in (trans, R) if e is not None)
     is_torch = all(isinstance(e, torch.Tensor) for e in args)
     is_numpy = not is_torch and all(isinstance(e, np.ndarray) for e in args)
@@ -1306,7 +1334,9 @@ def trans_R_to_T(trans=None, R=None, *, out=None):
         if T is None:
             T = np.empty((*B, 4, 4), dtype=np.result_type(*args))
     else:
-        gs.raise_exception(f"both of the inputs must be torch.Tensor or np.ndarray. got: {type(trans)=} and {type(R)=}")
+        gs.raise_exception(
+            f"both of the inputs must be torch.Tensor, np.ndarray or DeviceView. got: {type(trans)=} and {type(R)=}"
+        )
     if B:
         assert T.shape == (*B, 4, 4)
 
@@ -1337,11 +1367,11 @@ def trans_quat_to_T(trans=None, quat=None):
 
 
 def T_to_trans(T):
-    return T[..., :3, 3]
+    return _as_numpy(T)[..., :3, 3]
 
 
 def T_to_quat(T):
-    return R_to_quat(T[..., :3, :3])
+    return R_to_quat(_as_numpy(T)[..., :3, :3])
 
 
 def T_to_trans_quat(T):
@@ -1392,6 +1422,7 @@ def transform_quat_by_quat(v, u):
 
     This is equivalent to quatmul(quat_u, quat_v) or R_u @ R_v
     """
+    u, v = _as_numpy(u), _as_numpy(v)
     assert u.ndim >= 1
 
     if all(isinstance(e, torch.Tensor) for e in (u, v)):
@@ -1399,7 +1430,9 @@ def transform_quat_by_quat(v, u):
     elif all(isinstance(e, np.ndarray) for e in (u, v)):
         quat = _np_quat_mul(u, v, out=None)
     else:
-        gs.raise_exception(f"The inputs must all be torch.Tensor or np.ndarray. got: {type(v)=} and {type(quat)=}")
+        gs.raise_exception(
+            f"The inputs must all be torch.Tensor, np.ndarray or DeviceView. got: {type(v)=} and {type(u)=}"
+        )
 
     return quat
 
@@ -1440,6 +1473,7 @@ def transform_by_quat(v, quat):
 
     This is equivalent to quatmul(quat_u, quat_v) or R_u @ R_v
     """
+    v, quat = _as_numpy(v), _as_numpy(quat)
     assert v.ndim >= 1 and quat.ndim >= 1
 
     if all(isinstance(e, torch.Tensor) for e in (v, quat)):
@@ -1447,10 +1481,13 @@ def transform_by_quat(v, quat):
     elif all(isinstance(e, np.ndarray) for e in (v, quat)):
         return _np_transform_by_quat(v, quat, out=None)
     else:
-        gs.raise_exception(f"The inputs must all be torch.Tensor or np.ndarray. got: {type(v)=} and {type(quat)=}")
+        gs.raise_exception(
+            f"The inputs must all be torch.Tensor, np.ndarray or DeviceView. got: {type(v)=} and {type(quat)=}"
+        )
 
 
 def axis_angle_to_quat(angle, axis):
+    angle, axis = _as_numpy(angle), _as_numpy(axis)
     if isinstance(angle, torch.Tensor) and isinstance(axis, torch.Tensor):
         theta = (0.5 * angle).unsqueeze(-1)
         xyz = normalize(axis) * theta.sin()
@@ -1463,7 +1500,8 @@ def axis_angle_to_quat(angle, axis):
         return normalize(np.concatenate([w, xyz], axis=-1))
     else:
         gs.raise_exception(
-            f"both of the inputs must be torch.Tensor or np.ndarray. got: {type(angle)=} and {type(axis)=}"
+            "both of the inputs must be torch.Tensor, np.ndarray or DeviceView. "
+            f"got: {type(angle)=} and {type(axis)=}"
         )
 
 
@@ -1472,7 +1510,7 @@ def transform_by_xyz(pos, xyz):
 
 
 def transform_by_trans_quat(pos, trans, quat):
-    return transform_by_quat(pos, quat) + trans
+    return transform_by_quat(pos, quat) + _as_numpy(trans)
 
 
 def inv_transform_by_quat(pos, quat):
@@ -1480,18 +1518,18 @@ def inv_transform_by_quat(pos, quat):
 
 
 def inv_transform_by_trans_quat(pos, trans, quat):
-    return inv_transform_by_quat(pos - trans, quat)
+    return inv_transform_by_quat(_as_numpy(pos) - _as_numpy(trans), quat)
 
 
 def transform_pos_quat_by_trans_quat(pos, quat, t_trans, t_quat):
-    new_pos = t_trans + transform_by_quat(pos, t_quat)
+    new_pos = _as_numpy(t_trans) + transform_by_quat(pos, t_quat)
     new_quat = transform_quat_by_quat(quat, t_quat)
     return new_pos, new_quat
 
 
 def inv_transform_pos_quat_by_trans_quat(pos, quat, t_trans, t_quat):
     t_quat_inv = inv_quat(t_quat)
-    new_pos = transform_by_quat(pos - t_trans, t_quat_inv)
+    new_pos = transform_by_quat(_as_numpy(pos) - _as_numpy(t_trans), t_quat_inv)
     new_quat = transform_quat_by_quat(quat, t_quat_inv)
     return new_pos, new_quat
 
@@ -1513,6 +1551,7 @@ def transform_by_R(pos, R):
     -------
         The transformed points in a shape corresponding to the input dimensions.
     """
+    pos, R = _as_numpy(pos), _as_numpy(R)
     assert pos.shape[-1] == 3 and R.shape[-2:] == (3, 3)
     assert R.ndim - pos.ndim in (0, 1)
 
@@ -1526,7 +1565,10 @@ def transform_by_R(pos, R):
     elif all(isinstance(e, np.ndarray) for e in (pos, R) if e is not None):
         new_pos = np.matmul(R, pos_.swapaxes(1, 2)).swapaxes(1, 2)
     else:
-        gs.raise_exception(f"both of the inputs must be torch.Tensor or np.ndarray. got: {type(pos)=} and {type(R)=}")
+        gs.raise_exception(
+            "both of the inputs must be torch.Tensor, np.ndarray or DeviceView. "
+            f"got: {type(pos)=} and {type(R)=}"
+        )
 
     new_pos = new_pos.reshape(pos.shape)
 
@@ -1534,6 +1576,7 @@ def transform_by_R(pos, R):
 
 
 def transform_by_trans_R(pos, trans, R):
+    pos, trans, R = _as_numpy(pos), _as_numpy(trans), _as_numpy(R)
     assert trans.shape[:-1] == R.shape[:-2]
     if trans.ndim < pos.ndim:
         trans = trans[..., None, :]
@@ -1558,10 +1601,12 @@ def transform_by_T(pos, T):
     -------
         The transformed points in a shape corresponding to the input dimensions.
     """
+    T = _as_numpy(T)
     return transform_by_trans_R(pos, T[..., :3, 3], T[..., :3, :3])
 
 
 def inv_transform_by_T(pos, T):
+    pos, T = _as_numpy(pos), _as_numpy(T)
     trans, R = T[..., :3, 3], T[..., :3, :3]
 
     R_inv = R.swapaxes(-1, -2)
@@ -1835,11 +1880,12 @@ def polar(A, pure_rotation: bool = True, side: Literal["right", "left"] = "right
         - P : The positive semi-definite matrix (scaling part). For 'right' decomposition,
           P has shape (N, N) or (*batch, N, N). For 'left' decomposition, P has shape (M, M) or (*batch, M, M).
     """
+    A = _as_numpy(A)
     if isinstance(A, np.ndarray):
         return _np_polar(A, pure_rotation, side)
     if isinstance(A, torch.Tensor):
         return _tc_polar(A, pure_rotation, side, gs.EPS)
-    gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(A)=}")
+    gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(A)=}")
 
 
 @nb.jit(nopython=True, cache=True)
@@ -1899,13 +1945,14 @@ def slerp(q0, q1, t):
     numpy.array | torch.Tensor
         The interpolated quaternion (w, x, y, z).
     """
+    q0, q1, t = _as_numpy(q0), _as_numpy(q1), _as_numpy(t)
     if isinstance(q0, np.ndarray):
         return _np_slerp(q0, q1, t)
     if isinstance(q0, torch.Tensor):
         batch_shape = torch.broadcast_shapes(q0.shape[:-1], q1.shape[:-1])
         t = torch.as_tensor(t, dtype=gs.tc_float, device=q0.device).reshape(batch_shape)
         return _tc_slerp(q0, q1, t, gs.EPS)
-    gs.raise_exception(f"the input must be either torch.Tensor or np.ndarray. got: {type(q0)=}")
+    gs.raise_exception(f"the input must be either torch.Tensor, np.ndarray or DeviceView. got: {type(q0)=}")
 
 
 # ------------------------------------------------------------------------------------
@@ -2005,6 +2052,7 @@ def _tc_z_up_to_R(z: torch.Tensor, up: torch.Tensor | None, eps: float) -> torch
 
 
 def z_up_to_R(z, up=None, out=None):
+    z, up = _as_numpy(z), _as_numpy(up)
     if isinstance(z, torch.Tensor):
         R = _tc_z_up_to_R(z, up, gs.EPS)
         if out is None:
@@ -2015,6 +2063,7 @@ def z_up_to_R(z, up=None, out=None):
 
 
 def pos_lookat_up_to_T(pos, lookat, up):
+    pos, lookat, up = _as_numpy(pos), _as_numpy(lookat), _as_numpy(up)
     if all(isinstance(e, torch.Tensor) for e in (pos, lookat, up) if e is not None):
         T = torch.zeros((*pos.shape[:-1], 4, 4), dtype=pos.dtype, device=pos.device)
         T[..., 3, 3] = 1.0
@@ -2033,7 +2082,8 @@ def pos_lookat_up_to_T(pos, lookat, up):
         return T
     else:
         gs.raise_exception(
-            f"all of the inputs must be torch.Tensor or np.ndarray. got: {type(pos)=}, {type(lookat)=}, {type(up)=}"
+            f"all of the inputs must be torch.Tensor, np.ndarray or DeviceView. got: {type(pos)=}, "
+            f"{type(lookat)=}, {type(up)=}"
         )
 
 
@@ -2339,6 +2389,7 @@ def spherical_to_cartesian(theta: torch.Tensor, phi: torch.Tensor) -> tuple[torc
     vectors : torch.Tensor
         Vectors in cartesian coordinates as tensor of shape (..., 3).
     """
+    require_torch("genesis.utils.geom.spherical_to_cartesian")
     cos_phi = torch.cos(phi)
 
     x = torch.cos(theta) * cos_phi  # forward
@@ -2492,10 +2543,12 @@ def identity_quat():
 
 
 def tc_zero_pos():
+    require_torch("genesis.utils.geom.tc_zero_pos")
     return torch.zeros(3, dtype=gs.tc_float, device=gs.device)
 
 
 def tc_identity_quat():
+    require_torch("genesis.utils.geom.tc_identity_quat")
     return torch.tensor([1.0, 0.0, 0.0, 0.0], dtype=gs.tc_float, device=gs.device)
 
 
