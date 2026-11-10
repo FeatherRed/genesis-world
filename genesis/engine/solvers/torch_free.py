@@ -8,8 +8,8 @@ This module holds what replaces it on the torch-free path, so that no solver rep
 - 'sanitize_index_values' and 'sanitize_io_variables', the numpy counterpart of the index sanitizing of a getter.
 - 'device_tensor_from_numpy', 'index_field', 'index_tensor' and 'qd_field', the allocation of a kernel argument and of
   a solver buffer, the index tensors being cached per selection so that a training loop uploads none of them twice.
-- 'read_view', 'owned_copy', 'owned_view', 'is_dlpack_source' and 'write_from_dlpack', the device-buffer bridge of
-  'genesis.utils.device_buffer'.
+- 'read_view', 'owned_copy', 'owned_view', 'is_dlpack_source', 'is_opaque_producer' and 'write_from_dlpack', the
+  device-buffer bridge of 'genesis.utils.device_buffer'.
 - 'envs_selection', 'envs_index_tensor', 'envs_kernel_index' and 'mps_synchronize', which read the environments of a
   call, name them as a kernel takes them and flush the stream after a write.
 
@@ -42,7 +42,7 @@ from genesis.utils.device_buffer import (
     copy_from_dlpack,
     view_of,
 )
-from genesis.utils.torch_compat import HAS_TORCH, torch
+from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, torch
 # The staging machinery of a DLPack producer, which lives in its own module: the two names of '__all__' below and the
 # private helpers are re-exported here, so that no caller imports them from anywhere but this module.
 from .dlpck_stage import (
@@ -73,6 +73,7 @@ __all__ = [
     "index_tensor",
     "is_dlpack_source",
     "is_full_env_selection",
+    "is_opaque_producer",
     "kernel_copy_values",
     "last_occurrence",
     "mps_synchronize",
@@ -750,6 +751,17 @@ def is_dlpack_source(value) -> bool:
     if _py_capsule_is_valid(value, _DLPACK_VERSIONED_CAPSULE_NAME):
         return True
     return hasattr(value, "__dlpack__")
+
+
+def is_opaque_producer(value) -> bool:
+    """Whether `value` is a DLPack producer that is neither a PyTorch tensor nor a NumPy array.
+
+    Such a producer, typically the device tensor a compiled graph hands over, exposes no indexing, length or iteration,
+    so a setter must read its shape from its DLPack metadata and pick its rows in a kernel instead of in Python.
+    A PyTorch tensor and a NumPy array stay on the paths their residency has always taken, and a plain sequence is a
+    host source that 'is_dlpack_source' already refuses.
+    """
+    return is_dlpack_source(value) and not is_torch_tensor(value)
 
 
 @qd.kernel
