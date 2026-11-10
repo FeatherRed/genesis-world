@@ -312,11 +312,16 @@ def _qpos_selected_rows(qpos, rows, n_selected: int, n_envs: int):
 
     A write takes one row per selected environment, a single row broadcast to every one of them, or the whole
     (n_envs, *element_shape) tile of the scene, out of which each selected environment takes the row of its own index.
-    The form is recognized from the leading size of the values alone, and the whole tile is gathered on the device, so
-    neither decision downloads anything.
+    Values of less than two dimensions carry no row axis and are the element written as is, as in a scene without
+    environments, and the form is recognized from the leading size of the values alone, the whole tile being gathered on
+    the device, so neither decision downloads anything.
     """
     shape = np.shape(qpos)
-    n_rows = shape[0] if shape else 1
+    if not n_envs or len(shape) < 2:
+        # A scene without environments has no row axis, and values of a single dimension are the element itself,
+        # which every selected environment takes, exactly as it always did
+        return qpos
+    n_rows = shape[0]
     if n_rows == 1 or n_rows == n_selected:
         return qpos
     if n_rows != n_envs or n_envs <= n_selected:
