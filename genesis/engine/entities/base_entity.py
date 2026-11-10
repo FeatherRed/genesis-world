@@ -2,12 +2,14 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import genesis as gs
 from genesis.engine.materials.base import Material
 from genesis.options.morphs import Morph
 from genesis.repr_base import RBC
+from genesis.utils.torch_compat import HAS_TORCH, torch
+
+from .torch_free import as_device_index, to_numpy
 
 if TYPE_CHECKING:
     from genesis.engine.scene import Scene
@@ -216,7 +218,10 @@ class Entity(RBC):
                 else:
                     is_negative_wrap_required = idx_local.dtype.is_signed
                     where = torch.where
-            elif isinstance(idx_local, np.ndarray):
+            elif isinstance(idx_local, np.ndarray) or (hasattr(idx_local, "to_numpy") and hasattr(idx_local, "shape")):
+                if not isinstance(idx_local, np.ndarray):
+                    # A device view carries no host dtype until it is copied, and index collections belong on the host
+                    idx_local = to_numpy(idx_local)
                 if np.issubdtype(idx_local.dtype, np.bool_):
                     if idx_local.shape != (idx_local_max,):
                         gs.raise_exception(f"Boolean masks for `idx_local` must have shape ({idx_local_max},).")
@@ -242,8 +247,8 @@ class Entity(RBC):
             return idx_global
 
         # Perform a bunch of sanity checks
-        idx_global = torch.as_tensor(idx_global, dtype=gs.tc_int, device=gs.device).contiguous()
-        ndim = idx_global.ndim
+        idx_global = as_device_index(idx_global)
+        ndim = idx_global.ndim if HAS_TORCH and isinstance(idx_global, torch.Tensor) else np.ndim(idx_global)
         if ndim == 0:
             idx_global = idx_global[None]
         elif ndim > 1:
