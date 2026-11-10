@@ -171,6 +171,8 @@ def kernel_control_dofs_position_velocity_staged(
 
     The kernel mirrors 'kernel_control_dofs_position_velocity' for two staged buffers, which each hold one column per
     environment of the solver and one row per dof of the selection rather than per dof.
+    The two buffers must be distinct: a 'DlpackStager' reuses one buffer per shape, so staging both targets into the
+    same stager would leave both arguments holding the values staged last (see 'RigidSolver._stage_values').
     """
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_d_, i_b_ in qd.ndrange(dofs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(dyn_state.dofs.ctrl_mode))):

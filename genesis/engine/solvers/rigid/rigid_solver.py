@@ -29,7 +29,7 @@ from genesis.options.morphs import Drone, Morph, Terrain
 from genesis.options.solvers import RigidOptions
 from genesis.typing import Vec2FType, Vec3FType
 from genesis.utils.data import ConfigItem, DataItem
-from genesis.utils.device_buffer import view_of
+from genesis.utils.device_buffer import dlpack_info, view_of
 from genesis.utils.misc import (
     DeprecationError,
     assign_indexed_tensor,
@@ -351,6 +351,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # The staging buffer a DLPack producer is copied into before a kernel writes it to the state (see
         # '_stage_values'), allocated on first use since a scene driven from host values never needs it
         self._stager: DlpackStager | None = None
+        # A write taking two producers at once stages the second one here, the buffers of a stager being cached per
+        # shape and so handing the same buffer, holding whichever of the two was staged last, to both
+        self._stager_secondary: DlpackStager | None = None
 
     def build(self):
         # The simulator settles the substep shared by every solver before building them, possibly at the rate another
@@ -2403,11 +2406,31 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             friction_ratio = _env_first_values(friction_ratio)
         kernel_set_geoms_friction_ratio(geoms_idx, envs_idx, friction_ratio, self.dyn_state, self.rigid_config)
 
-    def _stage_values(self, values, num_values, envs_idx):
-        """Copy a DLPack producer into the batch-last staging buffer a staged write kernel reads, on first use."""
-        if self._stager is None:
-            self._stager = DlpackStager()
-        return self._stager.stage(values, num_values, self._B, envs_idx=envs_idx)
+    def _stage_values(self, values, num_values, envs_idx, *, secondary=False):
+        """Copy a DLPack producer into the batch-last staging buffer a staged write kernel reads, on first use.
+
+        The producer holds one row per environment of the solver and one column per value written, the batch axis
+        first as a machine-learning runtime emits it, and is copied on the device into a contiguous buffer of the
+        opposite layout, which a staged kernel of 'rigid.abd.torch_free_kernels' then scatters into the state.
+        A write taking two producers at once stages the second one 'secondary', because the staging buffers are
+        cached per shape and would otherwise hand the same buffer, holding the values staged last, to both.
+        """
+        stager = self._stager_secondary if secondary else self._stager
+        if stager is None:
+            stager = DlpackStager()
+            if secondary:
+                self._stager_secondary = stager
+            else:
+                self._stager = stager
+        shape = dlpack_info(values).shape
+        if shape != (self._B, num_values):
+            gs.raise_exception(
+                f"The DLPack producer of shape {shape} cannot be written into the {num_values} values of the "
+                f"{self._B} environments of the scene. A torch-free setter takes a producer of shape "
+                f"(n_envs, n_values) = ({self._B}, {num_values}), the batch axis first, which is copied to the device "
+                f"without any host roundtrip."
+            )
+        return stager.stage(values, num_values, self._B, envs_idx=envs_idx)
 
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_qpos(self, qpos, qs_idx=None, envs_idx=None, *, skip_forward=False):
@@ -2897,8 +2920,10 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             kernel_control_dofs_position_velocity_staged(
                 dofs_idx_,
                 envs_idx_,
+                # The two producers are staged in distinct buffers: a single staging buffer is reused per shape, so
+                # staging both into it would leave the position kernel reading the velocity values
                 self._stage_values(position, num_values, envs_idx),
-                self._stage_values(velocity, num_values, envs_idx),
+                self._stage_values(velocity, num_values, envs_idx, secondary=True),
                 self.dyn_state,
                 self.rigid_config,
             )
