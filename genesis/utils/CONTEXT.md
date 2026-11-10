@@ -65,6 +65,17 @@ Other:
 - `path_planning.py` — `PathPlanner` (ABC), `RRT`, `RRTConnect`, `align_waypoints_length`, `rrt_valid_mask`, `rrt_connect_valid_mask` (Quadrants-based planners; FREE/SPHERICAL joints unsupported).
 - `uid.py` — `UID` (`full`/`short`/`match`, uuid4-hex based).
 - `hsa.py` — ROCm HSA runtime repair: `HsaRuntimeStatus`, `inspect_hsa_runtime` / `system_hsa_runtime_path` (pure detection of torch's bundled `libhsa-runtime64.so` vs. a differing system `libhsa-runtime64.so.1.*`, with versions, sha256 candidates from `$ROCM_PATH`/`$ROCM_HOME`/`/opt/rocm`/`/opt/rocm-*`), and `ensure_system_hsa_runtime` (one-shot `os.execve` with `LD_PRELOAD`, gated by `GS_HSA_REEXEC` opt-out and the `GS_HSA_REEXEC_DONE` one-shot sentinel).
+- `torch_compat.py` — optional-PyTorch layer, the single import site for PyTorch: `HAS_TORCH`, `torch` (a module-like placeholder yielding sentinel types when PyTorch is missing, so `torch.Tensor`, `torch.Tensor | None` and `isinstance(x, torch.Tensor)` keep working while calling one raises), `require_torch(feature)`, `no_grad()` (context manager and decorator), `is_torch_tensor(x)`.
+- `device_buffer.py` — torch-free zero-copy device-buffer bridge: ctypes DLPack v0 structs, `DLTensorInfo`/`dlpack_info(capsule_or_producer)`, `DeviceInfo`/`device_of`, `DeviceView` (`shape`/`strides`/`dtype`/`device`/`to_dlpack`/`__dlpack__`/`__dlpack_device__`/`to_numpy`/`to_torch`/`reshape`/`transpose`/`__getitem__`), `view_of(value, transpose=, row_mask=, col_mask=, keepdim=)` mirroring `qd_to_torch` layout, `copy_from_dlpack(dst, src, transpose=, envs_idx=, idx=, sync=)` (HIP device-to-device write-back, NumPy on CPU), `qd_ptr(value)`, `zero_copy_supported()`.
+
+### Torch-free mode
+`torch_compat` and `device_buffer` are the foundation of running Genesis without PyTorch: neither imports torch nor `genesis` at module scope.
+`torch_compat.torch` is the real module when PyTorch is installed, and a placeholder whose attributes are `_Unavailable` sentinel classes otherwise.
+`device_buffer` reads Quadrants buffers through DLPack capsules (`dlpack_info`/`DeviceView`) and writes them through the HIP runtime or NumPy, since Quadrants has no DLPack importer.
+`DeviceInfo` reports type `"cuda"` for both CUDA and ROCm, and `dlpack_device_type` distinguishes them (`2` vs `10`) by resolving the active backend from `gs.backend`, falling back to the Quadrants architecture when `genesis` is not importable.
+`_raise_genesis_error` raises `gs.GenesisException` whenever `genesis` is importable and an `ImportError` carrying the same message otherwise, because `genesis/__init__.py` still imports PyTorch eagerly.
+`DeviceView.to_numpy()` is an explicit host copy for logging and diagnostics only; solver getters must use `DeviceView`/`view_of` on the hot path.
+`copy_from_dlpack` refuses dtype, device, shape and non-contiguous mismatches with a `gs.GenesisException` instead of converting or gathering silently.
 
 # Constraints
 
