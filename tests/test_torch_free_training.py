@@ -7,8 +7,9 @@ whose meta-path blocker refuses ``torch`` and every ``torch.*`` name before anyt
 
 * the blocker itself works, and importing Genesis under it leaves ``HAS_TORCH`` False and ``torch`` out of
   ``sys.modules``;
-* a real AMD GPU scene (plane + box, 2 environments, 10 steps) initializes, steps and returns device-resident state
-  through the torch-free ``DeviceView`` bridge, with no torch in the child;
+* a real GPU scene (plane + box, 2 environments, 10 steps) initializes, steps and returns device-resident state
+  through the torch-free ``DeviceView`` bridge, with no torch in the child -- on whichever GPU the host exposes,
+  since ``gs.gpu`` is the vendor-agnostic enum member that resolves to the AMD, CUDA or Metal backend;
 * the static half: nothing on the torch-free training path imports PyTorch, except the two sanctioned ``genesis/``
   files;
 * the state boundary agrees bit for bit between a torch-free and a torch-present child running the very same scene,
@@ -20,8 +21,8 @@ cleanly when no GPU is visible.  Run the module from the repository root::
     PYTHONPATH=$PWD:/tmp/gs-pytest-libs /root/evox-robotics/.venv/bin/python -m pytest \
         tests/test_torch_free_training.py -q -n 0
 
-The two GPU tests are ``slow`` because the first Quadrants compile of the scene takes about a minute each; the other
-two are CPU-only and take a few seconds.
+The two GPU tests are ``slow`` because each child pays its own first Quadrants compile of the scene, which takes about
+a minute; the other two are CPU-only and take a few seconds.
 """
 
 from __future__ import annotations
@@ -98,7 +99,7 @@ import sys
 
 import genesis as gs
 
-gs.init(backend=gs.amdgpu, logging_level="warning")
+gs.init(backend=gs.gpu, logging_level="warning")
 scene = gs.Scene(show_viewer=False)
 scene.add_entity(gs.morphs.Plane())
 box = scene.add_entity(gs.morphs.Box(size=(0.2, 0.2, 0.2), pos=(0.0, 0.0, 0.5)))
@@ -113,6 +114,7 @@ print(f"type={type(pos).__name__} device={pos.device} pos={pos.to_numpy().tolist
 assert tuple(pos.shape) == (2, 3), pos.shape
 assert tuple(quat.shape) == (2, 4), quat.shape
 assert type(pos).__name__ == "DeviceView", type(pos).__name__
+# Both the ROCm and the CUDA path expose a torch-free 'DeviceView' whose device type is "cuda"
 assert pos.device.type == "cuda", pos.device
 assert float(pos.to_numpy()[0, 2]) < 0.5, pos.to_numpy()
 leaked = sorted(name for name in sys.modules if name == "torch" or name.startswith("torch."))
@@ -135,7 +137,7 @@ EXPECT_TORCH = __EXPECT_TORCH__
 
 assert HAS_TORCH is EXPECT_TORCH, (HAS_TORCH, EXPECT_TORCH)
 
-gs.init(backend=gs.amdgpu, precision="32", logging_level="warning", seed=0)
+gs.init(backend=gs.gpu, precision="32", logging_level="warning", seed=0)
 scene = gs.Scene(show_viewer=False)
 scene.add_entity(gs.morphs.Plane())
 box = scene.add_entity(gs.morphs.Box(size=(0.2, 0.2, 0.2), pos=(0.0, 0.0, 0.5)))
