@@ -22,7 +22,7 @@ _INDEX_DTYPE = np.int32
 
 def is_device_view(value) -> bool:
     """Whether 'value' is a torch-free device view, which is the zero-copy read of a solver buffer."""
-    from genesis.utils.device_buffer import DeviceView  # local import: this module loads before Quadrants is initialized
+    from genesis.utils.device_buffer import DeviceView  # local: this module loads before Quadrants
 
     return isinstance(value, DeviceView)
 
