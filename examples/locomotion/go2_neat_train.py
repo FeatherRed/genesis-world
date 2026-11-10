@@ -379,7 +379,7 @@ def main(argv=None):
                 "joint_pos": float(perturbation.joint_pos),
                 "is_zero": bool(perturbation.is_zero),
             },
-            "genesis_backend": "gpu" if args.gpu else "cpu",
+            "genesis_backend": "gpu" if (args.gpu or torch_free) else "cpu",
             "evoxc_backend": env.backend,
             "evoxc_device": env.device_name,
             "show_viewer": show_viewer,
