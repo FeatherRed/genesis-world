@@ -2654,6 +2654,12 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 sol_params_ = sol_params_[None]
             else:
                 sol_params_ = _env_first_values(sol_params_)
+        if envs_idx is None:
+            # A kernel takes 'envs_idx' as an ndarray, so a torch-free scene cannot hand it None.
+            # Solver parameters shared by the whole batch state no environment, and the kernel reads no selection for
+            # them: a geom value, and a joint value under 'batch_joints_info=False', are written to every entry.
+            # The whole batch is handed over, as 'set_dofs_position' does, never the caller's selection.
+            envs_idx = index_field(None, self._B, "envs_idx")
 
         kernel_set_sol_params(inputs_idx, envs_idx, sol_params_, self.dyn_info, self.rigid_config, int(constraint_type))
 
@@ -2709,6 +2715,13 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 else:
                     tensor = _env_first_values(tensor)
             tensor_list[j] = tensor
+        if envs_idx_ is None:
+            # A kernel takes 'envs_idx' as an ndarray, so a torch-free scene cannot hand it None.
+            # Dofs info shared by the whole batch states no environment, and the 'kernel_set_dofs_*' kernels ignore
+            # 'envs_idx' under 'batch_dofs_info=False', which is what torch does with the selection of a non-batched
+            # write: it writes the 1-D values to the named dofs of every environment.
+            # The whole batch is handed over, as 'set_dofs_position' does, never the caller's selection.
+            envs_idx_ = index_field(None, self._B, "envs_idx")
         if name == "kp":
             kernel_set_dofs_kp(dofs_idx, envs_idx_, *tensor_list, self.dyn_info, self.rigid_config)
         elif name == "kv":
