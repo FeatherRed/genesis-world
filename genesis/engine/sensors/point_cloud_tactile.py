@@ -4,7 +4,6 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final, NamedTuple
 
 import numpy as np
-import torch
 
 import quadrants as qd
 
@@ -21,6 +20,7 @@ from genesis.utils.misc import concat_with_tensor, make_tensor_field, tensor_to_
 from genesis.utils.point_cloud import sample_mesh_point_cloud
 from genesis.utils.raycast_qd import closest_point_on_triangle, get_triangle_vertices, triangle_face_normal
 from genesis.utils.sdf import SDFInfo
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, SimpleSensor, SimpleSensorMetadata
 from .probe import (
@@ -713,6 +713,9 @@ class ProximityTaxelSensor(
     SimpleSensor[ProximityTaxelOptions, None, ProximityTaxelMetadata, ProximityTaxelReturnType],
 ):
     """Spherical point-cloud taxels: per-taxel force and torque in link-local frame vs tracked meshes."""
+
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "proximity taxel sensor"
 
     # Two channel groups: force xyz followed by torque xyz (probe-major within each group).
     _taxel_channel_groups: int = 2
@@ -1956,6 +1959,8 @@ class ElastomerTaxelSensor(
     RigidSensorMixin[ElastomerTaxelSensorMetadata],
     SimpleSensor[ElastomerTaxelSensorOptions, RaycastContext, ElastomerTaxelSensorMetadata],
 ):
+    _torch_feature = "elastomer taxel sensor"
+
     def __init__(
         self, options: ElastomerTaxelSensorOptions, idx: int, shared_context, shared_metadata, manager: "SensorManager"
     ):
