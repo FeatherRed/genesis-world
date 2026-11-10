@@ -148,6 +148,7 @@ from .abd.torch_free_kernels import (
     kernel_control_dofs_staged,
     kernel_copy_dofs_pos,
     kernel_scatter_dofs_pos,
+    kernel_set_dofs_position_staged,
     kernel_set_qpos_staged,
 )
 from .collider.collider import Collider
@@ -2681,37 +2682,52 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_dofs_position(self, position, dofs_idx=None, envs_idx=None):
-        if not HAS_TORCH and is_dlpack_source(position):
-            require_torch("setting dof positions from a DLPack producer")
         self.constraint_solver.reset(envs_idx)
 
-        position, dofs_idx, envs_idx = self._sanitize_io_variables(
-            position, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
-        )
-
-        self._wake_dofs(dofs_idx, envs_idx)
-
-        # See 'KinematicSolver.set_dofs_position'
-        if HAS_TORCH:
-            if self.n_envs == 0:
-                position = position[None]
-            positions = self._read_data(self.dyn_state.dofs.pos, envs_idx, None, copy=True)
-            positions[:, dofs_idx] = position
-            is_dof_set = torch.zeros((self.n_dofs,), dtype=gs.tc_bool, device=gs.device)
-            is_dof_set[dofs_idx] = True
-            write_envs_idx = envs_idx
-        else:
-            # Without a tensor view to patch, the whole row of dof positions is rebuilt on the device, exactly as the
-            # kinematic solver does: the copy kernel reads it out of the state, the scatter overwrites the dofs the
-            # call names, and the write kernel is handed the whole batch, the environments it does not select getting
-            # the positions they already hold back
+        if gs.use_zerocopy and not HAS_TORCH and self.n_envs > 0 and is_dlpack_source(position):
+            # A compiled graph hands its positions over as a DLPack producer, which the state takes device to device:
+            # the values are staged in a contiguous buffer, then scattered into the row of dof positions of each
+            # environment, exactly as 'KinematicSolver.set_dofs_position' does
+            dofs_idx = index_field(dofs_idx, self.n_dofs, "dofs_idx")
+            envs_idx = index_field(envs_idx, self._B, "envs_idx")
+            self._wake_dofs(dofs_idx, envs_idx)
             positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
             kernel_copy_dofs_pos(positions, self.dyn_state)
-            kernel_scatter_dofs_pos(positions, dofs_idx, envs_idx, _batch_last_values(position, self.n_envs))
+            kernel_set_dofs_position_staged(
+                positions, dofs_idx, envs_idx, self._stage_values(position, dofs_idx.shape[0], envs_idx)
+            )
             is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
             is_dof_set[to_numpy_values(dofs_idx)] = 1
             is_dof_set = device_tensor_from_numpy(is_dof_set, gs.tc_int)
             write_envs_idx = index_field(None, self._B, "envs_idx")
+        else:
+            position, dofs_idx, envs_idx = self._sanitize_io_variables(
+                position, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
+            )
+
+            self._wake_dofs(dofs_idx, envs_idx)
+
+            # See 'KinematicSolver.set_dofs_position'
+            if HAS_TORCH:
+                if self.n_envs == 0:
+                    position = position[None]
+                positions = self._read_data(self.dyn_state.dofs.pos, envs_idx, None, copy=True)
+                positions[:, dofs_idx] = position
+                is_dof_set = torch.zeros((self.n_dofs,), dtype=gs.tc_bool, device=gs.device)
+                is_dof_set[dofs_idx] = True
+                write_envs_idx = envs_idx
+            else:
+                # Without a tensor view to patch, the whole row of dof positions is rebuilt on the device, exactly as
+                # the kinematic solver does: the copy kernel reads it out of the state, the scatter overwrites the dofs
+                # the call names, and the write kernel is handed the whole batch, the environments it does not select
+                # getting the positions they already hold back
+                positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
+                kernel_copy_dofs_pos(positions, self.dyn_state)
+                kernel_scatter_dofs_pos(positions, dofs_idx, envs_idx, _batch_last_values(position, self.n_envs))
+                is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
+                is_dof_set[to_numpy_values(dofs_idx)] = 1
+                is_dof_set = device_tensor_from_numpy(is_dof_set, gs.tc_int)
+                write_envs_idx = index_field(None, self._B, "envs_idx")
         kernel_set_dofs_position(
             is_dof_set, write_envs_idx, positions, self.dyn_info, self.rigid_info, self.rigid_config
         )
