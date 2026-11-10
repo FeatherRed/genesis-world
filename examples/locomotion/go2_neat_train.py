@@ -306,13 +306,12 @@ def main(argv=None):
 
     if not gs._initialized:
         if args.gpu or torch_free:
-            # ``performance_mode=True`` hands the state to Quadrants ndarrays whose staged writes the
-            # torch-free setters cannot consume yet, so the torch-free path keeps ``use_ndarray`` off.
+            # ``performance_mode=True`` selects Quadrants' static-array kernels on both residencies.
             gs.init(
                 backend=gs.gpu,
                 precision="32",
                 logging_level="warning",
-                performance_mode=not torch_free,
+                performance_mode=True,
             )
         else:
             gs.init(backend=gs.cpu, precision="32", logging_level="warning")
