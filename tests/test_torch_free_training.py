@@ -562,22 +562,26 @@ def test_go2_train_cli_runs_with_torch_import_blocked(tmp_path):
     assert "blocked by the torch-free test harness" in probe.stderr, probe.stderr
 
     output_dir = tmp_path / "out"
-    completed = run(
-        [
-            sys.executable,
-            "examples/locomotion/go2_neat_train.py",
-            "--torch-free",
-            "--pop-size",
-            str(GO2_PILOT_POP_SIZE),
-            "--generations",
-            str(GO2_PILOT_GENERATIONS),
-            "--horizon",
-            str(GO2_PILOT_HORIZON),
-            "--output-dir",
-            str(output_dir),
-        ],
-        timeout=900,
-    )
+    argv = [
+        sys.executable,
+        "examples/locomotion/go2_neat_train.py",
+        "--torch-free",
+        "--pop-size",
+        str(GO2_PILOT_POP_SIZE),
+        "--generations",
+        str(GO2_PILOT_GENERATIONS),
+        "--horizon",
+        str(GO2_PILOT_HORIZON),
+        "--output-dir",
+        str(output_dir),
+    ]
+    # '--torch-free' defaults its rollout device to the ROCm one ('rocm:0'); an explicit non-CPU override, the same
+    # one the other device modules honour, is the only way the very same command runs on a CUDA host.  A cpu-kind
+    # override is not forwarded: there is no host-resident torch-free pilot.
+    device_override = os.environ.get("EVOXC_DEVICE", "").strip()
+    if device_override and not device_override.startswith("cpu"):
+        argv += ["--evoxc-device", device_override]
+    completed = run(argv, timeout=900)
     assert completed.returncode == 0, (
         f"The --torch-free CLI exited with code {completed.returncode}.\n"
         f"--- stdout ---\n{completed.stdout}\n--- stderr ---\n{completed.stderr}"
