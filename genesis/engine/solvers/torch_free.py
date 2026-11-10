@@ -10,7 +10,8 @@ This module holds what replaces it on the torch-free path, so that no solver rep
   a solver buffer, the index tensors being cached per selection so that a training loop uploads none of them twice.
 - 'read_view', 'owned_copy', 'owned_view', 'is_dlpack_source' and 'write_from_dlpack', the device-buffer bridge of
   'genesis.utils.device_buffer'.
-- 'envs_selection' and 'mps_synchronize', which read the environments of a call and flush the stream after a write.
+- 'envs_selection', 'envs_index_tensor', 'envs_kernel_index' and 'mps_synchronize', which read the environments of a
+  call, name them as a kernel takes them and flush the stream after a write.
 
 Staging a DLPack producer into the device buffer a kernel reads ('DlpackStager', 'stage_kernel_values' and the
 stream-ordered copies they issue) is what 'genesis.engine.solvers.dlpck_stage' does, and this module imports and
@@ -66,6 +67,7 @@ __all__ = [
     "drop_repeated_values",
     "envs_flag_mask",
     "envs_index_tensor",
+    "envs_kernel_index",
     "envs_selection",
     "index_field",
     "index_tensor",
@@ -451,6 +453,21 @@ def envs_index_tensor(scene, envs_idx):
     if not values.size:
         return None
     return index_tensor(values)
+
+
+def envs_kernel_index(scene, envs_idx=None):
+    """The environments an internal call selects, in the form a kernel launch takes, in both residencies.
+
+    With PyTorch this is the scene's own '_envs_idx', or the sanitized caller selection when the call names one.
+    Without it this is the cached device tensor of the sanitized selection (see 'envs_index_tensor' and
+    'index_tensor'), and a selection naming no environment stays the host array the kernel iterates no iteration over.
+    An internal call names the whole scene with None, which a scene without an environment axis has no way to name
+    through 'Scene._sanitize_envs_idx': that caller-facing guard refuses any non-None selection on a non-parallelized
+    scene, while the canonical selection this helper sanitizes covers its single environment 0.
+    """
+    if HAS_TORCH:
+        return scene._envs_idx if envs_idx is None else scene._sanitize_envs_idx(envs_idx)
+    return index_tensor(sanitize_index_values(envs_idx, -1, scene._B, 0, "envs_idx"))
 
 
 # ------------------------------------------------------------------------------------------------

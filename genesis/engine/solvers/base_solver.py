@@ -368,7 +368,13 @@ class Solver(RBC):
         Return whether each env flagged an error since its last reset (see 'register_errors').
 
         The result is boolean-valued and batch-shaped '(n_envs,)': a fresh 'torch.bool' tensor with PyTorch, a live
-        zero-copy device view of the boolean '_errno_mask' field without it, which the next call rewrites.
+        zero-copy device view of the boolean '_errno_mask' field without it, which the next call rewrites. The PyTorch
+        tensor is an independent result that outlives the call, while the torch-free view aliases the one buffer the
+        solver merges its flags into, so it must be consumed or copied before the next call.
+        The cheap snapshot of a torch-free mask is a host one, 'mask.to_numpy()', which copies it;
+        'DeviceView.contiguous' returns 'self' for the already-contiguous one-dimensional mask, so it is not a device
+        snapshot but the same live view. 'clear_errno' accepts the live view back, as it accepts the index selection
+        it reads.
         """
         if not HAS_TORCH:
             return view_of(self._errno_mask)
