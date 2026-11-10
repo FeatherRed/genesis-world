@@ -2,7 +2,6 @@ from collections.abc import Iterator
 from typing import TYPE_CHECKING
 
 import numpy as np
-import torch
 
 import quadrants as qd
 
@@ -30,6 +29,7 @@ from genesis.options.morphs import Drone, Morph, Terrain
 from genesis.options.solvers import RigidOptions
 from genesis.typing import Vec2FType, Vec3FType
 from genesis.utils.data import ConfigItem, DataItem
+from genesis.utils.device_buffer import view_of
 from genesis.utils.misc import (
     DeprecationError,
     assign_indexed_tensor,
@@ -42,9 +42,27 @@ from genesis.utils.misc import (
     qd_zero_grad,
     tensor_to_array,
 )
+from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, require_torch, torch
 
 from ..base_solver import GravityMixin, TimeBasedMixin
-from ..kinematic_solver import KinematicSolver, _fill_base_link_geom_offsets, _offset_world_shift, _select_links_offset
+from ..kinematic_solver import (
+    KinematicSolver,
+    _batch_last_values,
+    _env_first_values,
+    _fill_base_link_geom_offsets,
+    _offset_world_shift,
+    _select_links_offset,
+)
+from ..torch_free import (
+    DlpackStager,
+    broadcast_values,
+    device_tensor_from_numpy,
+    index_field,
+    is_dlpack_source,
+    mps_synchronize,
+    read_view,
+    to_numpy_values,
+)
 from .abd.accessor import (
     ConstraintType,
     kernel_control_dofs_force,
@@ -125,6 +143,13 @@ from .abd.misc import (
     kernel_update_heterogeneous_link_info,
     kernel_wakeup_coupled_links,
 )
+from .abd.torch_free_kernels import (
+    kernel_control_dofs_position_velocity_staged,
+    kernel_control_dofs_staged,
+    kernel_copy_dofs_pos,
+    kernel_scatter_dofs_pos,
+    kernel_set_qpos_staged,
+)
 from .collider.collider import Collider
 
 # Importing the decomposed solve registers it with func_solve_body (see solver_breakdown.py)
@@ -150,7 +175,7 @@ if TYPE_CHECKING:
     from genesis.engine.simulator import Simulator
 
 
-IS_OLD_TORCH = tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8)
+IS_OLD_TORCH = HAS_TORCH and tuple(map(int, torch.__version__.split(".")[:2])) < (2, 8)
 
 # minimum constraint impedance
 IMP_MIN = 0.0001
@@ -202,6 +227,28 @@ def _sanitize_sol_params(
     width[:] = width.clip(0.0)
     power[:] = power.clip(1)
     return sol_params
+
+
+def _is_envs_full_selection(envs_idx, envs_idx_all) -> bool:
+    """Whether an environment selection covers every environment, whatever the order it names them in."""
+    if HAS_TORCH:
+        return torch.equal(torch.sort(envs_idx).values, envs_idx_all)
+    return np.array_equal(np.sort(to_numpy_values(envs_idx)), to_numpy_values(envs_idx_all))
+
+
+def _is_uniform_along_envs(values) -> bool:
+    """Whether the values written to every environment are the same, as a fixed vertex of a shared morph requires."""
+    if HAS_TORCH:
+        return (torch.diff(values, dim=0).abs() < gs.EPS).all()
+    values_ = to_numpy_values(values)
+    return bool(np.all(np.abs(np.diff(values_, axis=0)) < gs.EPS))
+
+
+def _active_envs_mask_tensor(active_envs_mask: np.ndarray):
+    """Upload the environments a heterogeneous variant activates its geom in, as the buffer the entity layer reads."""
+    if HAS_TORCH:
+        return torch.tensor(active_envs_mask, device=gs.device)
+    return device_tensor_from_numpy(active_envs_mask, gs.tc_bool)
 
 
 class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
@@ -286,6 +333,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         self.constraint_solver = None
 
         self.qpos: qd.Tensor | qd.Field | qd.Ndarray | None = None
+        # The staging buffer a DLPack producer is copied into before a kernel writes it to the state (see
+        # '_stage_values'), allocated on first use since a scene driven from host values never needs it
+        self._stager: DlpackStager | None = None
 
     def build(self):
         # The simulator settles the substep shared by every solver before building them, possibly at the rate another
@@ -468,8 +518,14 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             np.allclose(geoms_offset_pos, 0.0, atol=gs.EPS)
             and np.allclose(gu.quat_to_xyz(geoms_offset_quat), 0.0, atol=gs.EPS)
         ):
-            self._geoms_offset_pos = torch.from_numpy(geoms_offset_pos).to(device=gs.device, dtype=gs.tc_float)
-            self._geoms_offset_quat = torch.from_numpy(geoms_offset_quat).to(device=gs.device, dtype=gs.tc_float)
+            if HAS_TORCH:
+                self._geoms_offset_pos = torch.from_numpy(geoms_offset_pos).to(device=gs.device, dtype=gs.tc_float)
+                self._geoms_offset_quat = torch.from_numpy(geoms_offset_quat).to(device=gs.device, dtype=gs.tc_float)
+            else:
+                # The relative geom getters compose these offsets on the device, which a torch-free scene holds as the
+                # buffers a kernel reads rather than as the tensors it would compose them with
+                self._geoms_offset_pos = device_tensor_from_numpy(geoms_offset_pos, gs.qd_float)
+                self._geoms_offset_quat = device_tensor_from_numpy(geoms_offset_quat, gs.qd_float)
 
         # FIXME: when the migration is finished, we will remove the about two lines
         self._func_vel_at_point = func_vel_at_point
@@ -1075,13 +1131,13 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # Set active_envs on geoms, which indicates the environments each geom is active in
             for geom in link.geoms:
                 active_envs_mask = (geom_starts <= geom.idx) & (geom.idx < geom_ends)
-                geom.active_envs_mask = torch.tensor(active_envs_mask, device=gs.device)
+                geom.active_envs_mask = _active_envs_mask_tensor(active_envs_mask)
                 (geom.active_envs_idx,) = np.where(active_envs_mask)
 
             # Set active_envs on vgeoms
             for vgeom in link.vgeoms:
                 active_envs_mask = (vgeom_starts <= vgeom.idx) & (vgeom.idx < vgeom_ends)
-                vgeom.active_envs_mask = torch.tensor(active_envs_mask, device=gs.device)
+                vgeom.active_envs_mask = _active_envs_mask_tensor(active_envs_mask)
                 (vgeom.active_envs_idx,) = np.where(active_envs_mask)
 
     def _init_link_fields(self):
@@ -1275,12 +1331,18 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     def _update_forward_kinematics(self, envs_idx):
         """Update the cartesian space and the velocities of the links of the given environments from their state."""
-        if not isinstance(envs_idx, torch.Tensor):
-            envs_idx = self._scene._sanitize_envs_idx(envs_idx)
-        if envs_idx.dtype == torch.bool:
-            fn = kernel_masked_forward_kinematics_links_geoms
-        else:
+        if not HAS_TORCH:
+            # A torch-free selection is the int32 index set the kernel iterates over, whatever mask the caller gave
+            if not isinstance(envs_idx, (qd.Tensor, qd.Ndarray)):
+                envs_idx = self._scene._sanitize_envs_idx(envs_idx)
             fn = kernel_forward_kinematics_links_geoms
+        else:
+            if not is_torch_tensor(envs_idx):
+                envs_idx = self._scene._sanitize_envs_idx(envs_idx)
+            if envs_idx.dtype == torch.bool:
+                fn = kernel_masked_forward_kinematics_links_geoms
+            else:
+                fn = kernel_forward_kinematics_links_geoms
         fn(envs_idx, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config)
         self._is_forward_pos_updated = True
         self._is_forward_vel_updated = True
@@ -1449,25 +1511,23 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # availability condition for these buffers (standalone dense allocations with DLPack-supported dtypes; the
         # platform gates live in gs.init). torch (MPS) and quadrants do not share a compute stream on Metal, so the
         # writes are flushed before the next kernels (see set_base_links_quat).
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and HAS_TORCH:
             acc_grad = qd_to_torch(self.dyn_state.dofs.acc.grad, copy=False)
             dL_dqacc = qd_to_torch(constraint_state.dL_dqacc, copy=False)
             dL_dqacc.copy_(acc_grad)
             acc_grad.zero_()
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
         else:
             kernel_load_dL_dqacc_from_acc_grad(self.dyn_state, constraint_state, self.rigid_config)
         self.constraint_solver.backward()
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and HAS_TORCH:
             force_grad = qd_to_torch(self.dyn_state.dofs.force.grad, copy=False)
             dL_dforce = qd_to_torch(constraint_state.dL_dforce, copy=False)
             force_grad.add_(dL_dforce)
             mass_mat_grad = qd_to_torch(self.rigid_info.mass_mat.grad, copy=False)
             dL_dM = qd_to_torch(constraint_state.dL_dM, copy=False)
             mass_mat_grad.add_(dL_dM)
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
         else:
             kernel_accumulate_constraint_solver_grads(
                 self.dyn_state, constraint_state, self.rigid_info, self.rigid_config
@@ -1486,8 +1546,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             qd_zero_grad(collider_state.contact_data.normal)
             qd_zero_grad(collider_state.contact_data.penetration)
             # One flush for the zeroing batch; see qd_zero_grad in misc.py.
-            if gs.use_zerocopy.is_supported and gs.backend == gs.metal:
-                torch.mps.synchronize()
+            if gs.use_zerocopy.is_supported:
+                mps_synchronize()
             kernel_manual_add_collision_constraints_bw(
                 self.dyn_state,
                 collider_state,
@@ -1566,9 +1626,14 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             torque, links_idx, self.n_links, "links_idx", envs_idx, (3,), skip_allocation=True, accumulate=True
         )
         if self.n_envs == 0:
-            force, torque = force[None], torque[None]
-            if pos is not None:
-                pos = pos[None]
+            if HAS_TORCH:
+                force, torque = force[None], torque[None]
+                if pos is not None:
+                    pos = pos[None]
+            else:
+                force, torque = _env_first_values(force), _env_first_values(torque)
+                if pos is not None:
+                    pos = _env_first_values(pos)
 
         # A wrench on a sleeping body must revive it, otherwise the input is silently dropped.
         if self._use_hibernation:
@@ -1650,8 +1715,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 copy=True,
             )
             # The accelerations and the friction ratios carry no gradient back
-            dofs_acc = qd_to_torch(self.dyn_state.dofs.acc, transpose=True, copy=True)
-            friction_ratio = qd_to_torch(self.dyn_state.geoms.friction_ratio, transpose=True, copy=True)
+            dofs_acc = self._read_single(self.dyn_state.dofs.acc)
+            friction_ratio = self._read_single(self.dyn_state.geoms.friction_ratio)
             state = RigidSolverState(
                 self._scene, self.sim.cur_step_global, qpos, dofs_vel, dofs_acc, links_pos, links_quat, friction_ratio
             )
@@ -1674,7 +1739,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         if (
             not self._requires_grad
             and gs.use_zerocopy
-            and (not isinstance(envs_idx, torch.Tensor) or (not IS_OLD_TORCH or envs_idx.dtype == torch.bool))
+            and HAS_TORCH
+            and (not is_torch_tensor(envs_idx) or (not IS_OLD_TORCH or envs_idx.dtype == torch.bool))
         ):
             qpos_dst = qd_to_torch(self.rigid_info.qpos, transpose=True, copy=False)
             vel_dst = qd_to_torch(self.dyn_state.dofs.vel, transpose=True, copy=False)
@@ -1704,9 +1770,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 )
                 n_awake_dofs_dst = qd_to_torch(self.rigid_info.n_awake_dofs, copy=False)
 
-            if envs_idx is not None and not isinstance(envs_idx, torch.Tensor):
+            if envs_idx is not None and not is_torch_tensor(envs_idx):
                 (envs_idx,) = indices_to_mask(envs_idx)
-            if isinstance(envs_idx, torch.Tensor):
+            if is_torch_tensor(envs_idx):
                 if envs_idx.dtype == torch.bool:
                     envs_mask = envs_idx
                 else:
@@ -1760,8 +1826,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     islands_hibernated_dst[envs_idx] = 0
                     islands_next_link_dst[envs_idx] = -1
                     n_awake_dofs_dst[envs_idx] = self.n_dofs
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
         else:
             envs_idx = self._scene._sanitize_envs_idx(envs_idx)
             kernel_set_state(
@@ -1841,6 +1906,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # in-place write below still applies, both for an environment-uniform and a per-environment offset. Multi-link
         # relative sets are composed in the kernel branch instead.
         if relative and isinstance(links_idx, int):
+            # Composing the offset is device tensor arithmetic, which a torch-free scene never reaches since its morph
+            # offsets are the identity one it strips above
+            require_torch("relative link pose with a non-identity morph offset")
             cur_quat = self.get_links_quat(links_idx, envs_idx, relative=False)[..., 0, :]
             offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)[..., 0, :]
             offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)[..., 0, :]
@@ -1852,7 +1920,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # Zero-copy fast path: single base link, non-relative. Write the position buffer in place instead of
         # launching a kernel. The kernel path below handles relative or multi-link updates, as well as waking up
         # hibernated entities, which is required whenever hibernation is enabled.
-        if gs.use_zerocopy and not relative and isinstance(links_idx, int) and not self._use_hibernation:
+        if gs.use_zerocopy and HAS_TORCH and not relative and isinstance(links_idx, int) and not (
+            self._use_hibernation
+        ):
             link = self.links[links_idx]
             if link.is_fixed:
                 data = qd_to_torch(self.dyn_state.links.pos, transpose=True, copy=False)
@@ -1886,18 +1956,21 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                         )
                 mask = (0,) if self.n_envs == 0 else indices_to_mask(envs_idx)
                 assign_indexed_tensor(target, mask, pos)
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
         else:
             pos, links_idx, envs_idx = self._sanitize_io_variables(
                 pos, links_idx, self.n_links, "links_idx", envs_idx, (3,), skip_allocation=True
             )
-            if self.n_envs == 0:
-                pos = pos[None]
+            if HAS_TORCH:
+                if self.n_envs == 0:
+                    pos = pos[None]
+            elif self.n_envs == 0:
+                pos = _env_first_values(pos)
 
             if relative:
                 # Compose the body-frame offset onto the authored position, keeping the current orientation, then set
                 # the resulting world position absolutely.
+                require_torch("relative link pose with a non-identity morph offset")
                 cur_quat = self._read_data(self.dyn_state.links.quat, envs_idx, links_idx)
                 offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)
                 offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)
@@ -1906,12 +1979,12 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             # Raise exception for fixed links with at least one geom and non-batched fixed vertices, except if setting
             # same location for all envs at once
-            set_all_envs = torch.equal(torch.sort(envs_idx).values, self._scene._envs_idx)
+            set_all_envs = _is_envs_full_selection(envs_idx, self._scene._envs_idx)
             has_fixed_verts = any(
                 link.is_fixed and link.geoms and not link.entity._batch_fixed_verts
                 for link in (self.links[i_l] for i_l in links_idx)
             )
-            if has_fixed_verts and not (set_all_envs and (torch.diff(pos, dim=0).abs() < gs.EPS).all()):
+            if has_fixed_verts and not (set_all_envs and _is_uniform_along_envs(pos)):
                 gs.raise_exception(
                     "Specifying env-specific pos for fixed links with at least one geometry requires setting morph "
                     "option 'batch_fixed_verts=True'."
@@ -1983,6 +2056,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # position when the offset position is identity; a non-zero offset position rotates with the orientation and
         # is handled (together with multi-link relative sets) in the kernel branch instead.
         if isinstance(links_idx, int) and relative_pos_passthrough:
+            # Composing the offset is device tensor arithmetic, which a torch-free scene never reaches since its morph
+            # offsets are the identity one it strips above
+            require_torch("relative link pose with a non-identity morph offset")
             offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)[..., 0, :]
             quat = gu.transform_quat_by_quat(offset_quat, torch.as_tensor(quat, dtype=gs.tc_float, device=gs.device))
             relative = False
@@ -1990,7 +2066,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # Zero-copy fast path: single base link, non-relative. Write the quaternion buffer in place instead of
         # launching a kernel. The kernel path below handles relative or multi-link updates, as well as waking up
         # hibernated entities, which is required whenever hibernation is enabled.
-        if gs.use_zerocopy and not relative and isinstance(links_idx, int) and not self._use_hibernation:
+        if gs.use_zerocopy and HAS_TORCH and not relative and isinstance(links_idx, int) and not (
+            self._use_hibernation
+        ):
             link = self.links[links_idx]
             if link.is_fixed:
                 data = qd_to_torch(self.dyn_state.links.quat, transpose=True, copy=False)
@@ -2023,16 +2101,19 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                         )
                 mask = (0,) if self.n_envs == 0 else indices_to_mask(envs_idx)
                 assign_indexed_tensor(target, mask, quat)
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
         else:
             quat, links_idx, envs_idx = self._sanitize_io_variables(
                 quat, links_idx, self.n_links, "links_idx", envs_idx, (4,), skip_allocation=True
             )
-            if self.n_envs == 0:
-                quat = quat[None]
+            if HAS_TORCH:
+                if self.n_envs == 0:
+                    quat = quat[None]
+            elif self.n_envs == 0:
+                quat = _env_first_values(quat)
 
             if relative:
+                require_torch("relative link pose with a non-identity morph offset")
                 offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)
                 if not relative_pos_passthrough:
                     # The offset position rotates with the orientation, so keep the authored-frame position fixed by
@@ -2056,12 +2137,12 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 quat = gu.transform_quat_by_quat(offset_quat, quat)
                 relative = False
 
-            set_all_envs = torch.equal(torch.sort(envs_idx).values, self._scene._envs_idx)
+            set_all_envs = _is_envs_full_selection(envs_idx, self._scene._envs_idx)
             has_fixed_verts = any(
                 link.is_fixed and link.geoms and not link.entity._batch_fixed_verts
                 for link in (self.links[i_l] for i_l in links_idx)
             )
-            if has_fixed_verts and not (set_all_envs and (torch.diff(quat, dim=0).abs() < gs.EPS).all()):
+            if has_fixed_verts and not (set_all_envs and _is_uniform_along_envs(quat)):
                 gs.raise_exception("Impossible to set env-specific quat for fixed links with at least one geometry.")
 
             # Wake up the entities of the links before rotating them (see 'set_base_links_pos')
@@ -2122,11 +2203,11 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         links_idx_ = None
         if links_idx is None:
             links_idx_ = range(self.n_links)
-        elif not isinstance(links_idx, torch.Tensor) or gs.debug or links_idx.device.type == "cpu":
+        elif not is_torch_tensor(links_idx) or gs.debug or links_idx.device.type == "cpu":
             (links_idx_,) = indices_to_mask(links_idx, keepdim=False, to_torch=False, boolean_mask=False)
             if isinstance(links_idx_, slice):
                 links_idx_ = range(*links_idx_.indices(self.n_links))
-            elif isinstance(links_idx_, torch.Tensor):
+            elif is_torch_tensor(links_idx_):
                 links_idx_ = tensor_to_array(links_idx_)
             if np.ndim(links_idx_) == 0:
                 links_idx_ = (links_idx_,)
@@ -2165,6 +2246,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     # The rescale check reads the values back and stalls the GPU, so it runs in debug mode only.
                     if not gs.debug:
                         continue
+                    # The check divides the values written by the masses they replace, which only a tensor holds
+                    require_torch("mass rescale check of an anchored body")
                     ratios = values[..., [values_idx_by_link[i_b] for i_b in links_idx_body]]
                     ratios = ratios / self.get_links_mass(links_idx_body, envs_idx)
                     if torch.allclose(ratios, ratios[..., :1], rtol=gs.EPS, atol=gs.EPS):
@@ -2183,7 +2266,10 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
         envs_idx = envs_idx if self._options.batch_links_info else self._scene._envs_idx
         if not self._options.batch_links_info or self.n_envs == 0:
-            values = values[None]
+            if HAS_TORCH:
+                values = values[None]
+            else:
+                values = _env_first_values(values)
         # The weights are solved again rather than scaled by the mass ratio: a weight follows the mass alone for a body
         # whose degrees of freedom carry no armature, which a model loaded from a file has.
         if name == "mass":
@@ -2241,7 +2327,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # Neither the masses nor the links they are written to are read back for checking: a condition drawn from
         # values on the device forces a synchronization at every call. The mass is spread over the links given, so
         # they have to carry some between them. A selection already on the device is left as it is, for that reason.
-        if not isinstance(links_idx, torch.Tensor):
+        if not is_torch_tensor(links_idx):
             if links_idx is None:
                 links = self.links
             elif isinstance(links_idx, slice):
@@ -2274,16 +2360,44 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         friction_ratio, geoms_idx, envs_idx = self._sanitize_io_variables(
             friction_ratio, geoms_idx, self.n_geoms, "geoms_idx", envs_idx, skip_allocation=True
         )
-        if self.n_envs == 0:
-            friction_ratio = friction_ratio[None]
+        if HAS_TORCH:
+            if self.n_envs == 0:
+                friction_ratio = friction_ratio[None]
+        elif self.n_envs == 0:
+            friction_ratio = _env_first_values(friction_ratio)
         kernel_set_geoms_friction_ratio(geoms_idx, envs_idx, friction_ratio, self.dyn_state, self.rigid_config)
+
+    def _stage_values(self, values, num_values, envs_idx):
+        """Copy a DLPack producer into the batch-last staging buffer a staged write kernel reads, on first use."""
+        if self._stager is None:
+            self._stager = DlpackStager()
+        return self._stager.stage(values, num_values, self._B, envs_idx=envs_idx)
 
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_qpos(self, qpos, qs_idx=None, envs_idx=None, *, skip_forward=False):
         if self.constraint_solver is not None:
             self.constraint_solver.reset(envs_idx)
 
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(qpos):
+            # A compiled graph hands its configuration over as a DLPack capsule, which the state takes device to
+            # device: the values are staged batch-last, in the layout the write kernel reads them in
+            qs_idx_ = index_field(qs_idx, self.n_qs, "qs_idx")
+            envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
+            values = self._stage_values(qpos, qs_idx_.shape[0], envs_idx_)
+            # Teleporting a sleeping body must revive it, otherwise the new pose is silently dropped. Nothing can be
+            # hibernated while the scene is still being built.
+            if self._use_hibernation and self.is_built:
+                kernel_wake_up_entities_by_qs(
+                    qs_idx_,
+                    envs_idx_,
+                    self.dyn_state,
+                    self.constraint_solver.constraint_state,
+                    self.dyn_info,
+                    self.rigid_info,
+                    self.rigid_config,
+                )
+            kernel_set_qpos_staged(qs_idx_, envs_idx_, values, self.rigid_info, self.rigid_config)
+        elif gs.use_zerocopy and HAS_TORCH:
             data = qd_to_torch(self.rigid_info.qpos, transpose=True, copy=False)
             qs_mask = indices_to_mask(qs_idx)
             if (
@@ -2305,16 +2419,18 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             else:
                 mask = (0, *qs_mask) if self.n_envs == 0 else indices_to_mask(envs_idx, *qs_mask, boolean_mask=False)
                 assign_indexed_tensor(data, mask, qpos)
-                if mask and isinstance(mask[0], torch.Tensor):
+                if mask and is_torch_tensor(mask[0]):
                     envs_idx = mask[0].reshape((-1,))
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
         else:
             qpos, qs_idx, envs_idx = self._sanitize_io_variables(
                 qpos, qs_idx, self.n_qs, "qs_idx", envs_idx, skip_allocation=True
             )
-            if self.n_envs == 0:
-                qpos = qpos[None]
+            if HAS_TORCH:
+                if self.n_envs == 0:
+                    qpos = qpos[None]
+            elif self.n_envs == 0:
+                qpos = _env_first_values(qpos)
 
             # Teleporting a sleeping body must revive it, otherwise the new pose is silently dropped. Nothing can be
             # hibernated while the scene is still being built.
@@ -2356,8 +2472,15 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             array of length 7 in which each element corresponds to
             (timeconst, dampratio, dmin, dmax, width, mid, power)
         """
-        sol_params_ = broadcast_tensor(sol_params, gs.tc_float, (7,), ("",))
-        sol_params_ = _sanitize_sol_params(sol_params_.clone(), self._sol_min_timeconst)
+        if HAS_TORCH:
+            sol_params_ = broadcast_tensor(sol_params, gs.tc_float, (7,), ("",))
+            sol_params_ = _sanitize_sol_params(sol_params_.clone(), self._sol_min_timeconst)
+        else:
+            # Solver parameters are a handful of model values, so a torch-free scene sanitizes them on the host
+            sol_params_ = _sanitize_sol_params(
+                broadcast_values(sol_params, gs.tc_float, (7,), ("",)), self._sol_min_timeconst
+            )
+            sol_params_ = device_tensor_from_numpy(sol_params_, gs.qd_float)
         kernel_set_global_sol_params(sol_params_, self.dyn_info, self.rigid_config)
 
     @mutates(StateChange.MODEL)
@@ -2407,20 +2530,35 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # Geom values resolve an unspecified time constant to the default, then defer the floor to contact
         # assembly, which floors the mixed pair value (see func_set_contact_data), mirroring the build-time
         # sanitization; joint and equality values are consumed unmixed, so they are floored here.
-        sol_params_ = _sanitize_sol_params(
-            sol_params_.clone(),
-            self._sol_min_timeconst,
-            self._sol_default_timeconst if constraint_type == ConstraintType.GEOM else None,
-            floor_timeconst=constraint_type != ConstraintType.GEOM,
-        )
+        if HAS_TORCH:
+            sol_params_ = _sanitize_sol_params(
+                sol_params_.clone(),
+                self._sol_min_timeconst,
+                self._sol_default_timeconst if constraint_type == ConstraintType.GEOM else None,
+                floor_timeconst=constraint_type != ConstraintType.GEOM,
+            )
+        else:
+            # Solver parameters are a handful of model values, so a torch-free scene sanitizes them on the host
+            sol_params_ = device_tensor_from_numpy(
+                _sanitize_sol_params(
+                    to_numpy_values(sol_params_),
+                    self._sol_min_timeconst,
+                    self._sol_default_timeconst if constraint_type == ConstraintType.GEOM else None,
+                    floor_timeconst=constraint_type != ConstraintType.GEOM,
+                ),
+                gs.qd_float,
+            )
         if self.n_envs == 0 and batched:
-            sol_params_ = sol_params_[None]
+            if HAS_TORCH:
+                sol_params_ = sol_params_[None]
+            else:
+                sol_params_ = _env_first_values(sol_params_)
 
         kernel_set_sol_params(inputs_idx, envs_idx, sol_params_, self.dyn_info, self.rigid_config, int(constraint_type))
 
     @mutates(StateChange.MODEL)
     def _set_dofs_info(self, tensor_list, dofs_idx, name, envs_idx=None):
-        if gs.use_zerocopy and name in {
+        if gs.use_zerocopy and HAS_TORCH and name in {
             "kp",
             "kv",
             "act_gain",
@@ -2450,8 +2588,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 num_values = len(tensor_list)
                 for j, mask_j in enumerate(((*mask, ..., j) for j in range(num_values)) if num_values > 1 else (mask,)):
                     assign_indexed_tensor(data, mask_j, tensor_list[j])
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
             return
 
         tensor_list = list(tensor_list)
@@ -2466,7 +2603,10 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 skip_allocation=True,
             )
             if self.n_envs == 0 and self._options.batch_dofs_info:
-                tensor = tensor[None]
+                if HAS_TORCH:
+                    tensor = tensor[None]
+                else:
+                    tensor = _env_first_values(tensor)
             tensor_list[j] = tensor
         if name == "kp":
             kernel_set_dofs_kp(dofs_idx, envs_idx_, *tensor_list, self.dyn_info, self.rigid_config)
@@ -2524,22 +2664,40 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_dofs_position(self, position, dofs_idx=None, envs_idx=None):
+        if not HAS_TORCH and is_dlpack_source(position):
+            require_torch("setting dof positions from a DLPack producer")
         self.constraint_solver.reset(envs_idx)
 
         position, dofs_idx, envs_idx = self._sanitize_io_variables(
             position, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
         )
-        if self.n_envs == 0:
-            position = position[None]
 
         self._wake_dofs(dofs_idx, envs_idx)
 
         # See 'KinematicSolver.set_dofs_position'
-        positions = self._read_data(self.dyn_state.dofs.pos, envs_idx, None, copy=True)
-        positions[:, dofs_idx] = position
-        is_dof_set = torch.zeros((self.n_dofs,), dtype=gs.tc_bool, device=gs.device)
-        is_dof_set[dofs_idx] = True
-        kernel_set_dofs_position(is_dof_set, envs_idx, positions, self.dyn_info, self.rigid_info, self.rigid_config)
+        if HAS_TORCH:
+            if self.n_envs == 0:
+                position = position[None]
+            positions = self._read_data(self.dyn_state.dofs.pos, envs_idx, None, copy=True)
+            positions[:, dofs_idx] = position
+            is_dof_set = torch.zeros((self.n_dofs,), dtype=gs.tc_bool, device=gs.device)
+            is_dof_set[dofs_idx] = True
+            write_envs_idx = envs_idx
+        else:
+            # Without a tensor view to patch, the whole row of dof positions is rebuilt on the device, exactly as the
+            # kinematic solver does: the copy kernel reads it out of the state, the scatter overwrites the dofs the
+            # call names, and the write kernel is handed the whole batch, the environments it does not select getting
+            # the positions they already hold back
+            positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
+            kernel_copy_dofs_pos(positions, self.dyn_state)
+            kernel_scatter_dofs_pos(positions, dofs_idx, envs_idx, _batch_last_values(position, self.n_envs))
+            is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
+            is_dof_set[to_numpy_values(dofs_idx)] = 1
+            is_dof_set = device_tensor_from_numpy(is_dof_set, gs.tc_int)
+            write_envs_idx = index_field(None, self._B, "envs_idx")
+        kernel_set_dofs_position(
+            is_dof_set, write_envs_idx, positions, self.dyn_info, self.rigid_info, self.rigid_config
+        )
 
         self.clear_errno(envs_idx)
 
@@ -2578,47 +2736,82 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
     def control_dofs_force(self, force, dofs_idx=None, envs_idx=None):
         # A control target is consumed by the actuation pass of the next step, which wakes a sleeping link it actuates
         # (see func_torque_and_passive_force), so the target is written without waking anything here.
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(force):
+            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device
+            dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
+                envs_idx, self._B, "envs_idx"
+            )
+            values = self._stage_values(force, dofs_idx_.shape[0], envs_idx_)
+            kernel_control_dofs_staged(
+                int(gs.CTRL_MODE.FORCE), dofs_idx_, envs_idx_, values, self.dyn_state, self.rigid_config
+            )
+            return
+        if gs.use_zerocopy and HAS_TORCH:
             mask = (0, *indices_to_mask(dofs_idx)) if self.n_envs == 0 else indices_to_mask(envs_idx, dofs_idx)
             ctrl_mode = qd_to_torch(self.dyn_state.dofs.ctrl_mode, transpose=True, copy=False)
             ctrl_mode[mask] = gs.CTRL_MODE.FORCE
             ctrl_force = qd_to_torch(self.dyn_state.dofs.ctrl_force, transpose=True, copy=False)
             assign_indexed_tensor(ctrl_force, mask, force)
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
             return
 
         force, dofs_idx, envs_idx = self._sanitize_io_variables(
             force, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
         )
-        if self.n_envs == 0:
-            force = force[None]
+        if HAS_TORCH:
+            if self.n_envs == 0:
+                force = force[None]
+        elif self.n_envs == 0:
+            force = _env_first_values(force)
 
         kernel_control_dofs_force(dofs_idx, envs_idx, force, self.dyn_state, self.rigid_config)
 
     @mutates()
     def control_dofs_velocity(self, velocity, dofs_idx=None, envs_idx=None):
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(velocity):
+            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device
+            dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
+                envs_idx, self._B, "envs_idx"
+            )
+            values = self._stage_values(velocity, dofs_idx_.shape[0], envs_idx_)
+            kernel_control_dofs_staged(
+                int(gs.CTRL_MODE.VELOCITY), dofs_idx_, envs_idx_, values, self.dyn_state, self.rigid_config
+            )
+            return
+        if gs.use_zerocopy and HAS_TORCH:
             mask = (0, *indices_to_mask(dofs_idx)) if self.n_envs == 0 else indices_to_mask(envs_idx, dofs_idx)
             ctrl_mode = qd_to_torch(self.dyn_state.dofs.ctrl_mode, transpose=True, copy=False)
             ctrl_mode[mask] = gs.CTRL_MODE.VELOCITY
             ctrl_vel = qd_to_torch(self.dyn_state.dofs.ctrl_vel, transpose=True, copy=False)
             assign_indexed_tensor(ctrl_vel, mask, velocity)
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
             return
 
         velocity, dofs_idx, envs_idx = self._sanitize_io_variables(
             velocity, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
         )
-        if self.n_envs == 0:
-            velocity = velocity[None]
+        if HAS_TORCH:
+            if self.n_envs == 0:
+                velocity = velocity[None]
+        elif self.n_envs == 0:
+            velocity = _env_first_values(velocity)
 
         kernel_control_dofs_velocity(dofs_idx, envs_idx, velocity, self.dyn_state, self.rigid_config)
 
     @mutates()
     def control_dofs_position(self, position, dofs_idx=None, envs_idx=None):
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(position):
+            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device. The
+            # staged kernel clears the target velocity, as the tensor write below does.
+            dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
+                envs_idx, self._B, "envs_idx"
+            )
+            values = self._stage_values(position, dofs_idx_.shape[0], envs_idx_)
+            kernel_control_dofs_staged(
+                int(gs.CTRL_MODE.POSITION), dofs_idx_, envs_idx_, values, self.dyn_state, self.rigid_config
+            )
+            return
+        if gs.use_zerocopy and HAS_TORCH:
             mask = (0, *indices_to_mask(dofs_idx)) if self.n_envs == 0 else indices_to_mask(envs_idx, dofs_idx)
             ctrl_mode = qd_to_torch(self.dyn_state.dofs.ctrl_mode, transpose=True, copy=False)
             ctrl_mode[mask] = gs.CTRL_MODE.POSITION
@@ -2626,21 +2819,40 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             assign_indexed_tensor(ctrl_pos, mask, position)
             ctrl_vel = qd_to_torch(self.dyn_state.dofs.ctrl_vel, transpose=True, copy=False)
             ctrl_vel[mask] = 0.0
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
             return
 
         position, dofs_idx, envs_idx = self._sanitize_io_variables(
             position, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
         )
-        if self.n_envs == 0:
-            position = position[None]
+        if HAS_TORCH:
+            if self.n_envs == 0:
+                position = position[None]
+        elif self.n_envs == 0:
+            position = _env_first_values(position)
 
         kernel_control_dofs_position(dofs_idx, envs_idx, position, self.dyn_state, self.rigid_config)
 
     @mutates()
     def control_dofs_position_velocity(self, position, velocity, dofs_idx=None, envs_idx=None):
-        if gs.use_zerocopy:
+        if gs.use_zerocopy and not HAS_TORCH and (is_dlpack_source(position) or is_dlpack_source(velocity)):
+            # Both targets reach the state through the staged write, which copies each of them on its own
+            if not (is_dlpack_source(position) and is_dlpack_source(velocity)):
+                require_torch("setting dof position and velocity controls from a single DLPack producer")
+            dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
+                envs_idx, self._B, "envs_idx"
+            )
+            num_values = dofs_idx_.shape[0]
+            kernel_control_dofs_position_velocity_staged(
+                dofs_idx_,
+                envs_idx_,
+                self._stage_values(position, num_values, envs_idx_),
+                self._stage_values(velocity, num_values, envs_idx_),
+                self.dyn_state,
+                self.rigid_config,
+            )
+            return
+        if gs.use_zerocopy and HAS_TORCH:
             mask = (0, *indices_to_mask(dofs_idx)) if self.n_envs == 0 else indices_to_mask(envs_idx, dofs_idx)
             ctrl_mode = qd_to_torch(self.dyn_state.dofs.ctrl_mode, transpose=True, copy=False)
             ctrl_mode[mask] = gs.CTRL_MODE.POSITION
@@ -2648,8 +2860,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             assign_indexed_tensor(ctrl_pos, mask, position)
             ctrl_vel = qd_to_torch(self.dyn_state.dofs.ctrl_vel, transpose=True, copy=False)
             assign_indexed_tensor(ctrl_vel, mask, velocity)
-            if gs.backend == gs.metal:
-                torch.mps.synchronize()
+            mps_synchronize()
             return
 
         position, _, _ = self._sanitize_io_variables(
@@ -2659,8 +2870,12 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             velocity, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
         )
         if self.n_envs == 0:
-            position = position[None]
-            velocity = velocity[None]
+            if HAS_TORCH:
+                position = position[None]
+                velocity = velocity[None]
+            else:
+                position = _env_first_values(position)
+                velocity = _env_first_values(velocity)
 
         kernel_control_dofs_position_velocity(dofs_idx, envs_idx, position, velocity, self.dyn_state, self.rigid_config)
 
