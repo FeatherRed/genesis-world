@@ -2578,8 +2578,10 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             sol_params_ = _sanitize_sol_params(sol_params_.clone(), self._sol_min_timeconst)
         else:
             # Solver parameters are a handful of model values, so a torch-free scene sanitizes them on the host
+            # The sanitizer writes through views of its argument, which is a copy because 'broadcast_values' may return
+            # a read-only view
             sol_params_ = _sanitize_sol_params(
-                broadcast_values(sol_params, gs.tc_float, (7,), ("",)), self._sol_min_timeconst
+                np.array(broadcast_values(sol_params, gs.tc_float, (7,), ("",))), self._sol_min_timeconst
             )
             sol_params_ = device_tensor_from_numpy(sol_params_, gs.qd_float)
         kernel_set_global_sol_params(sol_params_, self.dyn_info, self.rigid_config)
