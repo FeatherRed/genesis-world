@@ -13,7 +13,7 @@ from genesis.options.sensors.options import ProbesWithNormalSensorOptionsMixin
 from genesis.utils.data import opt_in
 from genesis.utils.misc import concat_with_tensor, gaussian_crosstalk_kernel, make_tensor_field
 from genesis.utils.sdf import SDFInfo
-from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
+from genesis.utils.torch_compat import torch
 
 F = torch.nn.functional
 

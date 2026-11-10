@@ -15,7 +15,7 @@ from genesis.engine.solvers.rigid.data import DynState
 from genesis.options.sensors import TemperatureGrid as TemperatureGridOptions, TemperatureProperties
 from genesis.utils.misc import concat_with_tensor, make_tensor_field, tensor_to_array
 from genesis.utils.ring_buffer import TensorRingBuffer
-from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, SimpleSensor, SimpleSensorMetadata
 

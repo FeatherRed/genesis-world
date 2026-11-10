@@ -1,6 +1,6 @@
-from genesis.utils.torch_compat import torch
-
 from genesis.options.sensors import DepthCamera as DepthCameraOptions
+
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import Sensor
 from .raycaster import RaycastContext, RaycasterReturnType, RaycasterSensor, RaycasterSharedMetadata

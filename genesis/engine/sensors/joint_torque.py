@@ -1,11 +1,10 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from genesis.utils.torch_compat import torch
-
 import genesis as gs
 from genesis.options.sensors import JointTorque as JointTorqueOptions
 from genesis.utils.misc import concat_with_tensor, make_tensor_field
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import SimpleSensor, SimpleSensorMetadata
 

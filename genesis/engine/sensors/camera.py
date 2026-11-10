@@ -7,7 +7,6 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, ClassVar, NamedTuple
 
 import numpy as np
-from genesis.utils.torch_compat import torch
 
 import genesis as gs
 from genesis.options.renderers import BatchRenderer as BatchRendererOptions
@@ -27,6 +26,7 @@ from genesis.utils.geom import (
     transform_by_trans_quat,
 )
 from genesis.utils.misc import tensor_to_array
+from genesis.utils.torch_compat import torch
 from genesis.vis.batch_renderer import BatchRenderer
 from genesis.vis.rasterizer import Rasterizer
 from genesis.vis.rasterizer_context import RasterizerContext

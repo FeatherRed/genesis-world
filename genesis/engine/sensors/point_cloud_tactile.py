@@ -20,7 +20,7 @@ from genesis.utils.misc import concat_with_tensor, make_tensor_field, tensor_to_
 from genesis.utils.point_cloud import sample_mesh_point_cloud
 from genesis.utils.raycast_qd import closest_point_on_triangle, get_triangle_vertices, triangle_face_normal
 from genesis.utils.sdf import SDFInfo
-from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, SimpleSensor, SimpleSensorMetadata
 from .probe import (

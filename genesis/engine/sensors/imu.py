@@ -1,8 +1,6 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, NamedTuple
 
-from genesis.utils.torch_compat import torch
-
 import quadrants as qd
 
 import genesis as gs
@@ -10,6 +8,7 @@ import genesis.utils.geom as gu
 from genesis.engine.solvers.rigid.data import DynState, RigidInfo
 from genesis.options.sensors import IMU as IMUOptions, CrossCouplingAxisType
 from genesis.utils.misc import concat_with_tensor, make_tensor_field, tensor_to_array
+from genesis.utils.torch_compat import torch
 
 from .base_sensor import RigidSensorMetadataMixin, RigidSensorMixin, SimpleSensor, SimpleSensorMetadata
 
