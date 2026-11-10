@@ -37,6 +37,7 @@ from genesis.utils.device_buffer import (
     DeviceView,
     _normalize_mask,
     _py_capsule_is_valid,
+    _qd_element_shape,
     copy_from_dlpack,
     view_of,
 )
@@ -740,26 +741,41 @@ def kernel_copy_values(dst: qd.types.ndarray(), src: qd.types.ndarray()):
         dst[I] = src[I]
 
 
+@qd.kernel
+def kernel_copy_field_values(dst: qd.types.ndarray(), src: qd.template()):
+    """Copy every value of a Quadrants field into a device ndarray of the same layout, without leaving the device.
+
+    A field is not accepted as a 'qd.types.ndarray()' argument, whatever its dtype, whereas a 'qd.template()' argument
+    takes it as it takes an ndarray, which is why the copy of a 'performance_mode=True' solver buffer needs its own
+    kernel (see 'owned_copy'). Fastcache cannot hash a template argument, so this kernel is compiled per signature.
+    """
+    for I in qd.grouped(dst):
+        dst[I] = src[I]
+
+
 def owned_copy(buffer) -> "qd.Ndarray":
     """Copy every value of `buffer` into a device buffer this call allocates, and return that buffer.
 
     The copy runs in a kernel, device to device, on every backend: no value ever reaches the host, and the source may be
     a field, a member of a struct, an ndarray or a tensor. The destination mirrors the element layout of the source, a
     vector or a matrix element included, so that a view of it reads as a view of the source (see 'read_view').
+    The element layout is the one 'genesis.utils.device_buffer' reads to describe a view: a field exposes it through
+    its 'n' and 'm' dimensions and an ndarray through 'element_shape' (see '_qd_element_shape').
+    The kind of the source decides the kernel, a field being no valid 'qd.types.ndarray()' argument (see
+    'kernel_copy_field_values').
     """
     raw = buffer._unwrap() if isinstance(buffer, qd.Tensor) else buffer
     dtype = raw.dtype
-    element_shape = tuple(getattr(raw, "element_shape", ()) or ())
+    element_shape = _qd_element_shape(raw)
     if len(element_shape) == 1:
         dtype = qd.types.vector(element_shape[0], dtype)
     elif len(element_shape) == 2:
         dtype = qd.types.matrix(*element_shape, dtype)
-    elif element_shape:
-        gs.raise_exception(
-            f"A torch-free state cannot copy a buffer of elements shaped {element_shape} without PyTorch."
-        )
     copy = qd.ndarray(dtype, shape=tuple(raw.shape))
-    kernel_copy_values(copy, raw)
+    if isinstance(raw, qd.Field):
+        kernel_copy_field_values(copy, raw)
+    else:
+        kernel_copy_values(copy, raw)
     return copy
 
 
