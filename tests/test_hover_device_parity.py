@@ -97,9 +97,9 @@ Under pytest the HSA repair in ``gs.init`` is warn-only, so this process keeps t
 and a long torch-present Genesis rollout can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``.  Every
 in-process rollout here is therefore short (25 and 15 steps), and the two full-length (160 + 58 step)
 training cases are delegated to child interpreters where PyTorch is blocked and the system runtime is the
-one that gets loaded.  Independence of the rollout length is not assumed: ``gpu_genesis`` skips the
-in-process tier where ``tests.device_pilot.unsafe_hsa_runtime_reason`` reports that the worker maps
-PyTorch's bundled runtime, naming the ``LD_PRELOAD`` remedy; the child scenarios are not gated.
+one that gets loaded.  Shortness alone is not trusted: ``gpu_genesis`` skips the in-process tier where
+``tests.device_pilot.unsafe_hsa_runtime_reason`` reports that the worker maps PyTorch's bundled runtime,
+naming the ``LD_PRELOAD`` remedy; the child scenarios are not gated.
 
 Two scenes are never alive at the same time
 -------------------------------------------
