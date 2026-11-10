@@ -99,8 +99,11 @@ Skip reasons
 undeclared in ``pyproject.toml``); ``torch_free_pilot`` skips it when the Torch-free drone pilot is not in
 place; ``gpu_only`` skips it on a CPU-only host (``tests.torch_block.has_gpu``, which falls back to the
 ``/dev/kfd`` device node where NVML/AMD SMI are not installed); ``device_placement`` skips it when no
-non-CPU ``evoxc`` device accepts a write (``tests.device_pilot.reachable_device_or_skip``, which can be
-pointed at a device through ``EVOXC_DEVICE``).
+non-CPU ``evoxc`` device accepts a write, and also when ``EVOXC_DEVICE`` names a cpu-kind device, naming
+that override (``tests.device_pilot.non_cpu_device_or_skip``, which wraps
+``tests.device_pilot.reachable_device_or_skip``).  ``gpu_genesis`` requests both of those first, so a skip
+decides before Genesis is initialized, before a scene is built and before a child inherits the
+environment.
 
 HSA caveat, and why the training cases run in children
 ------------------------------------------------------
@@ -166,7 +169,7 @@ from seeding import EPISODES_PER_POLICY, Perturbation, evolution_seed  # noqa: E
 from tests.device_pilot import (  # noqa: E402
     as_host,
     assert_allclose,
-    reachable_device_or_skip,
+    non_cpu_device_or_skip,
     skip_if_unsafe_hsa_runtime,
     torch_import_offenders,
 )
@@ -412,13 +415,16 @@ def safe_hsa_runtime():
 
 
 @pytest.fixture(scope="module")
-def gpu_genesis(gpu_only, safe_hsa_runtime):
+def gpu_genesis(gpu_only, device_placement, safe_hsa_runtime):
     """Initialize Genesis on its GPU backend once, and destroy it once at module teardown.
 
-    ``pytestmark``'s ``parametrize("backend", [None])`` disables the suite's autouse ``initialize_genesis``
-    fixture; this module needs its own, module-scoped one because the envs here outlive a single test and
-    ``gs.destroy()`` between tests would invalidate their solver state.  Only the in-process tests request
-    it, so they alone are gated on the HSA runtime being safe to use.
+    ``gpu_only`` and ``device_placement`` are requested first: every scene built here is compared
+    against the device residency, so a CPU-only host and a session pointed at a cpu-kind
+    ``EVOXC_DEVICE`` both skip before Genesis is initialized and before any scene is built.
+    ``pytestmark``'s ``parametrize("backend", [None])`` disables the suite's autouse
+    ``initialize_genesis`` fixture; this module needs its own, module-scoped one because the envs here
+    outlive a single test and ``gs.destroy()`` between tests would invalidate their solver state.  Only
+    the in-process tests request it, so they alone are gated on the HSA runtime being safe to use.
     """
     import genesis as gs
 
@@ -433,8 +439,13 @@ def gpu_genesis(gpu_only, safe_hsa_runtime):
 
 @pytest.fixture(scope="module")
 def device_placement(gpu_only):
-    """``(backend, device)`` of a reachable non-CPU ``evoxc`` device, or a skip naming every failure."""
-    return reachable_device_or_skip(DEVICE_BACKEND)
+    """``(backend, device)`` of a reachable non-CPU ``evoxc`` device, or a skip naming the failure.
+
+    Every test of this module compares a device residency with the host one, so a cpu-kind device
+    cannot carry the module: an ``EVOXC_DEVICE=cpu:0`` override skips here, naming the override, before
+    Genesis is initialized, before a scene is built and before a child inherits the environment.
+    """
+    return non_cpu_device_or_skip(DEVICE_BACKEND, feature="the drone device residency")
 
 
 # ---------------------------------------------------------------------------------------------

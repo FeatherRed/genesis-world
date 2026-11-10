@@ -90,9 +90,12 @@ Skip reasons
 ``pytest.importorskip`` skips the module where ``evoxc``/``tensorneat`` are missing (both are optional
 and undeclared in ``pyproject.toml``); ``gpu_genesis`` skips it on a CPU-only host
 (``tests.torch_block.has_gpu``, which falls back to the ``/dev/kfd`` device node where NVML/AMD SMI are
-not installed); ``device_placement`` skips it when no non-CPU ``evoxc`` device accepts a write
-(``tests.device_pilot.reachable_device_or_skip``, which can be pointed at a device through
-``EVOXC_DEVICE``).  The in-process tier -- every test that builds a Genesis GPU scene here, i.e. both
+not installed); ``device_placement`` skips it when no non-CPU ``evoxc`` device accepts a write, and
+also when ``EVOXC_DEVICE`` names a cpu-kind device, naming that override
+(``tests.device_pilot.non_cpu_device_or_skip``, which wraps
+``tests.device_pilot.reachable_device_or_skip``).  Both campaign fixtures and the full-horizon test
+request ``device_placement`` before ``gpu_genesis``, so a skip decides before Genesis is initialized and
+before a child starts.  The in-process tier -- every test that builds a Genesis GPU scene here, i.e. both
 campaign fixtures -- additionally skips where ``tests.device_pilot.unsafe_hsa_runtime_reason`` reports
 that the worker maps PyTorch's bundled HSA runtime, with a reason naming the ``LD_PRELOAD`` remedy (see
 the HSA section below); the torch-blocked child test is not gated, because its child repairs the
@@ -173,7 +176,7 @@ from trainer import NeuroevolutionTrainer  # noqa: E402
 from tests.device_pilot import (  # noqa: E402
     as_host,
     assert_allclose,
-    reachable_device_or_skip,
+    non_cpu_device_or_skip,
     skip_if_unsafe_hsa_runtime,
 )
 from tests.torch_block import has_gpu, run_python_checked  # noqa: E402
@@ -302,8 +305,13 @@ def safe_hsa_runtime():
 
 @pytest.fixture(scope="module")
 def device_placement():
-    """``(backend, device)`` of a reachable non-CPU ``evoxc`` device, or a skip naming every failure."""
-    return reachable_device_or_skip(DEVICE_BACKEND)
+    """``(backend, device)`` of a reachable non-CPU ``evoxc`` device, or a skip naming the failure.
+    Both residencies' scenes are compared against each other, so a cpu-kind device cannot carry this
+    module: an ``EVOXC_DEVICE=cpu:0`` override skips here, before Genesis is initialized and before any
+    scene is built, instead of running the device residency on a device the pilot's bridge does not
+    accept.
+    """
+    return non_cpu_device_or_skip(DEVICE_BACKEND, feature="the Go2 device residency")
 
 
 class RecordedGeneration(NamedTuple):
@@ -583,14 +591,14 @@ def _assert_leaf_parity(numpy_leaves, device_leaves, *, label, atol=LEAF_ATOL) -
 
 
 @pytest.fixture(scope="module")
-def default_campaign(safe_hsa_runtime, gpu_genesis, device_placement):
+def default_campaign(safe_hsa_runtime, device_placement, gpu_genesis):
     """Each residency's recorded generation and two trainer runs, one scene at a time.
 
-    ``safe_hsa_runtime`` runs before ``gpu_genesis`` so an unsafe HSA runtime skips the tier before
-    Genesis is initialized; ``gpu_genesis`` is requested next so Genesis is initialized before the
-    first scene is built; each residency's scene is built, used for all of its work and closed before
-    the other residency's scene is built, so a serial run creates two scenes here (and two in
-    ``timeout_campaign``).
+    ``safe_hsa_runtime`` runs first so an unsafe HSA runtime skips the tier before Genesis is
+    initialized, ``device_placement`` next so a session pointed at a cpu-kind device skips it just as
+    early, and ``gpu_genesis`` last so Genesis is initialized before the first scene is built; each
+    residency's scene is built, used for all of its work and closed before the other residency's scene
+    is built, so a serial run creates two scenes here (and two in ``timeout_campaign``).
     """
     backend, device = device_placement
     campaign = {}
@@ -602,12 +610,13 @@ def default_campaign(safe_hsa_runtime, gpu_genesis, device_placement):
 
 
 @pytest.fixture(scope="module")
-def timeout_campaign(safe_hsa_runtime, gpu_genesis, device_placement):
+def timeout_campaign(safe_hsa_runtime, device_placement, gpu_genesis):
     """Each residency's recorded timeout generation, one scene at a time.
 
     ``episode_length_s=0.1`` fixes ``max_episode_length`` at 5 inside the advance graph, so the timeout
-    branch needs its own scenes; they are built, used and closed one at a time like the default ones.
-    The device residency is fed the numpy residency's generation-0 population.
+    branch needs its own scenes; they are built, used and closed one at a time like the default ones,
+    with the same gate order: HSA runtime, then device placement, then Genesis.  The device residency
+    is fed the numpy residency's generation-0 population.
     """
     backend, device = device_placement
     campaign = {}
@@ -946,9 +955,13 @@ MARKER = "GO2_FULL_HORIZON"
 
 
 @pytest.mark.slow
-def test_full_horizon_reference_numbers_without_torch(gpu_genesis, device_placement):
+def test_full_horizon_reference_numbers_without_torch(device_placement, gpu_genesis):
     """Three full-horizon (1000-step) generations with the Torch-free, device-resident trainer.
 
+    ``device_placement`` is requested before ``gpu_genesis`` so a session pointed at a cpu-kind device
+    skips before Genesis is initialized and before the child is started: the child inherits the
+    environment, so a parent-side gate is the only thing that keeps it from running the device
+    residency on a device it cannot use.
     The 3000-step rollout cannot run in this process (see the module docstring's HSA section), so it runs
     in a child interpreter through ``tests.torch_block.run_python_checked``: PyTorch is blocked before
     the first import and the harness fails the child if ``torch`` reaches ``sys.modules`` anyway.
