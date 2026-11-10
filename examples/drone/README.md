@@ -94,21 +94,27 @@ shadows it and device residency dies on the missing `genesis.utils.device_buffer
 PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_train.py --torch-free --pop-size 8 --generations 2 -o out/hover_neat_pop8
 PYTHONPATH=/tmp/notorch:$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_train.py --torch-free --pop-size 8 --generations 2
 PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py --torch-free --pop-size 2 --horizon 5
+PYTHONPATH=/tmp/notorch:$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py --residency numpy --pop-size 2 --horizon 20
+PYTHONPATH=/tmp/notorch:$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_train.py --residency numpy --pop-size 8 --generations 2 -g --tell-backend numpy
 ```
 
 `--torch-free` implies `--residency device`, initializes `gs.init(backend=gs.gpu, performance_mode=False)`,
 defaults the graphs and the evolution to `iree@rocm:0` (an explicit `--evoxc-device` wins) and refuses a
-viewer, a numpy rollout/tell backend or an XLA tell. Every run prints `torch_in_process=False`, and the
-check CLI ends with `torch_free 1`. `performance_mode=True` also runs Torch-free but is not bit-identical
-(same population, `returns` up to 1.12e-08 apart over 30 steps, `fitness` and `seeds` exact), so the
-deterministic ndarray mode stays on.
+viewer, a numpy rollout/tell backend or an XLA tell. The trainer prints `torch_in_process=False` in its
+header and `summary.json`, and the check CLI ends with `torch_free 1`. `performance_mode=True` also runs
+Torch-free but is not bit-identical (same population, `returns` up to 1.12e-08 apart over 30 steps,
+`fitness` and `seeds` exact), so the deterministic ndarray mode stays on.
+
+Both residencies run Torch-free, the numpy one included: `hover_neat_train.py` refuses `--torch-free`
+together with `--residency numpy` by design, but `--residency numpy --pop-size 2 --horizon 20` under
+`PYTHONPATH=/tmp/notorch:$PWD` completes a whole generation with `fitness=[0.006757, 0.000416]`,
+`max_fitness=0.006757`, byte-identical to the unblocked run, and a full-episode pop-8 GPU run under the
+blocked path gives the fitness history `[-0.14863241, -0.16913588]` with `torch_in_process=False`.
 
 Device residency keeps every graph input and output on `rocm:0` (0 off-device leaves across initialization,
-policy forward, per-step advance, rewards, fitness, the tell and the next generation's population); the
-per-step host work left is the command RNG draw, one solver-error mask copy and the `end_code` readback
-while `--stop-when-done` is on. The numpy residency requires torch: `DroneEntity.set_propellers_rpm` is
-unusable without it (numpy input raises `AttributeError: 'ScalarNdarray' object has no attribute 'T'` at
-`drone_entity.py:84`, a DLPack input raises `TypeError` at `torch_free.py:643`).
+policy forward, per-step advance, rewards, fitness, the tell and the next generation's population). The
+per-step host work left is the command RNG draw and the `end_code` readback while `--stop-when-done` is on;
+the solver-error mask is a zero-copy device operand and `clear_errno()` clears it every step.
 
 Notable flags of `hover_neat_train.py`: `--pop-size` (8), `--generations` (2), `--horizon`, `--master-seed`,
 `--perturb-base-pos`/`--perturb-base-rpy` (0.05), `--no-perturbation`, `-e`, `-o` (`out/hover_neat`), `-g`,
@@ -117,19 +123,21 @@ Notable flags of `hover_neat_train.py`: `--pop-size` (8), `--generations` (2), `
 `hover_neat_check.py` adds `--parity`, `--residency-parity`, `--imports`, `--perturb` and defaults to
 `--pop-size 4 --generations 1 --horizon 20`.
 
-Measured throughput, torch blocked, full episodes, shared MI300X VF / ROCm 7.1 (wall times vary ±10-15 %):
-setup and compile 8.8-9.8 s (~7.9 s of it IREE compiling the tell graph); pop 8 (24 rows) generation 0
-160 steps in ~1.5 s (108 steps/s, 2595 env-steps/s), generation 1 58 steps in ~0.4 s (142 steps/s); pop 32
-(96 rows) generation 0 ~1.7 s (92 steps/s, 8820 env-steps/s), generation 1 149 steps ~1.2 s (120 steps/s,
-11551 env-steps/s) — 90-142 steps/s, env-steps scaling with rows.
+Measured throughput, torch blocked, full episodes, shared MI300X VF / ROCm 7.1 (quote ranges: host/GPU
+contention gives a ~20 % run-to-run spread): setup and compile 8.4-10.2 s, of which 6.8-8.5 s is IREE
+compiling the tell graph; 88-126 steps/s at both sizes. pop 8 (24 rows) generation 0 160 steps at 2118
+env-steps/s, generation 1 58 steps at 2512 env-steps/s; pop 32 (96 rows) generation 0 160 steps at 8773
+env-steps/s, generation 1 149 steps at 12089 env-steps/s, so env-steps scale with rows. The host-staged
+numpy residency of the same 24-row run reaches 40.3/78.9 steps/s (968/1894 env-steps/s), i.e. the device
+residency is ~2.2-2.8x faster.
 
 Parity: one population scored by both residencies agrees exactly (`returns`, `episode_returns`, `fitness`
-all 0.0 on `iree@cpu:0` and `iree@rocm:0`); each residency scoring its own population differs by 2.5e-04 in
-generation-0 `returns` (19 of 24 rows <= 1e-6) and 5.4e-07 in generation 1, because IREE device
-initialization reproduces TensorNEAT's `Pipeline.setup` float leaves only to 2.384e-07. In the active
-`tests/test_hover_device_parity.py` 2 of 5 tests pass; the 3 per-step/reference cases need
-`LD_PRELOAD=/opt/rocm/lib/libhsa-runtime64.so.1.18.70100` in-process and fail on test-side issues (an `evoxc`
-wrapper signature read, a default horizon, a 1e-5 tolerance the measured 2.536e-04 difference exceeds).
+all 0.0 on `iree@cpu:0` and `iree@rocm:0`); each residency scoring its own population differs by
+2.5e-04-4.1e-04 in generation-0 `returns` (re-measured 4.128e-04, 18 of 24 rows <= 1e-6) and 3.576e-07 in
+generation 1 (fitness 1.235e-04 / 1.341e-07, `max_fitness` equal to 6 digits), because IREE device
+initialization reproduces TensorNEAT's `Pipeline.setup` float leaves only to 2.384e-07 and one crashing
+flight amplifies that. `tests/test_hover_device_parity.py` passes 5/5 under
+`LD_PRELOAD=/opt/rocm/lib/libhsa-runtime64.so.1.18.70100` (2 passed / 3 skipped without it).
 pytest is not installed in the project venv: `PYTHONPATH=$PWD:/root/.local/share/pytest-target pytest
 tests/test_hover_device_parity.py`.
 

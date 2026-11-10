@@ -1132,8 +1132,12 @@ class Scene(RBC):
         without it a live zero-copy device view of a 'gs.qd_bool' field, whose 'dtype' is 'np.bool_', whose 'to_numpy()'
         is a host bool array and whose DLPack export is 'kDLBool'. A flagged error raises at the beginning of the next
         step, before anything else, until it is cleared: by resetting the state of the environment, or with
-        'clear_errno'. The torch-free view aliases one buffer, which the next call rewrites, and either form is
-        accepted by 'clear_errno'.
+        'clear_errno'.
+        Without PyTorch the result is a live view over one 'gs.qd_bool' buffer, which the next call rewrites: consume
+        it, or copy it, before the next call.
+        The snapshot available is the host one, 'mask.to_numpy()', since 'DeviceView.contiguous()' returns 'self' for
+        the already-contiguous 1-D mask and is therefore not a device snapshot.
+        'clear_errno' accepts either form, the live view or the host array.
         """
         return self._sim.get_error_envs_mask()
 
@@ -1882,6 +1886,14 @@ class Scene(RBC):
     def _sanitize_envs_idx(
         self, envs_idx: int | range | slice | tuple[int, ...] | list[int] | torch.Tensor | np.ndarray | None
     ) -> "torch.Tensor | np.ndarray":
+        """Sanitize a selection of environments a caller supplied into a contiguous 'int32' index array.
+
+        'envs_idx=None' selects every environment and returns the scene's own '_envs_idx', while any selection raises on
+        a scene without an environment axis ('n_envs == 0').
+        Internal and default selections do not come through here: they go through 'envs_kernel_index' in
+        'genesis/engine/solvers/torch_free.py', which validates against the scene's batch size '_B' and hands a kernel
+        its cached device index tensor, so the guard above keeps its meaning for real caller selections.
+        """
         if envs_idx is None:
             return self._envs_idx
 

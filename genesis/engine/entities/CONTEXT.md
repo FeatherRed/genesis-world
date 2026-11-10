@@ -69,10 +69,6 @@ PBD variants map to solver material constants: `PBD2DEntity`→CLOTH, `PBD3DEnti
 `HybridEntity._update_soft_part_at_pre_coupling` is `False`: coupling runs after MPM g2p on the `substep_post_coupling` hook, and the kernel uses `f + 1` for the post-g2p frame.
 `Emitter` accumulates sub-pixel droplet length across substeps (short droplets are skipped, not lost) and recycles its particle pool when the next index would exceed the entity's particle count.
 
-# Known Issues
-A torch-free scene with `n_envs == 0` cannot be built today: `RigidSolver.get_state` → `update_forward_pos` passes `scene._envs_idx` (a NumPy array) into `Scene._sanitize_envs_idx`, which rejects a selection on a non-parallelized scene.
-Only batched scenes therefore have the torch-free device-view contract.
-
 # Dependencies / See Also
 `genesis/engine/materials` — `Material` base and `gs.materials.{MPM,FEM,PBD,SPH,Hybrid,Rigid}`; provides `idx`, `sampler`, `n_groups`, density/friction/elasticity.
 `genesis/engine/solvers` — `Solver` base, `rigid.RigidSolver`, `kinematic_solver.KinematicSolver`, and particle/PBD solvers that own the index ranges and `add_*`/`set_*`/`get_*` kernels these entities call.
