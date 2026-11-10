@@ -11,15 +11,15 @@ written the same way and sharing the same helpers of ``tests/device_pilot.py``.
 
 Availability (the gate this module ships with)
 ----------------------------------------------
-The drone pilot does not exist in this tree yet, so a module-scoped autouse fixture
-(:func:`torch_free_pilot`) skips every test with :func:`_unavailable_reason`: the reason names *every*
-pilot module that is missing, imports PyTorch, or (for the CLI) accepts no ``--torch-free`` flag.  The
-check is static -- ``tests.device_pilot.torch_import_offenders`` parses the four sources, nothing is
-imported -- so the skip stays green while the parallel change lands and the same tests start running
-real assertions as soon as all four modules are in place.  Nothing here is a fail-until-updated stub.
+A module-scoped autouse fixture (:func:`torch_free_pilot`) skips every test with
+:func:`_unavailable_reason` when the pilot is not in a usable state: the reason names *every* pilot module
+that is missing, imports PyTorch, or (for the CLI) accepts no ``--torch-free`` flag.  The check is static --
+``tests.device_pilot.torch_import_offenders`` parses the four sources, nothing is imported -- so a
+regression that reintroduces PyTorch into the pilot reports it as that named skip instead of an
+``ImportError`` from a helper.  Nothing here is a fail-until-updated stub.
 
-What is pinned once the pilot lands
------------------------------------
+What is pinned
+--------------
 1. **Per-step parity on one population** (:func:`test_per_step_observation_and_reward_parity`): the same
    generation-0 population is fed to both residencies; the reset observation, every advance step's
    observation, the five ``dt``-scaled reward terms plus the total, ``returns``, the
@@ -34,8 +34,10 @@ What is pinned once the pilot lands
    row's ``returns`` must stop growing.
 3. **Documented end-to-end numbers** (:func:`test_two_generation_end_to_end_reference_numbers`): each
    residency's own generation-0 population (device-first initialization under the device residency), two
-   generations at ``pop_size=8``, compared against the seed table, the per-generation ``steps``
-   ``[160, 58]`` and the cross-residency exactness ``examples/drone/CONTEXT.md`` documents.
+   full-length generations (``horizon=FULL_HORIZON`` with ``episode_length_s=15`` and ``stop_when_done``)
+   at ``pop_size=8``, compared against the seed table, the per-generation ``steps`` ``[160, 58]``, the
+   exact ``seeds``/``end_reasons`` and the ``returns``/``fitness`` drift ``examples/drone/CONTEXT.md``
+   documents for that run.
 4. **Placement and Torch-free training** (``test_device_resident_training_without_torch``, ``slow``): a
    ``tests.torch_block.run_python_checked`` child that initializes Genesis on its GPU, builds
    ``HoverNeatEnv`` device-resident, runs a two-generation trainer budget, asserts every training leaf's
@@ -46,27 +48,28 @@ What is pinned once the pilot lands
    import first on ``PYTHONPATH``, and its ``history.jsonl``/``summary.json`` artifacts checked against the
    documented numbers.
 
-Active-verified vs written-against-the-documentation (current state)
---------------------------------------------------------------------
-Nothing below item 1 of the availability gate has ever executed in this tree: the pilot modules are
-absent or still import torch, so the gate skips, and the numeric expectations of items 1-5 are taken from
-``examples/drone/CONTEXT.md`` rather than measured here.  Concretely, the *gate* (including the offender
-report it prints) is active-verified today, and every assertion of items 1-5 is written against the
-documented API and numbers: the drone's reproducible measurements are the fixed-reset fingerprint
+Verified against this tree
+--------------------------
+The pilot is in place, so the availability gate passes and every item above executes.  The numeric
+expectations come from ``examples/drone/CONTEXT.md``: the fixed-reset fingerprint
 (``seeds=1454269175,757617120,1421746521``, ``sum=-0.024585718`` at ``pop 2``/``horizon 30``), the
-residency parity (``returns_max_abs_diff 0.000e+00``, ``fitness_max_abs_diff 0.000e+00``,
-``end_reasons_equal 1``, ``seeds_equal 1``) and the full-length two-generation run whose ``steps`` are
-``160`` then ``58`` and whose ``returns``/``fitness`` agree to exactly ``0.0``.  The drone documents *no*
-absolute fitness value for that run, so item 3 pins the ``steps``/seed/reason metadata and the
-cross-residency agreement only, and :data:`DOCUMENTED_HISTORY` stays ``None`` until the pilot's own
-reference numbers are documented.  A follow-up that measured the activated path must replace the
-``written against`` tolerances with measured ones, exactly as the Go2 module did.
+same-population residency parity (``returns_max_abs_diff 0.000e+00``, ``fitness_max_abs_diff 0.000e+00``,
+``end_reasons_equal 1``, ``seeds_equal 1``), the full-length two-generation run whose ``steps`` are
+``160`` then ``58``, and -- for the same run, where each residency scores its *own* generation-0 payload --
+``seeds``/``steps``/``env_steps``/``end_reasons`` exact with ``returns`` differing by ``2.022e-03`` in
+generation 0 (two of the 24 rows; the other 22 at most ``3e-05``) and ``2.980e-07`` in generation 1, and
+``fitness`` by ``6.785e-04`` then ``1.788e-07``.  That drift is upstream of the drone (the tell graph's
+device-side seed setup, see that file's Gotchas), so items 1-2 and 4-5 are exact-metadata-plus-tolerance
+comparisons while item 3 pins the exact metadata and the documented float drift with headroom.  The drone
+documents *no* absolute fitness value for that run, so :data:`DOCUMENTED_HISTORY` stays ``None`` until the
+pilot's own reference numbers are documented.
 
 Tolerances
 ----------
-The Go2 module derives its bounds from measured values; here the bounds are the parity tolerances the
-drone already documents for its graphs (``tests/test_hover_evox_parity.py``), widened where a quantity
-accumulates or is quadratic in a diverging value:
+The bounds are the parity tolerances the drone already documents for its graphs
+(``tests/test_hover_evox_parity.py``), widened where a quantity accumulates or is quadratic in a diverging
+value, plus the cross-residency drift ``examples/drone/CONTEXT.md`` documents for the two-generation
+reference run; the numbers in parentheses are what this tree measures against them:
 
 * :data:`RESET_OBS_ATOL` / :data:`OBS_ATOL` = ``1e-6``: the analytic reset observation and one step's
   ``(rows, 17)`` observation.  ``examples/drone/CONTEXT.md`` measures the reset observation and the
@@ -74,10 +77,18 @@ accumulates or is quadratic in a diverging value:
   may move, so the bound is the graph-level parity tolerance rather than ``0``.
 * :data:`REWARD_TERM_ATOL` = ``1e-5`` / :data:`REWARD_TOTAL_ATOL` = ``1e-6``: one ``dt``-scaled reward term
   and the total, the documented graph tolerances.
-* :data:`RETURNS_ATOL` = :data:`HISTORY_ATOL` = :data:`CROSS_RESIDENCY_ATOL` = ``1e-5``: an accumulated
-  episode return and a ``fitness_history`` entry.  The drone's full-length run documents exactly ``0.0``
-  cross-residency; the bound leaves room for a reordering of the last float32 bit while still failing any
-  real divergence (the convention ``tests/test_neuroevolution_device_parity.py`` uses).
+* :data:`RETURNS_ATOL` = ``1e-5``: one row's accumulated episode return inside one generation that *both*
+  residencies score from the same population.  The drone documents exactly ``0.0`` there; the bound leaves
+  room for a reordering of the last float32 bit while still failing any real divergence (the convention
+  ``tests/test_neuroevolution_device_parity.py`` uses).
+* :data:`CROSS_RESIDENCY_ATOL_BY_GENERATION` = ``(5e-3, 1e-5)`` and :data:`HISTORY_ATOL` = ``2e-3``: the
+  ``returns``/``episode_returns``/``fitness`` records and the ``fitness_history`` entries of the
+  two-generation reference run, where each residency scores its *own* generation-0 payload.  Generation 0
+  widens to the documented drift (``returns`` ``2.022e-03``, ``fitness`` ``6.785e-04``; measured here
+  ``2.536e-04`` and ``8.583e-05``), generation 1 stays at ``1e-5`` (documented ``2.980e-07`` and
+  ``1.788e-07``; measured ``5.364e-07`` and ``1.788e-07``).  A ``fitness_history`` entry is the mean of
+  those per-policy values, so the documented per-policy drift is the bound for it (measured ``2.980e-08``
+  and ``1.762e-07``).
 * :data:`YAW_ATOL_DEG` = ``5e-4``: the documented yaw tolerance (a float32 minimax ``atan2`` plus one ulp).
 * :data:`TERMS_SUM_ATOL` = ``1e-5``: a path's five terms summed against that path's own graph ``total``.
 * masks, ``episode_length``, ``end_code`` and every integer leaf: exact.
@@ -85,7 +96,7 @@ accumulates or is quadratic in a diverging value:
 Skip reasons
 ------------
 ``pytest.importorskip`` skips the module where ``evoxc``/``tensorneat`` are missing (both are optional and
-undeclared in ``pyproject.toml``); ``torch_free_pilot`` skips it while the Torch-free drone pilot is not in
+undeclared in ``pyproject.toml``); ``torch_free_pilot`` skips it when the Torch-free drone pilot is not in
 place; ``gpu_only`` skips it on a CPU-only host (``tests.torch_block.has_gpu``, which falls back to the
 ``/dev/kfd`` device node where NVML/AMD SMI are not installed); ``device_placement`` skips it when no
 non-CPU ``evoxc`` device accepts a write (``tests.device_pilot.reachable_device_or_skip``, which can be
@@ -94,12 +105,14 @@ pointed at a device through ``EVOXC_DEVICE``).
 HSA caveat, and why the training cases run in children
 ------------------------------------------------------
 Under pytest the HSA repair in ``gs.init`` is warn-only, so this process keeps torch's bundled HSA runtime
-and a long torch-present Genesis rollout can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``.  Every
-in-process rollout here is therefore short (25 and 15 steps), and the two full-length (160 + 58 step)
-training cases are delegated to child interpreters where PyTorch is blocked and the system runtime is the
-one that gets loaded.  Shortness alone is not trusted: ``gpu_genesis`` skips the in-process tier where
-``tests.device_pilot.unsafe_hsa_runtime_reason`` reports that the worker maps PyTorch's bundled runtime,
-naming the ``LD_PRELOAD`` remedy; the child scenarios are not gated.
+and a long torch-present Genesis rollout can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``.  The
+per-step parity rollouts are therefore kept short (25 and 15 steps), while the two-generation reference run
+(up to ``FULL_HORIZON`` steps, ``160 + 58`` in practice) and the two training cases are full-length: they
+run behind the same gate, and the training cases are additionally delegated to child interpreters where
+PyTorch is blocked and the system runtime is the one that gets loaded.  Nothing here trusts shortness
+alone: ``gpu_genesis`` skips the in-process tier where ``tests.device_pilot.unsafe_hsa_runtime_reason``
+reports that the worker maps PyTorch's bundled runtime, naming the ``LD_PRELOAD`` remedy; the child
+scenarios are not gated.
 
 Two scenes are never alive at the same time
 -------------------------------------------
@@ -182,9 +195,11 @@ MASTER_SEED = 0
 #: ``hover_neat_train.py``'s default reset perturbation (``--perturb-*`` defaults; the joint amplitude is
 #: inert on a body-only task and therefore 0).
 PERTURBATION = Perturbation(base_pos=0.05, base_rpy=0.05, joint_pos=0.0)
-#: ``scene.step()`` calls of the short in-process generations (0.25 s of a 15 s episode).
+#: ``scene.step()`` calls of the short per-step parity generations (0.25 s of a 15 s episode).
 HORIZON = 25
-#: ``hover_neat_env.EPISODE_LENGTH_S`` in seconds and the episode cap it implies (``ceil(15 / 0.01)``).
+#: ``hover_neat_env.EPISODE_LENGTH_S`` in seconds and the episode cap it implies (``ceil(15 / 0.01)``); the
+#: documented two-generation runs of :func:`test_two_generation_end_to_end_reference_numbers` use that cap
+#: as their horizon.
 EPISODE_LENGTH_S = 15.0
 FULL_HORIZON = 1500
 #: The timeout probe: ``episode_length_s=0.1`` is ``max_episode_length=10`` at ``dt=0.01``; the graph
@@ -229,11 +244,23 @@ REWARD_TERM_ATOL = 1e-5
 REWARD_TOTAL_ATOL = 1e-6
 #: A path's five terms summed against that path's own graph ``total``.
 TERMS_SUM_ATOL = 1e-5
-#: One row's accumulated episode return, and one ``fitness_history`` entry: documented as exactly 0.0
-#: cross-residency; the bound absorbs float32 reduction-order drift without hiding a divergence.
+#: One row's accumulated episode return within one generation: documented as exactly ``0.0`` when both
+#: residencies score the same population; the bound absorbs float32 reduction-order drift without hiding a
+#: divergence.
 RETURNS_ATOL = 1e-5
-HISTORY_ATOL = 1e-5
-CROSS_RESIDENCY_ATOL = 1e-5
+#: One ``fitness_history`` entry, i.e. the mean of a generation's per-policy fitness.  The drone's
+#: ``examples/drone/CONTEXT.md`` documents the per-policy fitness itself drifting by ``6.785e-04`` in
+#: generation 0 and ``1.788e-07`` in generation 1; the mean is smaller than its inputs (measured here
+#: ``2.980e-08`` and ``1.762e-07``), so the bound is the documented per-policy drift with headroom.
+HISTORY_ATOL = 2e-3
+#: Cross-residency drift of one generation's ``returns``/``episode_returns``/``fitness`` records, by
+#: generation index (the last entry covers any later generation).  ``examples/drone/CONTEXT.md``'s "End to
+#: end with the trainer" bullet documents ``seeds``/``steps``/``env_steps``/``end_reasons`` as exact but
+#: ``returns`` differing by ``2.022e-03`` in generation 0 (two of the 24 rows; the other 22 at most
+#: ``3e-05``) and ``2.980e-07`` in generation 1, ``fitness`` by ``6.785e-04`` then ``1.788e-07``: each
+#: residency scores its *own* generation-0 payload, and the tell graph's seed setup differs by up to one
+#: float32 ulp per leaf on the device (that file's Gotchas), which a 160-step crashing flight amplifies.
+CROSS_RESIDENCY_ATOL_BY_GENERATION = (5e-3, 1e-5)
 #: The next ``commands`` of one step (a host draw selected by the graph).
 COMMANDS_ATOL = 1e-6
 #: The base-position snapshot of one step (metres); documented as the live buffers being bit-identical.
@@ -460,23 +487,42 @@ def _open_env(residency, device, *, horizon=HORIZON, **kwargs):
         env.close()
 
 
+#: Operands every advance step must carry for the bookkeeping comparison below to mean anything: the
+#: command stream, the base state and the per-row episode state.  A table missing one of them is a
+#: different graph, not a renamed operand.
+REQUIRED_ADVANCE_OPERANDS = ("commands", "base_pos", "base_quat", "episode_length", "alive", "returns")
+
+
 def _advance_operand_names():
     """The tensor operand names of ``hover_kernels.hover_advance``, in call order.
 
-    The trailing ``max_episode_length`` is the graph's static specialization (it is passed as a trailing
-    Python int, not as a tensor), so it is dropped.
+    ``hover_advance`` is an ``evoxc.defn`` graph, so its Python signature is ``(*args, **kwargs)`` and says
+    nothing about the operands.  The graph's operand contract is instead the ordered ``(name, width, dtype)``
+    table :data:`hover_kernels._ADVANCE_OPERANDS`, which ``hover_kernels.build_advance`` turns into the
+    tensor specs and ``hover_kernels.run_advance`` feeds positionally; it already excludes the trailing
+    ``max_episode_length``, which is a build-time static specialization passed after the tensors.
     """
-    import inspect
-
     import hover_kernels
 
-    names = tuple(inspect.signature(hover_kernels.hover_advance).parameters)
-    if not names or names[-1] != "max_episode_length":
+    table = getattr(hover_kernels, "_ADVANCE_OPERANDS", None)
+    if not table:
         raise AssertionError(
-            f"hover_kernels.hover_advance's signature changed ({names}); the advance-operand mapping of "
-            "tests/test_hover_device_parity.py assumes max_episode_length is its trailing specialization"
+            "hover_kernels._ADVANCE_OPERANDS is missing or empty; this module maps the device rollout's "
+            "positional advance operands onto that table"
         )
-    return names[:-1]
+    names = tuple(entry[0] for entry in table)
+    if len(names) != len(set(names)):
+        raise AssertionError(
+            f"hover_kernels._ADVANCE_OPERANDS names an operand twice ({names}); the positional mapping of "
+            "tests/test_hover_device_parity.py needs one name per operand"
+        )
+    missing = [name for name in REQUIRED_ADVANCE_OPERANDS if name not in names]
+    if missing:
+        raise AssertionError(
+            f"hover_kernels._ADVANCE_OPERANDS is missing {missing} ({len(names)} operands: {names}); the "
+            "advance step cannot run without them, so this is not the graph's operand table"
+        )
+    return names
 
 
 def _cast_fields(fields):
@@ -561,8 +607,22 @@ def _record_device_advance(monkeypatch, env) -> list:
     def recording(executable, *args, **kwargs):
         result = original(executable, *args, **kwargs)
         if _is_advance(executable, env):
+            # ``_run_advance`` passes the ``_ADVANCE_OPERANDS`` tensors positionally, then the graph's
+            # ``max_episode_length`` specialization; anything beyond that would be dropped by the zip.
+            extra = len(args) - (len(names) + 1)
+            if extra > 0:
+                raise AssertionError(
+                    f"the device advance call passed {len(args)} positional arguments; hover_kernels declares "
+                    f"{len(names)} tensor operands plus the max_episode_length specialization, so {extra} of "
+                    "them would be dropped by this module's operand mapping"
+                )
             operands = dict(zip(names, args, strict=False))
             operands.update({name: value for name, value in kwargs.items() if name in names})
+            if tuple(operands) != names:
+                raise AssertionError(
+                    f"the recorded advance operands {tuple(operands)} are not hover_kernels' operand table "
+                    f"{names}; the per-step bookkeeping comparison is keyed by that order"
+                )
             leaves = hover_device_rollout._outputs(result)
             if len(leaves) != len(ADVANCE_LEAVES):
                 raise AssertionError(
@@ -761,12 +821,15 @@ def residency_runs(gpu_genesis, device_placement):
     """Both residencies' two-generation trainer runs, built and closed one after the other.
 
     ``gpu_genesis`` is requested first so Genesis is initialized before the first scene is built, and only
-    one env is alive at a time (each one owns a 24-row drone scene).
+    one env is alive at a time (each one owns a 24-row drone scene).  Both envs run the documented
+    full-length episode (:data:`FULL_HORIZON` steps of the :data:`EPISODE_LENGTH_S` cap,
+    ``stop_when_done=True``), which is the configuration :data:`DOCUMENTED_STEPS` belongs to: a generation
+    ends once every row has crashed or timed out.
     """
     backend, device = device_placement
     runs = {}
     for residency, target in (("numpy", None), ("device", device)):
-        with _open_env(residency, target) as env:
+        with _open_env(residency, target, horizon=FULL_HORIZON) as env:
             runs[residency] = _trainer_run(env, GENERATIONS)
     return runs
 
@@ -991,14 +1054,20 @@ def test_termination_mask_and_timeout_parity(gpu_genesis, device_placement, monk
 # ---------------------------------------------------------------------------------------------
 
 
+def _cross_residency_atol(generation):
+    """The documented record tolerance of one generation (:data:`CROSS_RESIDENCY_ATOL_BY_GENERATION`)."""
+    return CROSS_RESIDENCY_ATOL_BY_GENERATION[min(generation, len(CROSS_RESIDENCY_ATOL_BY_GENERATION) - 1)]
+
+
 def test_two_generation_end_to_end_reference_numbers(gpu_genesis, residency_runs):
     """Two full-length generations at each residency's own population, against the documented numbers.
 
     Each residency's generation-0 population is the trainer's own (device-first initialization under the
     device residency).  Documented: the seed table rows, ``steps`` ``[160, 58]`` for ``--pop-size 8
-    --generations 2``, identical ``end_reasons`` and ``returns``/``fitness`` agreeing to exactly ``0.0``
-    across residencies.  The absolute fitness values are not documented, so :data:`DOCUMENTED_HISTORY` is
-    ``None`` and only the cross-residency agreement is pinned here.
+    --generations 2``, identical ``seeds``/``end_reasons``, and ``returns``/``fitness`` agreeing to the
+    per-generation drift ``examples/drone/CONTEXT.md`` records.  The absolute fitness values are not
+    documented, so :data:`DOCUMENTED_HISTORY` is ``None`` and only the cross-residency agreement is pinned
+    here.
     """
     numpy_run = residency_runs["numpy"]
     device_run = residency_runs["device"]
@@ -1057,11 +1126,12 @@ def test_two_generation_end_to_end_reference_numbers(gpu_genesis, residency_runs
             f"generation {generation}: end_reasons differ (device {device_record['end_reasons']} vs numpy "
             f"{numpy_record['end_reasons']})"
         )
+        atol = _cross_residency_atol(generation)
         for name in ("returns", "episode_returns", "fitness"):
             assert_allclose(
                 device_record[name],
                 numpy_record[name],
-                atol=CROSS_RESIDENCY_ATOL,
+                atol=atol,
                 rtol=0,
                 label=f"generation {generation} {name} (device vs numpy)",
             )
