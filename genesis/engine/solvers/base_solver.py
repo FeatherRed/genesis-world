@@ -35,6 +35,7 @@ from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, require_torch
 from .torch_free import (
     broadcast_values,
     device_tensor_from_numpy,
+    envs_index_tensor,
     index_field,
     mps_synchronize,
     qd_field,
@@ -375,7 +376,11 @@ class Solver(RBC):
     def flag_errno(self, code: int, envs_idx=None) -> None:
         """Flag the given error for the given envs, all of them if None, which 'check_errno' then raises."""
         if not HAS_TORCH:
-            kernel_flag_errno(index_field(envs_idx, self._B, "envs_idx"), code, self._errno_latched, self._errno_mask)
+            # Flagging no environment flags nothing, and Quadrants has no zero-length buffer to launch a kernel on
+            envs_idx_ = envs_index_tensor(self._scene, envs_idx)
+            if envs_idx_ is None:
+                return
+            kernel_flag_errno(envs_idx_, code, self._errno_latched, self._errno_mask)
             return
         # The flags of every env are updated through a mask, rather than those of the selected envs alone: indexing by a
         # boolean mask makes torch count the envs it selects to size the result, which waits for the device, and the
@@ -387,7 +392,11 @@ class Solver(RBC):
     def clear_errno(self, envs_idx=None) -> None:
         """Clear the errors the solver flagged for the given envs, all of them if None (see 'register_errors')."""
         if not HAS_TORCH:
-            envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
+            # Clearing no environment leaves every flag as it is, and Quadrants has no zero-length buffer to launch a
+            # kernel on (see 'envs_index_tensor')
+            envs_idx_ = envs_index_tensor(self._scene, envs_idx)
+            if envs_idx_ is None:
+                return
             if self._errno is None:
                 kernel_clear_errno(envs_idx_, self._errno_latched, self._errno_mask)
             else:

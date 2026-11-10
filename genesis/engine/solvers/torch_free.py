@@ -41,6 +41,8 @@ __all__ = [
     "broadcast_values",
     "device_tensor_from_numpy",
     "drop_repeated_values",
+    "envs_flag_mask",
+    "envs_index_tensor",
     "envs_selection",
     "index_field",
     "is_dlpack_source",
@@ -110,8 +112,15 @@ def qd_field(dtype, shape):
 
 
 def device_tensor_from_numpy(values, dtype):
-    """Upload `values` as the C-contiguous Quadrants ndarray of `dtype` that a kernel reads as 'qd.types.ndarray()'."""
+    """Upload `values` as the C-contiguous Quadrants ndarray of `dtype` that a kernel reads as 'qd.types.ndarray()'.
+
+    A buffer holding no entry at all stays a host array: Quadrants has no zero-length ndarray, and a kernel takes a
+    NumPy array as it takes an ndarray, so the loops over a selection of no entry run none of their iterations. The
+    empty selection of an environment or of an entry of the state is thus a well-defined no-op rather than an error.
+    """
     array = np.ascontiguousarray(values, dtype=numpy_dtype(dtype))
+    if not array.size:
+        return array
     tensor = qd.ndarray(_qd_type(dtype), shape=array.shape)
     tensor.from_numpy(array)
     return tensor
@@ -229,12 +238,52 @@ def broadcast_tensor(values, dtype, shape, dim_names=None):
 # ------------------------------------------------------------------------------------------------
 
 
+def _is_device_selection(index) -> bool:
+    """Whether the entries of `index` live in device memory, so that only a host read can inspect them."""
+    return isinstance(index, (DeviceView, qd.Tensor, qd.Field, qd.Ndarray))
+
+
+def _resolve_flag_mask(values: np.ndarray, max_size: int) -> np.ndarray:
+    """Indices a device-resident selection of one flag per entry flags, as 'mask_indices' reads such a mask.
+
+    A torch-free scene states the mask of the entries a call selects as a device buffer holding one flag for each of
+    them, which 'Solver.get_error_envs_mask' returns and 'Simulator.clear_errno' reads back. A non-zero flag selects
+    its entry, exactly as a true entry of a boolean mask does. A selection of another shape, or holding a value other
+    than 0 and 1, names its entries itself and is returned unchanged.
+    """
+    if values.ndim != 1 or values.size != max_size or values.dtype.kind not in "iu":
+        return values
+    if not np.isin(values, (0, 1)).all():
+        return values
+    return np.nonzero(values)[0]
+
+
+def envs_flag_mask(envs_idx, num_envs: int) -> "np.ndarray | None":
+    """The boolean mask over every environment of the scene that `envs_idx` states, or None if it names its entries.
+
+    A boolean mask states one flag per environment, be it on the host or on the device, and so does a device-resident
+    buffer of one 0/1 flag per environment, which is the mask form of a torch-free scene (see '_resolve_flag_mask').
+    An index collection names the environments it selects whatever its values, as PyTorch reads it.
+    """
+    if not isinstance(envs_idx, np.ndarray) and not _is_device_selection(envs_idx):
+        return None
+    values = to_numpy_values(envs_idx)
+    if values.ndim != 1 or values.size != num_envs:
+        return None
+    if values.dtype == np.bool_:
+        return values
+    if _is_device_selection(envs_idx) and values.dtype.kind in "iu" and np.isin(values, (0, 1)).all():
+        return values.astype(bool)
+    return None
+
+
 def sanitize_index_values(index, expected_size: int, max_size: int, dim: int, name: str) -> np.ndarray:
     """Sanitize one index selection into the C-contiguous int32 values a kernel iterates over.
 
     The accepted forms and the errors raised are those of 'genesis.utils.misc.sanitize_index', of which this is the
     numpy analogue: a negative entry wraps around `max_size`, a boolean mask must have shape '(max_size,)', and the
-    selection ends up one-dimensional, of length `expected_size` when that is not -1.
+    selection ends up one-dimensional, of length `expected_size` when that is not -1. A device-resident selection of
+    one 0/1 flag per entry is the mask a torch-free scene gives, and becomes the indices it flags.
     """
     is_bool_mask = False
     is_negative_wrap_required = False
@@ -253,7 +302,11 @@ def sanitize_index_values(index, expected_size: int, max_size: int, dim: int, na
             values = np.asarray(list(index), dtype=np.int64)
             is_negative_wrap_required = True
     else:
+        is_device_index = _is_device_selection(index)
         values = to_numpy_values(index)
+        if is_device_index:
+            # The mask form of a torch-free scene holds one flag per entry, which a kernel cannot read as such
+            values = _resolve_flag_mask(values, max_size)
         # See 'broadcast_values' for arrays with negative strides
         if any(stride < 0 for stride in values.strides):
             values = values.copy()
@@ -301,6 +354,18 @@ def envs_selection(scene, envs_idx) -> np.ndarray:
     return np.ascontiguousarray(to_numpy_values(scene._sanitize_envs_idx(envs_idx)), dtype=numpy_dtype(gs.tc_int))
 
 
+def envs_index_tensor(scene, envs_idx):
+    """Device tensor of the environments a call selects, as the kernel iterating over them reads it.
+
+    None is returned when the selection names no environment at all: Quadrants has no zero-length buffer, and a write
+    over no environment leaves every one of them as it is, so the caller returns without launching anything.
+    """
+    values = sanitize_index_values(envs_idx, -1, scene._B, 0, "envs_idx")
+    if not values.size:
+        return None
+    return device_tensor_from_numpy(values, gs.tc_int)
+
+
 # ------------------------------------------------------------------------------------------------
 # Repeated indices
 # ------------------------------------------------------------------------------------------------
@@ -331,21 +396,40 @@ def drop_repeated_values(index_input, index: np.ndarray, tensors: tuple, axis: i
 
     The counterpart of 'genesis.utils.misc.drop_repeated_index': an index given one row per environment keeps every
     entry, the earlier occurrences of a row becoming -1, which the kernels skip; an index given as a sequence is
-    compacted along its last axis, and so are the values along `axis`.
+    compacted along its last axis, and so are the values along `axis`. A boolean mask, on the host or on the device,
+    names each entry at most once and is left as it is, its positions in the mask saying nothing of the rows of the
+    values, which hold one row per selected entry.
     """
     tensors = tuple(tensors)
-    if isinstance(index_input, (list, tuple, np.ndarray)):
-        n_dims = np.ndim(index_input)
-    else:
+    if _is_device_selection(index_input):
+        # The repeated entries of a device-resident selection are found on the host, where a mask is read back anyway
+        index_input = _resolve_flag_mask(to_numpy_values(index_input), max_size)
+    if not isinstance(index_input, (list, tuple, np.ndarray)):
+        return index, tensors
+    n_dims = np.ndim(index_input)
+    if n_dims == 0:
+        # A scalar names one entry, which cannot repeat
         return index, tensors
     if n_dims > 1:
         is_last = last_occurrence(index) == np.arange(index.shape[-1])
         return np.where(is_last, index, -1), tensors
-    index_row = np.mod(np.asarray(to_numpy_values(index_input)).reshape(-1), max_size)
+    index_given = np.asarray(to_numpy_values(index_input))
+    if index_given.dtype == np.bool_:
+        return index, tensors
+    index_row = np.mod(index_given.reshape(-1), max_size)
     is_last = last_occurrence(index_row) == np.arange(index_row.shape[-1])
     positions = np.nonzero(is_last)[0]
     if len(positions) == len(is_last):
         return index, tensors
+    # The positions are those of the entries of the selection, one row of the values per entry: a selection holding
+    # fewer rows than it names entries, as one covering a subset of the environments does, has no entry to compact
+    if index.shape[-1] != len(is_last) or any(
+        tensor is not None and tensor.shape[axis] != len(is_last) for tensor in tensors
+    ):
+        gs.raise_exception(
+            f"Cannot keep the last occurrence of the repeated indices {index_given.reshape(-1).tolist()}, which name "
+            f"{len(is_last)} entries where the selection and its values hold {index.shape[-1]} of them."
+        )
     values_kept = tuple([None if tensor is None else np.take(tensor, positions, axis=axis) for tensor in tensors])
     return np.take(index, positions, axis=-1), values_kept
 
@@ -353,6 +437,43 @@ def drop_repeated_values(index_input, index: np.ndarray, tensors: tuple, axis: i
 # ------------------------------------------------------------------------------------------------
 # Accessor state I/O
 # ------------------------------------------------------------------------------------------------
+
+
+def _values_shape(values) -> "tuple[int, ...] | None":
+    """Shape of `values` as far as it is declared, read without touching their entries."""
+    shape = getattr(values, "shape", None)
+    if shape is not None:
+        return tuple(shape)
+    if isinstance(values, (list, tuple)):
+        return tuple(np.shape(values))
+    return None
+
+
+def select_envs_values(values, envs_mask, num_selected: int, expected_shape, dim_names):
+    """Values written to the environments a mask selects, given one row per selected or per existing environment.
+
+    A masked write takes its values one row per selected environment, as 'set_qpos' does on the torch path, and one row
+    per environment of the scene, out of which the rows the mask flags are the ones written, as 'masked_scatter_'
+    reads them. A single row, and the values of a form without a leading row at all, spread over every selected
+    environment; a batch of rows of another length is refused here with the forms a masked write accepts.
+    """
+    if values is None or envs_mask is None or num_selected == len(envs_mask):
+        return values
+    values_shape = _values_shape(values)
+    if values_shape is None or not values_shape:
+        # A scalar, or a container NumPy reads one of: the broadcast handles its shape
+        return values
+    if values_shape[0] in (1, num_selected) or len(values_shape) != len(expected_shape):
+        # A single row, or values stated without a leading row per environment, which the broadcast spreads
+        return values
+    if values_shape[0] != len(envs_mask):
+        gs.raise_exception(
+            f"Invalid input shape: {values_shape}. A masked write takes values of shape "
+            f"(len(envs_idx), *element_shape) = {tuple(expected_shape)}, one row per environment of the scene "
+            f"({len(envs_mask)}, *element_shape) out of which the mask selects the rows written, (1, *element_shape), "
+            f"or (*element_shape)."
+        )
+    return np.ascontiguousarray(np.asarray(to_numpy_values(values))[envs_mask])
 
 
 def sanitize_io_variables(
@@ -374,14 +495,21 @@ def sanitize_io_variables(
 
     The values are broadcast to the numpy array of the shape the kernel filling or reading them expects, and uploaded
     as the device tensor that kernel takes. The indices are uploaded as int32 device tensors, except `envs_idx_` of a
-    call that is not batched: no environment is selected then, and Quadrants has no zero-length buffer to hold the
-    empty selection, so it is None, which every such caller discards already.
+    call that is not batched: no environment is selected then, Quadrants having no zero-length buffer, so it is None,
+    which every such caller discards already. A selection naming no environment or no entry at all is a no-op: its
+    buffers hold no entry, which the loops of the kernels skip (see 'device_tensor_from_numpy').
+
+    The values a masked write takes are those of the torch path: one row per selected environment, one row per
+    environment of the scene (out of which the mask flags the rows written), a single row, or none at all, which the
+    last three spread over every selected environment (see 'select_envs_values').
     """
     if dtype is None:
         dtype = gs.tc_float
     n_envs = scene.n_envs
     is_overwrite = tensor is not None and not accumulate
     envs_idx_ = envs_selection(scene, envs_idx) if batched else None
+    # The mask a selection of environments states, which the values of a masked write are reduced by
+    envs_mask = envs_flag_mask(envs_idx, n_envs) if batched and n_envs > 0 else None
 
     if batched and batched_idx and np.ndim(inputs_idx) == 2:
         dim_names = ("envs_idx", idx_name, *["" for _ in element_shape])
@@ -392,7 +520,12 @@ def sanitize_io_variables(
         )
         tensor_values = None
         if tensor is not None or not skip_allocation:
-            tensor_values = broadcast_values(tensor, dtype, (*inputs_values.shape, *element_shape), dim_names)
+            tensor_values = broadcast_values(
+                select_envs_values(tensor, envs_mask, len(envs_idx_), (*inputs_values.shape, *element_shape), dim_names),
+                dtype,
+                (*inputs_values.shape, *element_shape),
+                dim_names,
+            )
         if is_overwrite:
             envs_idx_, (tensor_values, inputs_values) = drop_repeated_values(
                 envs_idx, envs_idx_, (tensor_values, inputs_values), axis=0, max_size=n_envs
@@ -418,7 +551,13 @@ def sanitize_io_variables(
         tensor_values = None
         if tensor is not None or not skip_allocation:
             tensor_values = broadcast_values(
-                tensor,
+                select_envs_values(
+                    tensor,
+                    envs_mask,
+                    len(envs_idx_),
+                    (len(envs_idx_), len(inputs_values), *element_shape),
+                    ("envs_idx", idx_name, *["" for _ in element_shape]),
+                ),
                 dtype,
                 (len(envs_idx_), len(inputs_values), *element_shape),
                 ("envs_idx", idx_name, *["" for _ in element_shape]),
@@ -627,15 +766,17 @@ class DlpackStager:
         selection reaches the host.
         A masked write still needs its selection on the host, where the bridge splits the copy into contiguous runs, so
         a selection given on the device costs one host read of its indices, and a backend without a device copy, as the
-        CPU one, reads the buffer back once more to patch it.
+        CPU one, reads the buffer back once more to patch it. A device-resident selection holding one 0/1 flag per
+        environment is the mask form of a torch-free scene, which becomes the indices it flags (see
+        'sanitize_index_values').
         """
         buffer = self._buffers.get((num_values, num_envs))
         if buffer is None:
             buffer = qd.ndarray(gs.qd_float, shape=(num_values, num_envs))
             self._buffers[(num_values, num_envs)] = buffer
         selection = envs_idx
-        if isinstance(selection, (qd.Tensor, qd.Field, qd.Ndarray)):
-            selection = to_numpy_values(selection)
+        if _is_device_selection(selection):
+            selection = _resolve_flag_mask(to_numpy_values(selection), num_envs)
         if is_full_env_selection(selection, num_envs):
             selection = None
         copy_from_dlpack(buffer, src, transpose=True, envs_idx=selection)
