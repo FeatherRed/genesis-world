@@ -16,9 +16,11 @@ What is measured and printed per population size:
 * the ``setup()`` breakdown -- total, ``tell`` build, fitness-rule build, verification build;
 * the per-generation wall clock (from one ``env.evaluate`` entry to the next, so the tell graph and the record bookkeeping are inside it), its median, and the resulting steps/s and env-steps/s;
 * the placement evidence of the initialization, of the fitness, of the tell output and of the next generation's payload;
-* the parity against the numpy residency (fitness history exactly, the record's float leaves within ``--tolerance``) and against ``Pipeline(...).setup()`` (integer leaves, key and generation exact, float leaves within ``--tolerance``).
+* the parity against the numpy residency (fitness history and the record's float leaves within ``--tolerance``) and against ``Pipeline(...).setup()`` (integer leaves, key and generation exact, float leaves within ``--tolerance``).
 
-Both parities use ``--tolerance`` as one absolute bound, except that the record leaves are compared with ``numpy.allclose``'s convention (``atol = rtol = --tolerance``): at the Go2 return magnitude of ~100 a 1e-5 absolute bound is barely one ulp, and the device init drift of ~5e-07 already moves a generation's returns by ~1.5e-05 by way of the genome.
+Both parities use ``--tolerance`` as one absolute bound, except that the fitness history and the record leaves are compared with ``numpy.allclose``'s convention (``atol = rtol = --tolerance``): at the Go2 return magnitude of ~100 a 1e-5 absolute bound is barely one ulp, and the device init drift of ~5e-07 already moves a generation's returns by ~1.5e-05 by way of the genome.
+The fitness history is therefore a tolerance check with its measured absolute and relative diff reported, never an exact-equality check: the layer only promises exactness for the integer leaves, ``randkey`` and ``generation``, while the ``iree`` tell/init drift accumulates in the float leaves with the population size (exact at pop 8 and 32, ~1.5e-05 at pop 64).
+The ``fitness_history_identical`` field of the evidence is that bitwise observation, kept for the record; ``fitness_history_close`` is the criterion.
 
 ``--json PATH`` writes the same numbers as one record of plain Python types.
 Nothing here imports ``torch``, ``genesis`` or ``tensordict``: the imports are ``numpy``, ``evoxc``, ``TensorNEAT`` and the sibling modules of this directory.
@@ -53,6 +55,7 @@ __all__ = [
     "Reporter",
     "ensure_pjrt_plugin",
     "float_max_abs_diff",
+    "float_max_rel_diff",
     "main",
     "measure_pop",
     "resolve_target",
@@ -141,6 +144,26 @@ def float_max_abs_diff(left, right):
     with np.errstate(invalid="ignore"):
         # The NaN padding of an unused genome slot makes ``inf - inf``; those entries are skipped below.
         differences = np.abs(left - right)
+    differences = differences[np.isfinite(differences)]
+    return float(differences.max()) if differences.size else 0.0
+
+
+def float_max_rel_diff(left, right):
+    """Largest relative difference of two float arrays; ``inf`` on a shape mismatch.
+
+    The denominator is the magnitude of ``right`` (the reference), so the number answers "how far
+    off is one value relative to the value it reproduces"; where the reference is exactly zero the
+    absolute difference is reported instead. NaN padding of an unused genome slot is ignored, like
+    in :func:`float_max_abs_diff`.
+    """
+    left = np.asarray(left, dtype=np.float64)
+    right = np.asarray(right, dtype=np.float64)
+    if left.shape != right.shape:
+        return float("inf")
+    with np.errstate(invalid="ignore", divide="ignore"):
+        differences = np.abs(left - right)
+        scale = np.abs(right)
+        differences = np.where(scale > 0.0, differences / np.where(scale > 0.0, scale, 1.0), differences)
     differences = differences[np.isfinite(differences)]
     return float(differences.max()) if differences.size else 0.0
 
@@ -363,17 +386,20 @@ def initialization_parity(reporter, initial, pop_size, args, tolerance):
 def residency_parity(reporter, trainer, pop_size, args, tolerance):
     """Run the numpy residency of the same env and compare it against the device run.
 
-    The fitness history must be identical to the bit (the device fitness is the same
-    aggregation of the same episode returns), and the record's float leaves are compared with
-    ``atol = rtol = tolerance``: the device init drift of ~5e-07 moves a later generation's
-    genome, and with it its returns, by more than a 1e-5 absolute bound at the Go2 magnitude.
+    The fitness history and the record's float leaves are both compared with ``atol = rtol =
+    tolerance``: the backend's initialization and tell drift (~5e-07 per generation on ``iree``)
+    moves a later generation's genome, and with it its returns, by more than a 1e-5 absolute bound
+    at the Go2 magnitude -- measured 1.5e-05 at pop 64 while pop 8 and pop 32 were bitwise equal.
+    The layer only promises exactness for the integer leaves, the RNG key and the generation
+    counter, so the fitness history is a tolerance check and reports its measured absolute and
+    relative diff instead of claiming bitwise equality.
 
     Args:
         reporter (Reporter): The run's reporter.
         trainer (NeuroevolutionTrainer): The finished device-resident trainer.
         pop_size (int): Population size of both runs.
         args (argparse.Namespace): The CLI arguments.
-        tolerance (float): Absolute tolerance of the record's float leaves.
+        tolerance (float): Absolute and relative tolerance of the float comparisons.
 
     Returns:
         dict: The JSON-able evidence block of the comparison.
@@ -402,16 +428,25 @@ def residency_parity(reporter, trainer, pop_size, args, tolerance):
     )
     try:
         reference.run()
-        same_history = [float(value) for value in trainer.fitness_history] == [
-            float(value) for value in reference.fitness_history
-        ]
-        reporter.check(
-            "parity/fitness_history",
-            same_history,
-            "identical to the numpy residency"
-            if same_history
-            else f"device {trainer.fitness_history} != numpy {reference.fitness_history}",
-        )
+        device_history = np.asarray([float(value) for value in trainer.fitness_history], dtype=np.float64)
+        numpy_history = np.asarray([float(value) for value in reference.fitness_history], dtype=np.float64)
+        identical_history = _array_equal(device_history, numpy_history)
+        history_close = bool(np.allclose(device_history, numpy_history, atol=tolerance, rtol=tolerance))
+        history_abs_diff = float_max_abs_diff(device_history, numpy_history)
+        history_rel_diff = float_max_rel_diff(device_history, numpy_history)
+        if history_close:
+            history_detail = (
+                f"max |diff| {history_abs_diff:.1e}, max rel {history_rel_diff:.1e} within "
+                f"atol=rtol={tolerance:.1e}"
+                + ("" if identical_history else " (not bitwise identical)")
+            )
+        else:
+            history_detail = (
+                f"device {device_history.tolist()} != numpy {numpy_history.tolist()}: "
+                f"max |diff| {history_abs_diff:.3e}, max rel {history_rel_diff:.3e} outside "
+                f"atol=rtol={tolerance:.1e}"
+            )
+        reporter.check("parity/fitness_history", history_close, history_detail)
         differences = {}
         within_tolerance = True
         for key in ("fitness", "episode_returns"):
@@ -433,8 +468,12 @@ def residency_parity(reporter, trainer, pop_size, args, tolerance):
             f"within atol=rtol={tolerance:.1e}",
         )
         return {
-            "fitness_history_identical": same_history,
+            "fitness_history_close": history_close,
+            "fitness_history_identical": identical_history,
+            "fitness_history_max_abs_diff": history_abs_diff,
+            "fitness_history_max_rel_diff": history_rel_diff,
             "numpy_fitness_history": [float(value) for value in reference.fitness_history],
+            "device_fitness_history": [float(value) for value in trainer.fitness_history],
             "record_differences": differences,
             "tolerance": float(tolerance),
         }
@@ -729,6 +768,8 @@ def _format_measurement(entry):
         f"{entry['steps_per_s']:.1f} steps/s | "
         f"{entry['env_steps_per_generation'][0] if entry['env_steps_per_generation'] else 0} env-steps/generation, "
         f"{entry['env_steps_per_s']:.0f} env-steps/s | "
+        f"parity history {entry['parity']['residency']['fitness_history_max_abs_diff']:.1e} "
+        f"rel {entry['parity']['residency']['fitness_history_max_rel_diff']:.1e} | "
         f"leaves {placement['randkey']}, fitness {placement['fitness']}"
     )
 

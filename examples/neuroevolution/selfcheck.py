@@ -29,7 +29,7 @@ What each check pins, in order:
     The device residency of the trainer on ``cpu:0``: two runs of one master seed share their fitness history and records (timings and cache counters aside), every runtime leaf is placed on ``cpu:0``, every ``evaluate`` call receives four ``evoxc`` tensors and no numpy array, the numpy residency of the same env agrees on the fitness history, a ``NaN`` episode is counted as 0 and a fitness off by ``1e-3`` is rejected.
 
 ``device_hardware``
-    The same residency on the first non-CPU ``evoxc`` device (``iree`` unless ``EVOXC_BACKEND``/``EVOXC_DEVICE`` say otherwise): placement at initialization, at the fitness, at the tell output and on the next generation's payload, and a fitness history that equals the numpy residency's exactly; with no accelerator the check prints ``SKIP device_hardware`` and the CPU checks alone decide the exit code.
+    The same residency on the first non-CPU ``evoxc`` device (``iree`` unless ``EVOXC_BACKEND``/``EVOXC_DEVICE`` say otherwise): placement at initialization, at the fitness, at the tell output and on the next generation's payload, and a fitness history that matches the numpy residency within ``atol=rtol=1e-5`` (the measured absolute and relative diff are in the assertion message) -- exact equality is only promised for the integer leaves, ``randkey`` and ``generation``, because the backend's float drift accumulates with the population; with no accelerator the check prints ``SKIP device_hardware`` and the CPU checks alone decide the exit code.
 
 ``large_returns``
     The aggregation rule at the Go2 pilot's episode-return magnitude (~±100): an env whose float32 returns sit there and whose fitness is the real ``evolution_graphs`` fitness graph must be accepted, and the trainer's fitness must equal that graph bit for bit while a float64 mean of the same returns differs by more than the tolerance; the same env with the fitness off by 1e-3 must still be rejected, so the check is not vacuous.
@@ -97,7 +97,7 @@ from seeding import (
     perturbation_from_seed,
 )
 from trainer import NeuroevolutionTrainer, TraceOnlyProblem, pop_arrays_of, species_leaves_of
-from verify_device import ensure_pjrt_plugin, float_max_abs_diff, reachable_devices
+from verify_device import ensure_pjrt_plugin, float_max_abs_diff, float_max_rel_diff, reachable_devices
 
 #: Policies per generation in every check: small enough that the numpy backend stays at a few seconds.
 POP_SIZE = 3
@@ -122,6 +122,11 @@ DEVICE_GENERATIONS = 2
 #: Population size and generations of the accelerator check, at the Go2 pilot's population.
 HARDWARE_POP_SIZE = 8
 HARDWARE_GENERATIONS = 2
+#: Absolute and relative tolerance of the accelerator check's numpy-parity fitness comparison.
+#: The layer promises exactness only for the integer leaves, ``randkey`` and ``generation``; the
+#: ``iree`` tell/init float drift accumulates with the population (exact at pop 8 and 32, ~1.5e-05
+#: at pop 64), so the fitness history is compared with the same ``atol = rtol`` the CLI uses.
+FITNESS_TOLERANCE = 1e-5
 #: The sibling modules the import-hygiene check parses.
 HYGIENE_FILES = (
     "seeding.py",
@@ -1310,8 +1315,16 @@ def check_device_hardware():
     )
     reference.run()
     _require(
-        trainer.fitness_history == reference.fitness_history,
-        f"the {target} residency must reproduce the numpy residency's fitness history exactly, got "
+        np.allclose(
+            np.asarray([float(value) for value in trainer.fitness_history], dtype=np.float64),
+            np.asarray([float(value) for value in reference.fitness_history], dtype=np.float64),
+            atol=FITNESS_TOLERANCE,
+            rtol=FITNESS_TOLERANCE,
+        ),
+        f"the {target} residency must reproduce the numpy residency's fitness history within "
+        f"atol=rtol={FITNESS_TOLERANCE:.1e}, got max |diff| "
+        f"{float_max_abs_diff(trainer.fitness_history, reference.fitness_history):.3e}, max rel "
+        f"{float_max_rel_diff(trainer.fitness_history, reference.fitness_history):.3e} between "
         f"{trainer.fitness_history} and {reference.fitness_history}",
     )
     _require(
@@ -1320,7 +1333,10 @@ def check_device_hardware():
     )
     print(
         f"  device_hardware: {backend}@{target} pop {HARDWARE_POP_SIZE}, "
-        f"fitness {[round(value, 6) for value in trainer.fitness_history]}"
+        f"fitness {[round(value, 6) for value in trainer.fitness_history]} "
+        f"(numpy parity max |diff| {float_max_abs_diff(trainer.fitness_history, reference.fitness_history):.1e}, "
+        f"max rel {float_max_rel_diff(trainer.fitness_history, reference.fitness_history):.1e} "
+        f"within atol=rtol={FITNESS_TOLERANCE:.1e})"
     )
     trainer.close()
     env.close()
