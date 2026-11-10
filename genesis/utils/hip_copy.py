@@ -20,8 +20,10 @@ import numpy as np
 import quadrants as qd
 
 from .device_buffer import (
+    DLTensorInfo,
     DeviceView,
     _contiguous_strides,
+    _dlpack_of,
     _host_index_array,
     _kDLCPU,
     _qd_program,
@@ -202,25 +204,60 @@ def _write_qd_object(value: Any, array: np.ndarray) -> None:
     _unwrap_qd(value).from_numpy(array)
 
 
-def _host_source_array(src: Any) -> np.ndarray:
-    if isinstance(src, (qd.Field, qd.Ndarray, qd.Tensor)):
-        return src.to_numpy()
-    if isinstance(src, np.ndarray):
-        return src
-    return np.from_dlpack(src)
+def _host_array(info: DLTensorInfo) -> np.ndarray:
+    """Host array of a DLPack description, read in place rather than through a second capsule export.
+
+    The producer exported its capsule once, and its description borrows that buffer: the array built here is a view of
+    the same memory, which 'copy_from_dlpack' validates as contiguous before reading it.
+    """
+    buffer = (ctypes.c_char * info.nbytes).from_address(info.data_ptr + info.byte_offset)
+    return np.frombuffer(buffer, dtype=info.dtype).reshape(info.shape)
+
+
+def _materialize_view(dst_view: DeviceView, src_view: DeviceView) -> None:
+    """Copy the elements of 'src_view' into the contiguous destination view 'dst_view' of the same shape.
+
+    One 'hipMemcpy' transfers a row whose innermost axis has stride 1, and one 'hipMemcpy2D' transfers the columns of
+    a transposed 2-D view, which covers the batch-last solver buffers read with 'transpose=True' with
+    'min(num_values, num_envs)' calls instead of one per row. A single element is copied at a time only for a layout
+    that neither case describes.
+    """
+    runtime = _hip_runtime()
+    itemsize = src_view.itemsize
+    if src_view.is_contiguous:
+        runtime.copy(dst_view.data_ptr, src_view.data_ptr, dst_view.nbytes)
+        return
+    shape, strides = src_view.shape, src_view.strides
+    if len(shape) == 2 and strides[0] == 1 and strides[1] != 1:
+        # The source is the transpose of a contiguous '(shape[1], shape[0])' buffer, as a batch-last buffer read with
+        # 'transpose=True' is: every destination row and column is one 2D transfer, no element is copied on its own.
+        _hip_copy_transposed(dst_view.data_ptr, src_view.data_ptr, shape[1], shape[0], itemsize)
+        return
+    dst_ptr, src_ptr = dst_view.data_ptr, src_view.data_ptr
+    if strides[-1] == 1:
+        row_bytes = shape[-1] * itemsize
+        for index in np.ndindex(*shape[:-1]):
+            src_offset = sum(axis * stride for axis, stride in zip(index, strides[:-1]))
+            dst_offset = sum(axis * stride for axis, stride in zip(index, dst_view.strides[:-1]))
+            runtime.copy(dst_ptr + dst_offset * itemsize, src_ptr + src_offset * itemsize, row_bytes)
+        return
+    for index in np.ndindex(*shape):
+        src_offset = sum(axis * stride for axis, stride in zip(index, strides))
+        dst_offset = sum(axis * stride for axis, stride in zip(index, dst_view.strides))
+        runtime.copy(dst_ptr + dst_offset * itemsize, src_ptr + src_offset * itemsize, itemsize)
 
 
 def _copy_host(
     dst: Any,
     dst_view: DeviceView,
-    src: Any,
+    src_info: DLTensorInfo,
     value_runs: tuple[tuple[int, int], ...],
     env_runs: tuple[tuple[int, int], ...],
     is_transposed: bool,
     is_whole: bool,
 ) -> None:
     """Host fallback of the write direction, for a CPU backend."""
-    patch = _host_source_array(src)
+    patch = _host_array(src_info)
     if is_transposed:
         patch = patch.T
     patch = patch.reshape(dst_view.shape)
@@ -279,7 +316,8 @@ def copy_from_dlpack(
     num_envs = dst_view.shape[-1]
     num_values = dst_view.shape[0] if dst_view.ndim == 2 else 1
     is_transposed = transpose and dst_view.ndim == 2
-    src_info = dlpack_info(src)
+    # The capsule, when the source exported one, keeps the producer buffer alive for the whole copy.
+    src_info, _src_capsule = _dlpack_of(src)
     expected_shape = (num_envs, num_values) if is_transposed else dst_view.shape
     if src_info.shape != expected_shape:
         _raise_genesis_error(
@@ -310,7 +348,7 @@ def copy_from_dlpack(
                 f"Only a host DLPack source can be copied into a CPU buffer, but the source is on device "
                 f"({src_info.device_type}, {src_info.device_id})."
             )
-        _copy_host(dst, dst_view, src, value_runs, env_runs, is_transposed, is_whole)
+        _copy_host(dst, dst_view, src_info, value_runs, env_runs, is_transposed, is_whole)
         return
 
     device = dst_view.device

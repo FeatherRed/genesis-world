@@ -104,9 +104,6 @@ class _DLManagedTensor(ctypes.Structure):
 
 
 _DL_MANAGED_TENSOR_DELETER = ctypes.CFUNCTYPE(None, ctypes.POINTER(_DLManagedTensor))
-# The destructor of a capsule runs while the capsule is being deallocated, so it takes the raw 'PyObject *' address:
-# a 'py_object' argument would resurrect the dying object through a reference count, which crashes the interpreter.
-_CAPSULE_DESTRUCTOR = ctypes.CFUNCTYPE(None, ctypes.c_void_p)
 
 _DLManagedTensor._fields_ = [
     ("dl_tensor", _DLTensor),
@@ -128,58 +125,58 @@ _py_capsule_set_context.argtypes = [ctypes.py_object, ctypes.c_void_p]
 
 _py_capsule_new = ctypes.pythonapi.PyCapsule_New
 _py_capsule_new.restype = ctypes.py_object
-_py_capsule_new.argtypes = [ctypes.c_void_p, ctypes.c_char_p, _CAPSULE_DESTRUCTOR]
+# The destructor of an exported capsule is a NULL pointer rather than a Python callback, see the note below.
+_py_capsule_new.argtypes = [ctypes.c_void_p, ctypes.c_char_p, ctypes.c_void_p]
 
-# Address-taking variants, safe to call from the destructor of a capsule.
-_py_capsule_get_name = ctypes.pythonapi.PyCapsule_GetName
-_py_capsule_get_name.restype = ctypes.c_char_p
-_py_capsule_get_name.argtypes = [ctypes.c_void_p]
-
-_py_capsule_get_context = ctypes.pythonapi.PyCapsule_GetContext
-_py_capsule_get_context.restype = ctypes.c_void_p
-_py_capsule_get_context.argtypes = [ctypes.c_void_p]
-
-# Capsule storage is owned by Python, since the C side only ever holds a pointer to it. A capsule is released either
-# by its own destructor, when no consumer took ownership of it, or by the deleter of the managed tensor it carries.
-# Both paths pop the same entry, so exactly one of them frees the storage.
+# Capsule storage is owned by Python, since the C side only ever holds a pointer to it. An owner keeps a strong
+# reference to its capsule, so a capsule never dies halfway through an exception: a consumer releases both by calling
+# the deleter of the managed tensor it carries, and '_release_capsule_owners' releases the ones no consumer ever took.
 _DLPACK_CAPSULE_OWNERS: dict[int, "_CapsuleOwner"] = {}
 
 
 @_DL_MANAGED_TENSOR_DELETER
-def _release_managed_tensor(managed_tensor, _address_of=ctypes.addressof, _owners=_DLPACK_CAPSULE_OWNERS):
+def _release_managed_tensor(managed_tensor, _owners=_DLPACK_CAPSULE_OWNERS):
     """Release the storage of a managed tensor once its consumer is done with it.
 
-    Everything this callback needs is captured as a default argument, so that it keeps working while the interpreter
-    shuts down and clears the module globals before the capsules and tensors still alive are freed.
+    The address of the owner travels in 'manager_ctx', which DLPack reserves for the producer, so that this callback
+    reads nothing but the structure it is given. It never propagates anything into the consumer that called it, and
+    everything it needs is captured as a default argument, so that it keeps working while the interpreter shuts down
+    and clears the module globals.
     """
-    _owners.pop(_address_of(managed_tensor.contents), None)
-
-
-@_CAPSULE_DESTRUCTOR
-def _release_capsule(
-    capsule_pointer,
-    _get_name=_py_capsule_get_name,
-    _get_context=_py_capsule_get_context,
-    _capsule_name=_DLPACK_CAPSULE_NAME,
-    _owners=_DLPACK_CAPSULE_OWNERS,
-):
-    """Release the storage of a capsule that no consumer took ownership of, leaving a consumed one to its deleter.
-
-    A consumed capsule is renamed to 'used_dltensor' by its consumer, which then owns the managed tensor it carries.
-    """
-    if _get_name(capsule_pointer) == _capsule_name:
-        address = _get_context(capsule_pointer)
+    try:
+        address = int(managed_tensor.contents.manager_ctx or 0)
         if address:
-            _owners.pop(int(address), None)
+            _owners.pop(address, None)
+    except BaseException:
+        pass
 
 
-# Both callbacks outlive the module globals that reference them, since a capsule may still be alive at interpreter
-# shutdown, after those globals are cleared. An extra reference keeps their C thunks mapped for the whole process,
-# which leaks two tiny objects and nothing else.
+def _release_capsule_owners(_owners=_DLPACK_CAPSULE_OWNERS) -> None:
+    """Release every exported capsule still owned, for the buffers it describes to disappear with the program.
+
+    A capsule that a consumer never took keeps its owner, and hence the view it describes, alive until this sweep.
+    """
+    while _owners:
+        _owners.popitem()
+
+
+# An exported capsule carries no destructor callback, which is deliberate: CPython destroys a capsule as soon as its
+# last reference dies, and that happens while an exception unwinds whenever the consumer refuses the tensor it was
+# given, as IREE does with 'Unsupported strided tensor'. ctypes reports a callback that returns while an exception is
+# pending as 'SystemError: <...> returned a result with an exception set', and clears that exception with it, so the
+# refusal would surface as 'SystemError: error return without exception set' instead of the real error, on stderr
+# first and on every later attempt too. No callback can run then, so none is registered: the owner keeps its capsule
+# alive, and the only paths that pop its entry run outside of any exception, namely the deleter of the managed tensor
+# that a consumer calls once it owns the tensor, and '_release_capsule_owners' when the program is reset.
+qd.lang.impl.on_reset(_release_capsule_owners)
+
+
+# The deleter outlives the module globals that reference it, since a managed tensor may still be alive at interpreter
+# shutdown, after those globals are cleared. An extra reference keeps its C thunk mapped for the whole process, which
+# leaks one tiny object and nothing else.
 _py_inc_ref = ctypes.pythonapi.Py_IncRef
 _py_inc_ref.argtypes = [ctypes.py_object]
 _py_inc_ref.restype = None
-_py_inc_ref(_release_capsule)
 _py_inc_ref(_release_managed_tensor)
 
 
@@ -306,6 +303,23 @@ def dlpack_info(value: Any) -> DLTensorInfo:
     return _capsule_info(_capsule_of(value))
 
 
+def _dlpack_of(value: Any) -> tuple[DLTensorInfo, Any]:
+    """Describe 'value', together with the one DLPack capsule the description was read from, 'None' if none was made.
+
+    A capsule is a one-shot handshake and its export is not free, so a caller that needs both the description and the
+    capsule exports exactly one, whether it then reads the description or hands the capsule to a consumer.
+    """
+    if isinstance(value, (qd.Field, qd.Ndarray, qd.Tensor)):
+        try:
+            capsule = _capsule_of(value)
+        except ImportError:
+            # The description of such a buffer is read off the buffer itself, which needs no capsule at all.
+            return _qd_buffer_info(value), None
+        return _capsule_info(capsule), capsule
+    capsule = _capsule_of(value)
+    return _capsule_info(capsule), capsule
+
+
 def _capsule_info(capsule) -> DLTensorInfo:
     """Description carried by a DLPack v0 capsule, borrowed and never consumed."""
     pointer = _py_capsule_get_pointer(capsule, _DLPACK_CAPSULE_NAME)
@@ -423,6 +437,9 @@ _QD_DTYPES = {
     "u32": np.dtype(np.uint32),
     "u64": np.dtype(np.uint64),
 }
+
+# The Quadrants primitive type each of those dtypes is allocated as, for the buffers '_materialize' creates.
+_QD_PRIMITIVES = {dtype: getattr(qd, name) for name, dtype in _QD_DTYPES.items()}
 
 
 def _qd_element_shape(value) -> tuple[int, ...]:
@@ -637,6 +654,9 @@ class _CapsuleOwner:
 
     def __init__(self, view: "DeviceView"):
         self.view = view
+        # Strong reference to the capsule this owner backs, which is what keeps the pair released at a single point:
+        # a capsule can only die once its entry is popped, which only ever happens outside of an exception unwinding.
+        self.capsule = None
         self.shape = (ctypes.c_int64 * view.ndim)(*view.shape)
         self.strides = (ctypes.c_int64 * view.ndim)(*view.strides)
         code, bits = _dlpack_data_type(view.dtype)
@@ -651,19 +671,24 @@ class _CapsuleOwner:
         self.managed.dl_tensor.shape = self.shape
         self.managed.dl_tensor.strides = self.strides
         self.managed.dl_tensor.byte_offset = 0
-        self.managed.manager_ctx = None
-        self.managed.deleter = _release_managed_tensor
         self.address = ctypes.addressof(self.managed)
+        self.managed.manager_ctx = ctypes.c_void_p(self.address)
+        self.managed.deleter = _release_managed_tensor
 
 
 def _export_capsule(view: "DeviceView"):
     """Fresh DLPack capsule of a view that cannot reuse the capsule of its base buffer."""
     owner = _CapsuleOwner(view)
     _DLPACK_CAPSULE_OWNERS[owner.address] = owner
-    capsule = _py_capsule_new(ctypes.c_void_p(owner.address), _DLPACK_CAPSULE_NAME, _release_capsule)
+    try:
+        capsule = _py_capsule_new(ctypes.c_void_p(owner.address), _DLPACK_CAPSULE_NAME, None)
+    except BaseException:
+        _DLPACK_CAPSULE_OWNERS.pop(owner.address, None)
+        raise
     if _py_capsule_set_context(capsule, ctypes.c_void_p(owner.address)) != 0:
         _DLPACK_CAPSULE_OWNERS.pop(owner.address, None)
         _raise_genesis_error("Failed to export a torch-free device view as a DLPack capsule.")
+    owner.capsule = capsule
     return capsule
 
 
@@ -684,6 +709,9 @@ class DeviceView:
         self._dtype = info.dtype
         self._device = _device_from_dlpack(info.device_type, info.device_id)
         self._operations: tuple[tuple[str, Any], ...] = ()
+        # Quadrants buffer this view owns, which only a materialized view has: it keeps the device memory alive for
+        # exactly as long as the view, and its derived views, are alive.
+        self._buffer = None
         self._offset, self._shape, self._strides = _derive_layout(info.shape, info.strides, ())
 
     @classmethod
@@ -694,6 +722,7 @@ class DeviceView:
         view._element_ndim = base._element_ndim
         view._dtype = base._dtype
         view._device = base._device
+        view._buffer = base._buffer
         view._operations = base._operations + operations
         offset, shape, strides = _derive_layout(base._base_info.shape, base._base_info.strides, view._operations)
         view._offset = offset
@@ -816,13 +845,49 @@ class DeviceView:
             tensor = tensor.clone(memory_format=torch.contiguous_format)
         return tensor
 
+    def contiguous(self) -> "DeviceView":
+        """Device-resident copy of this view with contiguous strides, or this very view when it is contiguous already.
+
+        Materializing a view is what a DLPack consumer requiring a contiguous tensor needs: IREE refuses a strided
+        one with 'Unsupported strided tensor', which a batch-last solver buffer viewed with 'transpose=True' always
+        is, its strides being '(1, num_envs)'. The returned view owns a freshly allocated Quadrants buffer holding the
+        same values, so the copy is device-to-device on a ROCm backend, never a host roundtrip, and its layout no
+        longer depends on the buffer it was read from.
+
+        The copy runs once per call: 'qd.sync()' drains the Quadrants stream first, so that every write already
+        launched is part of the snapshot, and the transfers themselves are synchronous, so the values are complete
+        when the method returns. The returned view is therefore safe to hand to a DLPack consumer of any stream.
+
+        Raises:
+            GenesisException: On a Metal backend, which the torch-free bridge cannot copy on.
+        """
+        if self.is_contiguous:
+            return self
+        if self._device.type == "metal":
+            _raise_genesis_error("Materializing a device view is not supported on Metal by the torch-free bridge.")
+        num_elements = int(np.prod(self._shape, dtype=np.int64))
+        buffer = qd.ndarray(dtype=_QD_PRIMITIVES[self._dtype], shape=(num_elements,))
+        view = DeviceView(buffer).reshape(self._shape)
+        view._buffer = buffer
+        qd.sync()
+        if self._device.type == "cpu":
+            buffer.from_numpy(np.ascontiguousarray(self.to_numpy().reshape(-1)))
+            return view
+        # Local import: the HIP runtime lives in the write direction, which imports this module at module scope.
+        from genesis.utils.hip_copy import _materialize_view
+
+        _materialize_view(view, self)
+        qd.sync()
+        return view
+
     def reshape(self, *shape) -> "DeviceView":
-        """View of the same elements with another shape, which requires a contiguous view as in NumPy."""
+        """View of the same elements with another shape, materializing a non-contiguous view first as NumPy would."""
         if len(shape) == 1 and isinstance(shape[0], (tuple, list)):
             shape = tuple(shape[0])
         shape = tuple(int(size) for size in shape)
         if not self.is_contiguous:
-            _raise_genesis_error(f"Cannot reshape the non-contiguous device view of shape {self.shape}.")
+            # NumPy reshapes a non-contiguous array by copying it, and so does this view, on the device itself.
+            return self.contiguous().reshape(*shape)
         if -1 in shape:
             if shape.count(-1) > 1:
                 _raise_genesis_error(f"At most one dimension of a reshape can be -1, got {shape}.")
