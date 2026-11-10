@@ -314,8 +314,8 @@ class _DeviceRollout:
             self._init_dof_pos,
             self._zero_actions_op,
             self._zero_actions_op,
-            self._standing_op,
-            self._commands_scaled_op,
+            self._standing,
+            self._commands_scaled,
         )
         return _outputs(outputs)[0]
 
@@ -345,9 +345,9 @@ class _DeviceRollout:
             alive,
             episode_length,
             error_flag,
-            self._standing_op,
-            self._commands_op,
-            self._commands_scaled_op,
+            self._standing,
+            self._commands,
+            self._commands_scaled,
             executable.max_episode_length,
             executable.dt,
             executable.tan_termination,
@@ -374,9 +374,6 @@ class _DeviceRollout:
         # once per generation; a reset inside the loop re-writes the whole tile already on the device.
         self._init_dof_pos = self._stage(tile[:, 7:][:, self.env._qpos_dof_slot])
         self._tile = self._stage(tile)
-        self._standing_op = self._stage(self._standing)
-        self._commands_op = self._stage(self._commands)
-        self._commands_scaled_op = self._stage(self._commands_scaled)
         self._default_targets_op = self._stage(self._default_targets)
         self._zero_vel_op = self._stage(self._zero_vel)
         self._zero_actions_op = self._stage(self._zero_actions)
