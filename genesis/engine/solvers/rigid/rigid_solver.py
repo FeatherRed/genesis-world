@@ -2540,16 +2540,18 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         """
         # Neither the masses nor the links they are written to are read back for checking: a condition drawn from
         # values on the device forces a synchronization at every call. The mass is spread over the links given, so
-        # they have to carry some between them. A selection already on the device is left as it is, for that reason.
-        if not is_torch_tensor(links_idx):
-            if links_idx is None:
+        # they have to carry some between them. A PyTorch selection already on the device is left as it is, for that
+        # reason, while a torch-free one is read back for the walk below, a Python loop being unable to iterate it.
+        host_links_idx = _host_link_indices(links_idx)
+        if not is_torch_tensor(host_links_idx):
+            if host_links_idx is None:
                 links = self.links
-            elif isinstance(links_idx, slice):
-                links = self.links[links_idx]
-            elif isinstance(links_idx, (int, np.integer)):
-                links = (self.links[links_idx],)
+            elif isinstance(host_links_idx, slice):
+                links = self.links[host_links_idx]
+            elif isinstance(host_links_idx, (int, np.integer)):
+                links = (self.links[host_links_idx],)
             else:
-                links = [self.links[i_l] for i_l in links_idx]
+                links = [self.links[i_l] for i_l in host_links_idx]
             if sum(0.0 if link.is_fixed else link.desc.mass for link in links) <= gs.EPS:
                 gs.raise_exception(
                     "None of the links being set holds a mass to spread out, so there is no mass to set."
