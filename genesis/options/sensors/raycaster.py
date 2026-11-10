@@ -2,10 +2,9 @@ import math
 from collections.abc import Sequence
 from dataclasses import dataclass
 
-import torch
-
 import genesis as gs
 from genesis.utils.geom import spherical_to_cartesian
+from genesis.utils.torch_compat import require_torch, torch
 
 
 @dataclass
@@ -15,6 +14,7 @@ class RaycastPattern:
     """
 
     def __init__(self):
+        require_torch("raycaster sensor patterns")
         self._return_shape: tuple[int, ...] = self._get_return_shape()
         self._ray_dirs: torch.Tensor = torch.empty((*self._return_shape, 3), dtype=gs.tc_float, device=gs.device)
         self._ray_starts: torch.Tensor = torch.empty((*self._return_shape, 3), dtype=gs.tc_float, device=gs.device)
@@ -77,6 +77,7 @@ class GridPattern(RaycastPattern):
         size: tuple[float, float] = (2.0, 2.0),
         direction: tuple[float, float, float] = (0.0, 0.0, -1.0),
     ):
+        require_torch("raycaster sensor patterns")
         if resolution < 1e-3:
             gs.raise_exception(f"Resolution should be at least 1e-3 (1mm). Got `{resolution}`.")
         self.coords = [
@@ -174,6 +175,7 @@ class SphericalPattern(RaycastPattern):
         angular_resolution: tuple[float | None, float | None] = (None, None),
         angles: tuple[Sequence[float] | None, Sequence[float] | None] = (None, None),
     ):
+        require_torch("raycaster sensor patterns")
         for fov_i in fov:
             if (isinstance(fov_i, float) and (fov_i < 0 or fov_i > 360.0 + gs.EPS)) or (
                 isinstance(fov_i, tuple) and (fov_i[1] - fov_i[0] > 360.0 + gs.EPS)
@@ -235,6 +237,7 @@ class DepthCameraPattern(RaycastPattern):
         fov_horizontal: float = 90.0,
         fov_vertical: float | None = None,
     ):
+        require_torch("raycaster sensor patterns")
         self.width, self.height = res
 
         if self.width <= 0 or self.height <= 0:

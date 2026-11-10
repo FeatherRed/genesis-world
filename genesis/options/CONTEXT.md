@@ -99,13 +99,15 @@ Renderers are options classes too (not engine objects), selectable per camera wh
 `SceneOptions.model_post_init` raises for `box_box_detection=True` + `requires_grad`, `use_gjk_collision=False` + `requires_grad`, or `enable_mujoco_compatibility=True` + `requires_grad`.
 A solver's own `dt` must divide `sim.dt` evenly (enforced in the solver base, not in the options classes); setting both a solver `dt` and `sim.substeps` that disagree raises.
 Raycaster patterns (`GridPattern`, `SphericalPattern`, `DepthCameraPattern`) are plain `@dataclass`s, not pydantic, and eagerly allocate torch tensors on `gs.device`.
+They are PyTorch-only: their constructors (and `RaycastPattern.__init__`) call `require_torch`, so a torch-free construction raises an actionable `GenesisException` while importing `genesis.options.sensors` stays torch-free.
 `gs.options.sensors.types` maps option-class *names* to int tags; `types.Lidar` (alias of `Raycaster`) yields a distinct unused tag — use `types.Raycaster` (see `sensors/CONTEXT.md`).
 Many deprecated aliases still warn rather than error (`max_FPS`, `n_rendered_envs`, `env_separate_rigid`, `contact_resolve_time`, `use_sparse_grid`, `openvdb`, `is_free`, `requires_jac_and_IK`); treat them as removed in new code.
 
 # Dependencies
 Pydantic v2 (`BaseModel`, `ConfigDict`, validators) — the core of this layer.
 `genesis.typing` for strict type aliases, `genesis.repr_base.RBC` for repr/colorized output, `genesis.datatypes.List` for torch-backed strict lists, `genesis.constants` for format/backend enums.
-External heavy deps only where needed: `av` (PyAV, `recorders.py`), `PIL` (`textures.py`), `numpy`, `torch`; `urdfpy` and LuisaRender are used by `morphs.py`/`renderers.py` via `genesis.ext`.
+External heavy deps only where needed: `av` (PyAV, `recorders.py`), `PIL` (`textures.py`), `numpy`; PyTorch is imported only through `genesis.utils.torch_compat`, and `sensors/raycaster.py` is the only module here that needs it (guarded by `require_torch`).
+`urdfpy` and LuisaRender are used by `morphs.py`/`renderers.py` via `genesis.ext`.
 
 # Test Strategy
 No tests live in this directory; option behavior is covered indirectly through the engine test suite under `../../tests/` (e.g. `tests/core/test_surface.py`, `tests/core/test_recorders.py`, `tests/parsers/`, `tests/sensors/`).
