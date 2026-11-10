@@ -4,12 +4,11 @@ import sys
 import traceback
 from typing import ForwardRef, get_args, get_origin
 
-import torch
-
 import genesis as gs
 from genesis.options.sensors import types as _sensor_types_namespace
 from genesis.options.sensors.options import SensorOptions
 from genesis.utils.ring_buffer import TensorRingBuffer
+from genesis.utils.torch_compat import require_torch, torch
 
 from .base_sensor import Sensor, SharedSensorContext, SharedSensorMetadata
 
@@ -58,6 +57,9 @@ class SensorManager:
     def create_sensor(self, sensor_options: "SensorOptions") -> "Sensor":
         sensor_options.validate_scene(self._sim.scene)
         sensor_cls = SensorManager._resolve_sensor_cls(type(sensor_options))
+        # The per-class metadata and shared context allocate PyTorch tensors, so fail with an actionable message here
+        # rather than at the first tensor allocation on a machine without PyTorch.
+        require_torch(sensor_cls._torch_feature)
         self._sensors_by_type.setdefault(sensor_cls, [])
         if sensor_cls not in self._sensors_metadata:
             self._sensors_metadata[sensor_cls] = sensor_cls._metadata_cls()
