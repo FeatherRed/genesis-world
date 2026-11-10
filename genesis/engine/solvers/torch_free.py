@@ -537,12 +537,13 @@ def _values_shape(values) -> "tuple[int, ...] | None":
 
 
 def select_envs_values(values, envs_mask, num_selected: int, expected_shape, dim_names):
-    """Values written to the environments a mask selects, given one row per selected or per existing environment.
+    """Values of a masked write, in whichever of the three forms the writes of a scene accept.
 
-    A masked write takes its values one row per selected environment, as 'set_qpos' does on the torch path, and one row
-    per environment of the scene, out of which the rows the mask flags are the ones written, as 'masked_scatter_'
-    reads them. A single row, and the values of a form without a leading row at all, spread over every selected
-    environment; a batch of rows of another length is refused here with the forms a masked write accepts.
+    The forms and their precedence are those of 'RigidSolver.set_qpos': a single row spread over every selected
+    environment, one row per selected environment written in the order of the selection, and the whole tile of the
+    scene, out of which the rows the mask flags are the ones written, this last one being read from a partial mask
+    alone. Values of a form without a leading row at all spread over every selected environment as a single row does,
+    and a batch of rows matching none of those forms is refused here with the forms a masked write accepts.
     """
     if values is None or envs_mask is None or num_selected == len(envs_mask):
         return values
@@ -588,9 +589,9 @@ def sanitize_io_variables(
     The index tensors are the ones cached for the selections of the call, which a training loop hands over unchanged at
     every step and which costs an upload the first time only (see 'index_tensor').
 
-    The values a masked write takes are those of the torch path: one row per selected environment, one row per
-    environment of the scene (out of which the mask flags the rows written), a single row, or none at all, which the
-    last three spread over every selected environment (see 'select_envs_values').
+    The values a masked write takes are those of the torch path, the three forms of a qpos write: a single row spread
+    over every selected environment, one row per selected environment, and the whole tile of the scene out of which the
+    mask flags the rows written, which a partial mask alone reads (see 'select_envs_values' and 'RigidSolver.set_qpos').
     """
     if dtype is None:
         dtype = gs.tc_float
