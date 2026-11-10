@@ -43,6 +43,18 @@ There is no `Scene.sync()`/`Simulator.sync()`; synchronization is implicit — `
 Entity state getters pass `copy=True` into `Solver._read_data` (`base_solver.py:520`, e.g. `kinematic_solver.py:1253`), so a per-step read returns a fresh device tensor (an allocation, no host transfer); control setters are device-side too — with `gs.use_zerocopy` (default on CUDA) they are in-place torch writes on zero-copy views (`rigid_solver.py:2620`), otherwise they launch `kernel_control_dofs_position`.
 Per-step order: errno check → `_rigid_only` fast path (direct `rigid_solver.substep`) or `_step()` → `substep()` = `coupler.preprocess` → active solvers' `substep_pre_coupling` (rigid, kinematic, mpm, sph, pbd, fem order) → `coupler.couple` → `substep_post_coupling` → `clear_external_force` → errno merge → `SensorManager.step`; `Scene.step` wraps that with pre-step callbacks (which can veto), the recorder read and the viewer update.
 
+## Torch-Free Operation
+The whole engine imports PyTorch through `genesis/utils/torch_compat.py` (`HAS_TORCH`, placeholder `torch`, `require_torch`); no engine module does `import torch`.
+Torch-free mode is `HAS_TORCH is False`: `gs.use_zerocopy` is `ZeroCopyMode(True)`, `gs.tc_float`/`tc_int`/`tc_bool` are Quadrants primitive types, and `gs.device` is a `DeviceInfo` whose `.type` reports `"cuda"` on ROCm.
+Reads: `Solver._read_data` returns `view_of`/`read_view` `DeviceView`s (batch axis moved first), so entity getters hand back zero-copy device views.
+State snapshots (`get_state`) do not alias: they copy through `torch_free.owned_copy`, a device-to-device `@qd.kernel` copy, which is what lets `scene.reset()` and `set_state` restore real values.
+Writes: numpy sources take the numpy branch of `Solver._sanitize_io_variables` into the existing `kernel_*` entrypoints; any DLPack producer (`__dlpack__`/`__dlpack_device__`, e.g. a compiled-graph output shaped `(B, n)`) is staged device-to-device by `DlpackStager` with stream-ordered `hipMemcpy2DAsync` on the default HIP stream, which is the stream Quadrants launches on, so a write costs no host wait.
+`set_state`-style sources go through `torch_free.stage_kernel_values`, which still synchronizes once per array.
+errno stays device-resident: `_errno_latched` and its mask are qd fields, `get_error_envs_mask()` returns a `DeviceView` of the flag buffer (int32, nonzero = flagged), and `check_errno(blocking=False)` reads the host once every `ERRNO_CHECK_INTERVAL = 64` steps instead of every step.
+Helpers live in `engine/torch_free.py` (counters, errno-mask kernels, index fields), `engine/solvers/torch_free.py` (read, sanitize, staging) and `engine/entities/torch_free.py` (index/mask).
+Torch-only by design, raising `require_torch("<feature>")`: differentiable scenes/recording/checkpoints, the viewer, cameras and lights, recorder/export paths, all sensors, Jacobian/IK/energy/terrain queries, FEM vertex constraints, MPM readout and Metal zero-copy.
+Measured torch-free on ROCm (MI300X, fp32): Go2 plane scene at B=16 runs 1000 steps in ~3.6 ms/step and at B=4096 ~7.2 ms/step, bit-exact against the torch path, with zero device synchronizations per step for numpy and DLPack control writes.
+
 ## Constraints
 Solver/entity state setters must be tagged with `@mutates` (with the right `StateChange` category, `links` reach and `differentiable`/`derived` flags), or sensors and the rollout graph will miss mutations.
 Kernel code targets both CPU and GPU via Quadrants; device-specific branches use `gs.backend` (cpu/cuda/metal) and `gs.use_ndarray` (performance mode).
