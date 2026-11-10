@@ -104,6 +104,7 @@ def kernel_set_qpos_rows_staged(
     rigid_info: RigidInfo,
     rigid_config: qd.template(),
     is_broadcast: qd.template(),
+    is_tile: qd.template(),
 ):
     """Write the staged qpos values into the given qpos of the given environments, `values` being batch-first.
 
@@ -111,10 +112,14 @@ def kernel_set_qpos_rows_staged(
     in its order, rather than one row per environment of the solver: the value written to the qpos
     `qs_idx[i_q_]` of the environment `envs_idx[i_b_]` is `values[i_b_, i_q_]`.
     A broadcast producer holds a single row, which every selected environment takes.
+    A whole-tile producer holds one row per environment of the solver, and each selected environment takes the row of
+    its own index, `values[envs_idx[i_b_], i_q_]`, the rows of the environments it leaves out being ignored.
     """
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_q_, i_b_ in qd.ndrange(qs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(rigid_info.qpos))):
-        i_b_values = 0 if qd.static(is_broadcast) else i_b_
+        # The row a selected environment takes is its own row of the whole tile, row 0 of a broadcast producer, and its
+        # position in the selection otherwise
+        i_b_values = envs_idx[i_b_] if qd.static(is_tile) else (0 if qd.static(is_broadcast) else i_b_)
         rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[i_b_values, i_q_]
 
 

@@ -268,6 +268,73 @@ def _active_envs_mask_tensor(active_envs_mask: np.ndarray):
     return device_tensor_from_numpy(active_envs_mask, gs.tc_bool)
 
 
+def _invalid_qpos_rows_message(shape, n_envs: int) -> str:
+    """Refusal of the values of a qpos write whose leading rows match none of the three accepted forms."""
+    return (
+        f"Invalid input shape: {tuple(shape)}. A qpos write takes (len(envs_idx), *element_shape), one row per "
+        f"selected environment in the order of envs_idx, (1, *element_shape), a single row broadcast to every "
+        f"selected environment, or (n_envs, *element_shape) = ({n_envs}, *element_shape), the whole tile of the scene "
+        f"out of which only the environments named by envs_idx are written."
+    )
+
+
+def _envs_selection_rows(envs_idx, n_envs: int):
+    """Rows of the environments a selection names, and how many it names, from host metadata alone.
+
+    The selection is any of the forms a write accepts: None, a slice, a range, an integer, a host or device index
+    sequence, and a host or device boolean mask, which becomes the 'nonzero' rows it flags.
+    The rows index the environments of the scene, which is the row of its own values each environment takes from a whole
+    tile, so a selection stated as a slice, a range or an integer reads back nothing from the device.
+    """
+    if envs_idx is None:
+        return n_envs, slice(None)
+    if isinstance(envs_idx, slice):
+        start, stop, step = envs_idx.indices(n_envs)
+        return len(range(start, stop, step)), envs_idx
+    if isinstance(envs_idx, range):
+        return len(envs_idx), slice(envs_idx.start, envs_idx.stop, envs_idx.step)
+    if isinstance(envs_idx, (int, np.integer)):
+        return 1, slice(envs_idx, envs_idx + 1 if envs_idx != -1 else None)
+    if isinstance(envs_idx, np.ndarray) and envs_idx.dtype == np.bool_:
+        rows = np.nonzero(envs_idx)[0]
+        return len(rows), rows if not HAS_TORCH else torch.as_tensor(rows, dtype=torch.int64, device=gs.device)
+    if is_torch_tensor(envs_idx):
+        if envs_idx.dtype == torch.bool:
+            rows = envs_idx.nonzero().reshape((-1,))
+            return rows.numel(), rows
+        return envs_idx.numel(), envs_idx.reshape((-1,))
+    rows = np.asarray(to_numpy_values(envs_idx)).reshape((-1,))
+    return rows.size, rows
+
+
+def _qpos_selected_rows(qpos, rows, n_selected: int, n_envs: int):
+    """Rows of a whole qpos tile a partial selection writes, or `qpos` unchanged when its rows are what it holds.
+
+    A write takes one row per selected environment, a single row broadcast to every one of them, or the whole
+    (n_envs, *element_shape) tile of the scene, out of which each selected environment takes the row of its own index.
+    The form is recognized from the leading size of the values alone, and the whole tile is gathered on the device, so
+    neither decision downloads anything.
+    """
+    shape = np.shape(qpos)
+    n_rows = shape[0] if shape else 1
+    if n_rows == 1 or n_rows == n_selected:
+        return qpos
+    if n_rows != n_envs or n_envs <= n_selected:
+        gs.raise_exception(_invalid_qpos_rows_message(shape, n_envs))
+    if isinstance(rows, slice):
+        return qpos[rows]
+    if not HAS_TORCH:
+        return np.asarray(to_numpy_values(qpos))[np.asarray(rows)]
+    if not is_torch_tensor(qpos):
+        # Torch refuses to wrap a numpy array with negative strides, such as a reversed view, so it is copied first
+        if isinstance(qpos, np.ndarray) and any(stride < 0 for stride in qpos.strides):
+            qpos = qpos.copy()
+        qpos = torch.as_tensor(qpos, device=gs.device)
+    if not is_torch_tensor(rows):
+        rows = torch.as_tensor(rows, dtype=torch.int64, device=gs.device)
+    return qpos[rows.to(device=gs.device)]
+
+
 class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
     material_cls = Rigid
     _entity_classes = ((Drone, DroneEntity), (Terrain, TerrainEntity), (Morph, RigidEntity))
@@ -2440,13 +2507,18 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         Parameters
         ----------
         qpos : np.ndarray | gs.utils.DeviceView | torch.Tensor | DLPack producer
-            A host array, a zero-copy 'gs.utils.DeviceView', or any DLPack producer of shape
-            (len(envs_idx), *element_shape), holding one row per selected environment in the order of 'envs_idx', or a
-            single row of shape (1, *element_shape) broadcast to every selected environment.
-            With 'envs_idx' left to None, or naming every environment, a full (n_envs, *element_shape) tile is also
-            accepted, and the row of an environment is the value it is written as.
+            A host array, a zero-copy 'gs.utils.DeviceView', or any DLPack producer, whose '*element_shape' is the shape
+            of the qpos actually written, its second axis being 'len(qs_idx)' or 'n_qs' when 'qs_idx' is None.
+            Three forms are accepted, in this order of precedence: a single row of shape (1, *element_shape) broadcast
+            to every selected environment, one row per selected environment of shape (len(envs_idx), *element_shape),
+            whose row 'i' is written into the environment 'envs_idx[i]', and the whole (n_envs, *element_shape) tile of
+            the scene, whose row 'e' is the value of the environment 'e', out of which only the environments named by
+            'envs_idx' are written and the rows of the others are ignored.
+            The first form wins over the second one, and the second one wins when 'len(envs_idx) == n_envs', so a
+            permuted full selection keeps its meaning, the whole tile being read only from a partial selection.
             Both residencies apply the selection the same way: the torch path scatters the rows of the environments it
-            names, and the torch-free path stages them on the device before scattering them.
+            names, and the torch-free path stages the whole tile on the device, whose kernel then picks the row of each
+            selected environment.
         qs_idx : None | array_like, optional
             The qpos to write. None to write the whole configuration. Defaults to None.
         envs_idx : None | array_like | slice, optional
@@ -2460,21 +2532,17 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             self.constraint_solver.reset(envs_idx)
 
         if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(qpos):
-            # A compiled graph hands its configuration over as a DLPack capsule, which writes every row it holds into
-            # the environment it names, the batch axis first, as the torch path scatters a tensor
+            # A compiled graph hands its configuration over as a DLPack capsule, which writes the row of every
+            # environment it holds into that environment, the batch axis first, as the torch path scatters a tensor
             qs_idx_ = index_field(qs_idx, self.n_qs, "qs_idx")
             envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
             values_shape = dlpack_info(qpos).shape
             n_rows = values_shape[0] if values_shape else 0
             n_selected = envs_idx_.shape[0]
-            if n_rows not in (1, n_selected):
-                gs.raise_exception(
-                    f"The DLPack producer of shape {values_shape} cannot write the {qs_idx_.shape[0]} qpos of the "
-                    f"{n_selected} environments selected. A torch-free set_qpos takes a producer of shape "
-                    f"(len(envs_idx), n_qs) = ({n_selected}, {qs_idx_.shape[0]}), one row per selected environment in "
-                    f"the order of envs_idx, or a single row of shape (1, {qs_idx_.shape[0]}) broadcast to every "
-                    f"selected environment, the batch axis first in both cases."
-                )
+            # The whole tile of the scene is accepted under a partial selection, each selected env taking its own row
+            is_tile = len(values_shape) > 1 and n_rows == self._B and n_selected < self._B
+            if not (n_rows == 1 or n_rows == n_selected or is_tile):
+                gs.raise_exception(_invalid_qpos_rows_message(values_shape, self._B))
             # A selection naming no environment writes nothing at all, as the torch path scatters no row then
             if n_selected > 0:
                 # Teleporting a sleeping body must revive it, otherwise the new pose is silently dropped. Nothing can be
@@ -2497,6 +2565,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     self.rigid_info,
                     self.rigid_config,
                     n_rows == 1,
+                    is_tile,
                 )
         elif gs.use_zerocopy and HAS_TORCH:
             data = qd_to_torch(self.rigid_info.qpos, transpose=True, copy=False)
@@ -2513,17 +2582,26 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     envs_mask = envs_idx[:, None]
                     if gs.backend == gs.metal:
                         envs_mask = envs_mask.expand_as(qs_data).contiguous()
-                    qs_data.masked_scatter_(envs_mask, qpos.view_as(qpos))
+                    try:
+                        qs_data.masked_scatter_(envs_mask, qpos.view_as(qpos))
+                    except RuntimeError as e:
+                        gs.raise_exception_from(_invalid_qpos_rows_message(tuple(qpos.shape), self.n_envs), e)
                 else:
                     qpos = broadcast_tensor(qpos, gs.tc_float, qs_data.shape)
                     torch.where(envs_idx[:, None], qpos, qs_data, out=qs_data)
             else:
                 mask = (0, *qs_mask) if self.n_envs == 0 else indices_to_mask(envs_idx, *qs_mask, boolean_mask=False)
+                n_selected, rows = _envs_selection_rows(mask[0] if mask else None, self.n_envs)
+                qpos = _qpos_selected_rows(qpos, rows, n_selected, self.n_envs)
                 assign_indexed_tensor(data, mask, qpos)
                 if mask and is_torch_tensor(mask[0]):
                     envs_idx = mask[0].reshape((-1,))
             mps_synchronize()
         else:
+            if self.n_envs > 0 and len(np.shape(qpos)) > 1:
+                # The whole tile of the scene is accepted under a partial selection, each selected env taking its row
+                n_selected, rows = _envs_selection_rows(envs_idx, self.n_envs)
+                qpos = _qpos_selected_rows(qpos, rows, n_selected, self.n_envs)
             qpos, qs_idx, envs_idx = self._sanitize_io_variables(
                 qpos, qs_idx, self.n_qs, "qs_idx", envs_idx, skip_allocation=True
             )
