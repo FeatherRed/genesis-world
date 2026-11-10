@@ -9,6 +9,7 @@ from genesis.engine.boundaries import CubeBoundary
 from genesis.engine.entities import SPHEntity
 from genesis.engine.materials import SPH
 from genesis.engine.states.solvers import SPHSolverState
+from genesis.utils.torch_compat import HAS_TORCH
 
 from .particle_solver import ParticleSolver
 

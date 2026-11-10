@@ -3008,14 +3008,14 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         ref_frame = self._sanitize_ref_frame(ref)
         links_state = self.dyn_state.links
         if ref_frame == link_ref_frame.root_COM:
-            tensor = self._read_single(links_state.root_COM, envs_idx, links_idx)
+            tensor = self._read_state(links_state.root_COM, envs_idx, links_idx)
         elif ref_frame == link_ref_frame.link_COM:
             # Summing the offset of the center of mass onto the position is device tensor arithmetic
             require_torch("link positions in the 'link_COM' reference frame")
             i_pos, root_COM = self._read_data((links_state.i_pos, links_state.root_COM), envs_idx, links_idx)
             tensor = i_pos + root_COM
         else:
-            tensor = self._read_single(links_state.pos, envs_idx, links_idx)
+            tensor = self._read_state(links_state.pos, envs_idx, links_idx)
 
         # The pose offset is defined on the link origin, so it is only stripped for the 'link_origin' reference.
         if relative and ref_frame == link_ref_frame.link_origin and not self._links_offset_pos_is_identity[idx].all():
@@ -3180,7 +3180,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         return tensor[0] if self.n_envs == 0 else tensor
 
     def get_dofs_control_force(self, dofs_idx=None, envs_idx=None):
-        tensor = self._read_single(self.dyn_state.dofs.qf_applied, envs_idx, dofs_idx)
+        tensor = self._read_state(self.dyn_state.dofs.qf_applied, envs_idx, dofs_idx)
         return tensor[0] if self.n_envs == 0 else tensor
 
     def get_dofs_actuator_force(self, dofs_idx=None, envs_idx=None):
@@ -3226,11 +3226,11 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         return actuator_force[0] if self.n_envs == 0 else actuator_force
 
     def get_dofs_force(self, dofs_idx=None, envs_idx=None):
-        tensor = self._read_single(self.dyn_state.dofs.force, envs_idx, dofs_idx)
+        tensor = self._read_state(self.dyn_state.dofs.force, envs_idx, dofs_idx)
         return tensor[0] if self.n_envs == 0 else tensor
 
     def get_dofs_acc(self, dofs_idx=None, envs_idx=None):
-        tensor = self._read_single(self.dyn_state.dofs.acc, envs_idx, dofs_idx)
+        tensor = self._read_state(self.dyn_state.dofs.acc, envs_idx, dofs_idx)
         return tensor[0] if self.n_envs == 0 else tensor
 
     def get_dofs_kp(self, dofs_idx=None, envs_idx=None):

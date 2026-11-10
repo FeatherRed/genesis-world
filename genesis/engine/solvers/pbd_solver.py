@@ -18,6 +18,7 @@ from genesis.engine.materials import PBD
 from genesis.engine.state_change import StateChange, mutates
 from genesis.engine.states.solvers import PBDSolverState
 from genesis.utils.geom import SpatialHasher
+from genesis.utils.torch_compat import HAS_TORCH
 
 from .particle_solver import ParticleSolver
 
