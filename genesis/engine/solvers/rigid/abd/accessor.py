@@ -369,13 +369,17 @@ def kernel_set_links_pos_staged(
         if dyn_info.links.parent_idx[I_l] == -1 and dyn_info.links.is_fixed[I_l]:
             for j in qd.static(range(3)):
                 # A producer of a single dimension holds the run of components itself, which every environment takes
-                pos_j = pos[i_l_ * 3 + j] if qd.static(is_row) else pos[i_b_values, i_l_ * 3 + j]
-                dyn_state.links.pos[i_l, i_b][j] = pos_j
+                if qd.static(is_row):
+                    dyn_state.links.pos[i_l, i_b][j] = pos[i_l_ * 3 + j]
+                else:
+                    dyn_state.links.pos[i_l, i_b][j] = pos[i_b_values, i_l_ * 3 + j]
         else:
             q_start = dyn_info.links.q_start[I_l]
             for j in qd.static(range(3)):
-                pos_j = pos[i_l_ * 3 + j] if qd.static(is_row) else pos[i_b_values, i_l_ * 3 + j]
-                rigid_info.qpos[q_start + j, i_b] = pos_j
+                if qd.static(is_row):
+                    rigid_info.qpos[q_start + j, i_b] = pos[i_l_ * 3 + j]
+                else:
+                    rigid_info.qpos[q_start + j, i_b] = pos[i_b_values, i_l_ * 3 + j]
 
 
 @qd.kernel(fastcache=True)
@@ -414,13 +418,17 @@ def kernel_set_links_quat_staged(
         if dyn_info.links.parent_idx[I_l] == -1 and dyn_info.links.is_fixed[I_l]:
             for j in qd.static(range(4)):
                 # A producer of a single dimension holds the run of components itself, which every environment takes
-                quat_j = quat[i_l_ * 4 + j] if qd.static(is_row) else quat[i_b_values, i_l_ * 4 + j]
-                dyn_state.links.quat[i_l, i_b][j] = quat_j
+                if qd.static(is_row):
+                    dyn_state.links.quat[i_l, i_b][j] = quat[i_l_ * 4 + j]
+                else:
+                    dyn_state.links.quat[i_l, i_b][j] = quat[i_b_values, i_l_ * 4 + j]
         else:
             q_start = dyn_info.links.q_start[I_l]
             for j in qd.static(range(4)):
-                quat_j = quat[i_l_ * 4 + j] if qd.static(is_row) else quat[i_b_values, i_l_ * 4 + j]
-                rigid_info.qpos[q_start + j + 3, i_b] = quat_j
+                if qd.static(is_row):
+                    rigid_info.qpos[q_start + j + 3, i_b] = quat[i_l_ * 4 + j]
+                else:
+                    rigid_info.qpos[q_start + j + 3, i_b] = quat[i_b_values, i_l_ * 4 + j]
 
 
 @qd.func
