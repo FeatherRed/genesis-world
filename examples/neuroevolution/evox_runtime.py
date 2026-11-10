@@ -22,6 +22,14 @@ Staging
 no-op on CPU, and ``_to_numpy()`` brings an output tensor back to the host.
 ``_staged()`` additionally checks a runtime argument against the row (and
 optionally column) count the graph was compiled for.
+
+Device residency
+----------------
+Device residency stages nothing: ``_device_operand()`` accepts a tensor that
+already lives on the executable's device and raises on a host array (no implicit
+host->device transfer) or on a tensor placed elsewhere.  ``_shape_of()`` and
+``_spec_of()`` read a leaf's shape and dtype from metadata alone, so a spec can be
+built for a device-resident payload without materializing it.
 """
 
 from __future__ import annotations
@@ -98,6 +106,40 @@ def _to_numpy(tensor) -> np.ndarray:
     if device is not None and device.kind != "cpu":
         tensor = tensor.to(evoxc.Device("cpu", 0))
     return tensor.numpy()
+
+
+def _device_operand(value, device, backend: str, name: str):
+    """Return ``value`` unchanged when it is a tensor already resident on ``device``.
+
+    Device residency stages nothing, so this is the only accepted form: a host
+    array raises (its transfer would be implicit) and a tensor on another device
+    raises naming both placements and the payload type it carries.
+
+    Args:
+        value: The runtime operand; a device-resident ``evoxc.Tensor`` in device residency.
+        device (evoxc.Device): The executable's device.
+        backend (str): The executable's backend, named in the failure message.
+        name (str): Operand name, for the message.
+
+    Returns:
+        The same tensor, untouched.
+    """
+    target = f"{device.kind}:{device.index}"
+    actual_device = getattr(value, "device", None)
+    if isinstance(value, np.ndarray) or actual_device is None:
+        raise TypeError(
+            f"{name} must already be a device-resident tensor on {target} ({backend}): device residency "
+            "stages nothing, so a host array/value is rejected instead of being transferred "
+            "(use the numpy residency for host arrays)"
+        )
+    if (actual_device.kind, actual_device.index) != (device.kind, device.index):
+        payload = type(getattr(value, "data", None)).__name__
+        raise TypeError(
+            f"{name} is on {actual_device.kind}:{actual_device.index} carrying {payload}, but this "
+            f"{backend} graph runs on {target}; device residency never transfers, so pass a tensor "
+            f"that is already on {target}"
+        )
+    return value
 
 
 # --- Executable metadata ------------------------------------------------------------
@@ -186,10 +228,41 @@ def _contiguous(array: np.ndarray) -> np.ndarray:
     return array if array.ndim == 0 else np.ascontiguousarray(array)
 
 
+def _shape_of(value) -> tuple:
+    """The shape of one payload leaf, read from metadata alone.
+
+    ``np.asarray`` on an ``evoxc.Tensor`` yields a 0-d object array, so such a leaf is
+    asked for its own ``shape`` instead of being materialized; an actual 0-d object
+    array is rejected the way :func:`_host` rejects it.
+
+    Args:
+        value: A payload leaf: a numpy array, an ``evoxc.Tensor`` or an array-like.
+
+    Returns:
+        tuple: The leaf's shape, as plain ints.
+    """
+    if not hasattr(value, "shape") or not hasattr(value, "dtype"):
+        value = np.asarray(value)
+    if getattr(value, "dtype", None) == object:
+        raise TypeError(
+            "payload leaf is a 0-d object array; materialize an evoxc tensor with `.numpy()` "
+            "(see evox_runtime._to_numpy / evox_runtime._host) before passing it in"
+        )
+    return tuple(int(dim) for dim in value.shape)
+
+
+def _spec_of(value, name: str) -> evoxc.TensorSpec:
+    """A ``TensorSpec`` for one payload leaf, built from shape + dtype (never materialized)."""
+    shape = _shape_of(value)
+    dtype = getattr(value, "dtype", None)
+    if dtype is None:
+        dtype = np.asarray(value).dtype
+    return evoxc.TensorSpec(shape, evoxc.dtype(np.dtype(dtype)), name=name)
+
+
 def _spec_for(array, name: str) -> evoxc.TensorSpec:
     """A ``TensorSpec`` matching one payload leaf (shape + dtype + name)."""
-    arr = _host(array)
-    return evoxc.TensorSpec(tuple(int(dim) for dim in arr.shape), evoxc.dtype(arr.dtype), name=name)
+    return _spec_of(array, name)
 
 
 def _pop_specs(pop_arrays):
@@ -197,8 +270,4 @@ def _pop_specs(pop_arrays):
     arrays = tuple(pop_arrays)
     if len(arrays) != len(POP_OPERANDS):
         raise ValueError(f"pop_arrays must hold the {len(POP_OPERANDS)} GenomeTensors payloads, got {len(arrays)}")
-    specs = []
-    for array, name in zip(arrays, POP_OPERANDS, strict=True):
-        arr = _host(array)
-        specs.append(evoxc.TensorSpec(tuple(int(dim) for dim in arr.shape), evoxc.dtype(arr.dtype), name=name))
-    return specs
+    return [_spec_of(array, name) for array, name in zip(arrays, POP_OPERANDS, strict=True)]
