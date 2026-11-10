@@ -146,12 +146,14 @@ from .abd.misc import (
     kernel_wakeup_coupled_links,
 )
 from .abd.torch_free_kernels import (
+    kernel_broadcast_drone_rpm,
     kernel_control_dofs_position_velocity_staged,
     kernel_control_dofs_staged,
     kernel_copy_dofs_pos,
     kernel_scatter_dofs_pos,
     kernel_set_dofs_position_staged,
     kernel_set_qpos_rows_staged,
+    kernel_update_drone_propeller_revs,
 )
 from .collider.collider import Collider
 
@@ -428,6 +430,10 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # A write taking two producers at once stages the second one here, the buffers of a stager being cached per
         # shape and so handing the same buffer, holding whichever of the two was staged last, to both
         self._stager_secondary: DlpackStager | None = None
+        # The buffer a single row of drone propeller RPM is expanded to before the update kernel of the accumulator
+        # reads it, allocated on first use since a drone driven from whole tiles never needs it (see
+        # 'set_drone_propellers_rpm')
+        self._drone_rpm_buffer: qd.Ndarray | None = None
 
     def build(self):
         # The simulator settles the substep shared by every solver before building them, possibly at the rate another
@@ -3797,6 +3803,50 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         kernel_update_drone_propeller_vgeoms(
             propellers_vgeom_idxs, propellers_revs, propellers_spin, self.dyn_state, self.rigid_info, self.rigid_config
         )
+
+    def set_drone_propellers_rpm(
+        self, propellers_revs, propellers_link_idx, kf, km, propellers_rpm, propellers_spin, invert
+    ):
+        """Advance the accumulated revolutions of the propellers of a drone and apply the thrust they produce.
+
+        The counterpart of 'DroneEntity.set_propellers_rpm' for a torch-free scene, where the accumulator and the RPM
+        values both live on the device, so neither is read back to the host: the accumulator is advanced in place and
+        the thrust and moment come from 'set_drone_rpm' alone, as they do on the torch path.
+        `propellers_revs` is the accumulator of the drone, batch-last of shape (n_propellers, n_envs). `propellers_rpm`
+        takes the values the torch path sanitizes, laid out batch-first: either the whole (n_envs, n_propellers) tile of
+        the scene, or a single row of n_propellers values, bare or as a (1, n_propellers) tile, which every environment
+        takes.
+        """
+        n_propellers = propellers_revs.shape[0]
+        values = self._stage_drone_rpm(propellers_rpm, n_propellers)
+        kernel_update_drone_propeller_revs(propellers_revs, values, 60.0 / self.dt)
+        self.set_drone_rpm(propellers_link_idx, kf, km, values, propellers_spin, invert)
+
+    def _stage_drone_rpm(self, propellers_rpm, n_propellers):
+        """Return the RPM values of a drone as the batch-first device buffer of shape (n_envs, n_propellers) they fill.
+
+        A whole tile of the scene is the buffer itself, while a single row is expanded to every environment of the scene
+        through the buffer cached for that shape, which a scene driving its drone on every step reuses rather than
+        reallocating (see 'kernel_broadcast_drone_rpm'). The values are staged device to device when they come from a
+        compiled graph, and uploaded when they come from the host (see 'torch_free.stage_kernel_values').
+        """
+        values = stage_kernel_values(propellers_rpm, gs.qd_float)
+        if tuple(values.shape) == (self._B, n_propellers):
+            return values
+        is_row = tuple(values.shape) == (n_propellers,)
+        if not is_row and tuple(values.shape) != (1, n_propellers):
+            gs.raise_exception(
+                f"The propeller RPM values of shape {tuple(values.shape)} cannot be written into the {n_propellers} "
+                f"propellers of the {self._B} environments of the scene. A torch-free setter takes them as a whole "
+                f"tile of shape (n_envs, n_propellers) = ({self._B}, {n_propellers}), the batch axis first, or as a "
+                f"single row of shape (1, {n_propellers}) or ({n_propellers},), which every environment takes."
+            )
+        buffer = self._drone_rpm_buffer
+        if buffer is None or tuple(buffer.shape) != (self._B, n_propellers):
+            buffer = qd.ndarray(gs.qd_float, shape=(self._B, n_propellers))
+            self._drone_rpm_buffer = buffer
+        kernel_broadcast_drone_rpm(values, buffer, is_row)
+        return buffer
 
     @mutates(differentiable=False)
     def set_drone_rpm(self, propellers_link_idx, kf, km, propellers_rpm, propellers_spin, invert):

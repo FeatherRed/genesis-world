@@ -47,7 +47,12 @@ class DroneEntity(RigidEntity):
                 (self._n_propellers, self.solver._B), dtype=gs.tc_float, device=gs.device
             )
         else:
-            self._propellers_revs = np.zeros((self._n_propellers, self.solver._B), dtype=gs.np_float)
+            from genesis.engine.solvers.torch_free import device_tensor_from_numpy  # local: the solvers import this
+
+            # A torch-free scene keeps the accumulator on the device, where the kernel advancing it reads and writes it
+            self._propellers_revs = device_tensor_from_numpy(
+                np.zeros((self._n_propellers, self.solver._B), dtype=gs.np_float), gs.qd_float
+            )
         self._prev_prop_t = None
 
     def set_propellers_rpm(self, propellers_rpm):
@@ -69,6 +74,22 @@ class DroneEntity(RigidEntity):
         if self._prev_prop_t == self.sim.cur_step_global:
             gs.raise_exception("`set_propellers_rpm` can only be called once per step.")
         self._prev_prop_t = self.sim.cur_step_global
+
+        if not HAS_TORCH:
+            # Both the accumulator and the staged RPM values live on the device, so the solver advances the one and
+            # applies the other without any host arithmetic
+            if propellers_rpm is None:
+                gs.raise_exception("'propellers_rpm' cannot be None.")
+            self.solver.set_drone_propellers_rpm(
+                self._propellers_revs,
+                self._propellers_link_idx,
+                self.KF,
+                self.KM,
+                propellers_rpm,
+                self._propellers_spin,
+                self._model == "RACE",
+            )
+            return
 
         assert propellers_rpm is not None
         propellers_rpm, *_ = self._solver._sanitize_io_variables(
