@@ -495,8 +495,14 @@ class HoverNeatEnv:
         commands = np.stack([self._draw_commands(rng) for rng in rngs], axis=0).astype(np.float32)
 
         self._reset_pos, self._reset_quat = self._init_poses(seeds)
-        self.drone.set_pos(self._reset_pos, zero_velocity=True, envs_idx=None)
-        self.drone.set_quat(self._reset_quat, zero_velocity=True, envs_idx=None)
+        # The base pose of a free link *is* its qpos, so writing qpos sets exactly the state ``set_pos`` /
+        # ``set_quat`` set (measured bit-identical, before and after stepping), without their fixed-link guard:
+        # a Torch-free process walks that guard over the sanitized device ``links_idx`` and reads past its end,
+        # which refused every perturbed (env-specific) reset. The drone owns no fixed link, so the
+        # ``batch_fixed_verts`` morph option cannot avoid the guard.
+        self.drone.set_qpos(
+            np.concatenate((self._reset_pos, self._reset_quat), axis=1), zero_velocity=True, envs_idx=None
+        )
         self.drone.zero_all_dofs_velocity()
         self.scene.clear_errno()  # drop any flag the previous generation left behind
         obs = run_reset_obs(
