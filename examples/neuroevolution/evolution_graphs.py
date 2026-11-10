@@ -1,20 +1,40 @@
 """Task-agnostic evolution-side ``evoxc`` graphs for the TensorNEAT trainers.
 
-Two graphs live here, plus the shape-keyed executable cache the trainers use so a
+These graphs live here, plus the shape-keyed executable cache the trainers use so a
 generation only ever builds once:
 
 ``fitness_graph``
     Episode returns ``(n_policies * episodes_per_policy,)`` float32 -> per-policy
     fitness ``(n_policies,)`` float32, the mean over each policy's episodes.
 
+``fitness_rule_graph``
+    The device transcription of ``env_base._fitness_from_episode_returns``: the
+    same mean, but every non-finite episode zeroed first, so a device-resident
+    fitness can be produced and checked without touching the host.
+
+``verification_graph``
+    The three scalars device residency reads back per generation: whether
+    ``returns`` is the policy-major tiling of ``episode_returns``, whether
+    ``fitness`` is the fitness rule applied to it, and the largest absolute
+    fitness deviation.
+
 ``tell_graph``
     One TensorNEAT ``tell`` transition: ``randkey``, the four genome payload
     arrays, ``generation``, ``fitness`` and the ``SpeciesState`` leaves in, the
     flat list ``[randkey, generation, *pop, *species]`` out.
 
-Neither graph knows a task: no observation width, action width, reward or
+No graph knows a task: no observation width, action width, reward or
 simulator constant appears here, so the Go2 walking (45 -> 12) and the drone
 hover (17 -> 4) trainers compile the very same code.
+
+Residency
+---------
+Every ``run_*`` entry point takes a keyword-only ``residency`` switch.
+``"numpy"`` (the default) stages host arrays onto the executable's device and
+materializes results back to numpy; ``"device"`` stages nothing -- operands must
+already be device tensors on the executable's device (``_device_operand``) and
+results are handed back as device tensors.
+Only :func:`run_verification` reads scalars back in device residency.
 
 Contracts the caller must honour
 --------------------------------
@@ -41,14 +61,19 @@ import evoxc
 from tensorneat.algorithm.neat.species import SpeciesState
 from tensorneat.genome.utils import GenomeTensors
 
+from env_base import RESIDENCIES
 from evox_runtime import (
+    POP_OPERANDS,
     _attach,
     _contiguous,
     _device_name,
+    _device_operand,
     _host,
     _outputs,
     _pop_specs,
     _positive_int,
+    _rows_of,
+    _shape_of,
     _spec_for,
     _staged,
     _to_device_array,
@@ -57,6 +82,38 @@ from evox_runtime import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _residency(value) -> str:
+    """Validate a ``residency`` switch (``"numpy"`` or ``"device"``)."""
+    if value not in RESIDENCIES:
+        raise ValueError(f"residency must be one of {RESIDENCIES}, got {value!r}")
+    return value
+
+
+def _device_tensor(executable, value, name, shape=None, *, dtype=None):
+    """Check one device-resident operand's placement, plus its shape/dtype when given, from metadata.
+
+    ``dtype`` is ``None`` (any numeric leaf, e.g. a genome payload), ``"integer"`` or
+    ``"floating"``.
+    """
+    operand = _device_operand(value, executable.device, getattr(executable, "backend", "numpy"), name)
+    actual = np.dtype(operand.dtype)
+    if dtype == "integer" and not np.issubdtype(actual, np.integer):
+        raise ValueError(f"{name} must have an integer dtype, got {operand.dtype}")
+    if dtype == "floating" and not np.issubdtype(actual, np.floating):
+        raise ValueError(f"{name} must have a floating dtype, got {operand.dtype}")
+    if shape is not None and tuple(int(dim) for dim in operand.shape) != tuple(shape):
+        raise ValueError(f"{name} must have shape {tuple(shape)}, got {tuple(int(dim) for dim in operand.shape)}")
+    return operand
+
+
+def _staged_float_shape(executable, name: str, value, shape):
+    """Stage one host float32 argument, checking its exact shape against the compiled graph."""
+    arr = np.asarray(value, dtype=np.float32)
+    if arr.shape != tuple(shape):
+        raise ValueError(f"{name} must have shape {tuple(shape)} to match the compiled graph, got {arr.shape}")
+    return _to_device_array(executable, np.ascontiguousarray(arr))
 
 
 # --- Fitness ------------------------------------------------------------------------
@@ -111,8 +168,25 @@ def build_fitness(
     )
 
 
-def run_fitness(executable, returns):
-    """Run the fitness graph; ``returns`` is ``(NP * episodes,)``, result ``(NP,)``."""
+def run_fitness(executable, returns, *, residency="numpy"):
+    """Run the fitness graph; ``returns`` is ``(NP * episodes,)``, result ``(NP,)``.
+
+    Args:
+        executable: the bound graph from :func:`build_fitness`.
+        returns: ``(NP * episodes,)`` float32 -- a host array in ``"numpy"`` residency, a
+            tensor already on the executable's device in ``"device"`` residency.
+        residency (str): ``"numpy"`` stages and materializes; ``"device"`` stages nothing
+            and returns the device tensor.
+
+    Returns:
+        numpy.ndarray | evoxc.Tensor: ``(NP,)`` float32.
+    """
+    if _residency(residency) == "device":
+        rows = _rows_of(executable)
+        operand = _device_tensor(executable, returns, "returns", (rows,), dtype="floating")
+        return _outputs(
+            evoxc.run(executable, operand, executable.n_policies, executable.episodes_per_policy)
+        )[0]
     outputs = evoxc.run(
         executable,
         _to_device_array(executable, _staged(executable, "returns", returns)),
@@ -120,6 +194,224 @@ def run_fitness(executable, returns):
         executable.episodes_per_policy,
     )
     return np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)
+
+
+# --- Fitness rule (the device transcription of env_base's rule) ----------------------
+
+
+#: Largest finite float32, the threshold that separates a scored episode from a non-finite one.
+_MAX_FINITE = float(np.finfo(np.float32).max)
+
+
+def _fitness_rule_ops(returns, n_policies, episodes_per_policy):
+    """Emit the fitness-rule ops: reshape, zero every non-finite episode, mean over episodes.
+
+    ``nan_to_num(x, nan=0, posinf=0, neginf=0)`` is spelled as one comparison plus a select:
+    every non-finite float32 value -- NaN and both infinities -- fails ``|x| <= FLT_MAX``,
+    and ``evoxc.nan_to_num`` cannot be lowered by the IREE stablehlo exporter (it raises
+    ``BackendError: op 'nan_to_num' ... is not supported in v1``), while ``select`` can.
+    The two agree on every float32 value, so the rule stays bit-identical to
+    ``env_base._fitness_from_episode_returns``.
+    """
+    reshaped = evoxc.reshape(returns, (n_policies, episodes_per_policy))
+    finite = evoxc.less_equal(evoxc.abs(reshaped), _MAX_FINITE)
+    sanitized = evoxc.select(finite, reshaped, 0.0)
+    return evoxc.reduce_mean(sanitized, axes=1)
+
+
+@evoxc.defn
+def fitness_rule_graph(returns, n_policies, episodes_per_policy):
+    """``env_base._fitness_from_episode_returns`` as a graph: non-finite -> 0, then the float32 mean."""
+    return _fitness_rule_ops(returns, n_policies, episodes_per_policy)
+
+
+def build_fitness_rule(
+    n_policies,
+    *,
+    episodes_per_policy=3,
+    backend="numpy",
+    device=None,
+):
+    """Compile the fitness-rule graph (non-finite episodes counted as 0, float32 mean).
+
+    The rule has one host owner (``env_base._fitness_from_episode_returns``) and this
+    one device transcription; the two are guarded against each other by the node's
+    self-check.
+
+    Args:
+        n_policies (int): Population size.
+        episodes_per_policy (int): Episodes per policy.
+        backend (str): ``evoxc`` backend name.
+        device (str | evoxc.Device | None): ``evoxc`` device.
+
+    Returns:
+        evoxc.Executable: bound executable; ``run_fitness_rule`` stages its operand.
+    """
+    n_policies = _positive_int(n_policies, "n_policies")
+    episodes_per_policy = _positive_int(episodes_per_policy, "episodes_per_policy")
+    resolved_backend, resolved_device = resolve_backend_device(backend, device)
+    rows = n_policies * episodes_per_policy
+    executable = evoxc.build(
+        fitness_rule_graph,
+        evoxc.TensorSpec((rows,), evoxc.float32, name="returns"),
+        n_policies,
+        episodes_per_policy,
+        backend=resolved_backend,
+        device=resolved_device,
+    )
+    return _attach(
+        executable,
+        graph="fitness_rule",
+        rows=rows,
+        n_policies=n_policies,
+        episodes_per_policy=episodes_per_policy,
+        device_name=_device_name(resolved_device),
+    )
+
+
+def run_fitness_rule(executable, returns, *, residency="numpy"):
+    """Run the fitness-rule graph; ``returns`` is ``(NP * episodes,)``, result ``(NP,)``.
+
+    Args:
+        executable: the bound graph from :func:`build_fitness_rule`.
+        returns: ``(NP * episodes,)`` float32, host array or device tensor.
+        residency (str): ``"numpy"`` returns a host float32 array; ``"device"`` returns the
+            raw device tensor with no host conversion.
+
+    Returns:
+        numpy.ndarray | evoxc.Tensor: ``(NP,)`` float32.
+    """
+    if _residency(residency) == "device":
+        operand = _device_tensor(executable, returns, "returns", (_rows_of(executable),), dtype="floating")
+        return _outputs(
+            evoxc.run(executable, operand, executable.n_policies, executable.episodes_per_policy)
+        )[0]
+    outputs = evoxc.run(
+        executable,
+        _to_device_array(executable, _staged(executable, "returns", returns)),
+        executable.n_policies,
+        executable.episodes_per_policy,
+    )
+    return np.asarray(_to_numpy(_outputs(outputs)[0]), dtype=np.float32)
+
+
+# --- Verification (the only device scalars read back per generation) ----------------
+
+
+@evoxc.defn
+def verification_graph(returns, episode_returns, fitness, n_policies, episodes, atol):
+    """The three device scalars: returns tiling, fitness rule agreement, max fitness deviation."""
+    tiled = evoxc.reshape(returns, (n_policies, episodes))
+    same = evoxc.logical_or(
+        evoxc.equal(tiled, episode_returns),
+        evoxc.logical_and(evoxc.isnan(tiled), evoxc.isnan(episode_returns)),
+    )
+    # evoxc exposes no ``reduce_all``; a count of the satisfied entries is the same test.
+    matches = evoxc.reduce_sum(evoxc.cast(same, evoxc.int32))
+    returns_match = evoxc.equal(matches, n_policies * episodes)
+    deviation = evoxc.abs(evoxc.subtract(fitness, _fitness_rule_ops(returns, n_policies, episodes)))
+    within = evoxc.less_equal(deviation, atol)
+    fitness_match = evoxc.equal(evoxc.reduce_sum(evoxc.cast(within, evoxc.int32)), n_policies)
+    return [returns_match, fitness_match, evoxc.reduce_max(deviation)]
+
+
+def build_verification(
+    n_policies,
+    *,
+    episodes_per_policy=3,
+    backend="numpy",
+    device=None,
+    atol=1e-5,
+):
+    """Compile the verification graph of one generation's device result.
+
+    ``atol`` is the fitness tolerance: device residency uses ``1e-5`` because the xla
+    fitness graph deviates up to 7.6e-6 from the host rule while iree is bitwise equal,
+    whereas the numpy path keeps ``1e-6``.
+
+    Args:
+        n_policies (int): Population size.
+        episodes_per_policy (int): Episodes per policy.
+        backend (str): ``evoxc`` backend name.
+        device (str | evoxc.Device | None): ``evoxc`` device.
+        atol (float): Absolute fitness tolerance.
+
+    Returns:
+        evoxc.Executable: bound executable; ``run_verification`` stages its operands.
+    """
+    n_policies = _positive_int(n_policies, "n_policies")
+    episodes_per_policy = _positive_int(episodes_per_policy, "episodes_per_policy")
+    resolved_backend, resolved_device = resolve_backend_device(backend, device)
+    rows = n_policies * episodes_per_policy
+    specs = [
+        evoxc.TensorSpec((rows,), evoxc.float32, name="returns"),
+        evoxc.TensorSpec((n_policies, episodes_per_policy), evoxc.float32, name="episode_returns"),
+        evoxc.TensorSpec((n_policies,), evoxc.float32, name="fitness"),
+    ]
+    executable = evoxc.build(
+        verification_graph,
+        *specs,
+        n_policies,
+        episodes_per_policy,
+        float(atol),
+        backend=resolved_backend,
+        device=resolved_device,
+    )
+    return _attach(
+        executable,
+        graph="verification",
+        rows=rows,
+        n_policies=n_policies,
+        episodes_per_policy=episodes_per_policy,
+        atol=float(atol),
+        device_name=_device_name(resolved_device),
+    )
+
+
+def run_verification(executable, *, returns, episode_returns, fitness, residency="numpy"):
+    """Run the verification graph; only its three scalars cross to the host.
+
+    Args:
+        executable: the bound graph from :func:`build_verification`.
+        returns: ``(rows,)`` float32, host array or device tensor.
+        episode_returns: ``(NP, episodes)`` float32, host array or device tensor.
+        fitness: ``(NP,)`` float32, host array or device tensor.
+        residency (str): ``"numpy"`` stages host arrays; ``"device"`` requires tensors that
+            are already on the executable's device and stages nothing.
+
+    Returns:
+        dict: ``returns_match`` (bool), ``fitness_match`` (bool) and
+        ``fitness_max_abs_diff`` (float).
+    """
+    n_policies = int(executable.n_policies)
+    episodes = int(executable.episodes_per_policy)
+    shapes = ((int(executable.rows),), (n_policies, episodes), (n_policies,))
+    operands = (returns, episode_returns, fitness)
+    names = ("returns", "episode_returns", "fitness")
+    if _residency(residency) == "device":
+        staged = [
+            _device_tensor(executable, value, name, shape, dtype="floating")
+            for value, name, shape in zip(operands, names, shapes, strict=True)
+        ]
+    else:
+        staged = [
+            _staged_float_shape(executable, name, value, shape)
+            for value, name, shape in zip(operands, names, shapes, strict=True)
+        ]
+    flat = _outputs(
+        evoxc.run(
+            executable,
+            *staged,
+            executable.n_policies,
+            executable.episodes_per_policy,
+            executable.atol,
+        )
+    )
+    return {
+        "returns_match": bool(_to_numpy(flat[0])),
+        "fitness_match": bool(_to_numpy(flat[1])),
+        "fitness_max_abs_diff": float(_to_numpy(flat[2])),
+    }
 
 
 # --- Tell (one generation transition) -----------------------------------------------
@@ -155,8 +447,8 @@ def build_tell(
         algo: a TensorNEAT ``NEAT`` algorithm instance.
         config: the tensor-free ``pipe._static_config(state)`` (must not already
             register ``pop``/``generation``/``species``/``randkey``).
-        pop_arrays: the four genome payload arrays (``state.pop`` as numpy).
-        species_leaves: ``evoxc.tree_leaves(state.species)`` as numpy.
+        pop_arrays: the four genome payload arrays (``state.pop``), host numpy or device tensors.
+        species_leaves: ``evoxc.tree_leaves(state.species)``, host numpy or device tensors.
         n_policies (int): Population size, the fitness vector length.
         backend (str): ``evoxc`` backend name.
         device (str | evoxc.Device | None): ``evoxc`` device.
@@ -197,8 +489,10 @@ def build_tell(
         return [nxt.randkey, nxt.generation, *nxt.pop, *next_species]
 
     options = {}
-    if resolved_backend == "iree" and resolved_device.kind == "cuda":
-        # IREE 3.13's default CUDA reduction distribution rejects the tell graph.
+    if resolved_backend == "iree" and resolved_device.kind in ("cuda", "rocm"):
+        # IREE's default reduction-vector distribution rejects the tell graph on the CUDA
+        # target and, on the ROCm target, leaves ``iree-compile`` spinning without
+        # terminating; the same flag builds it on both.  The XLA path is unaffected.
         options["iree_compile_args"] = ["--iree-codegen-llvmgpu-use-reduction-vector-distribution=false"]
     if resolved_backend == "xla" and plugin_path is not None:
         options["plugin_path"] = str(plugin_path)
@@ -210,12 +504,12 @@ def build_tell(
         n_policies=n_policies,
         species_tree=captured[-1] if captured else None,
         species_leaf_count=n_leaves,
-        pop_shapes=tuple(_host(array).shape for array in pop_arrays),
+        pop_shapes=tuple(_shape_of(array) for array in pop_arrays),
         device_name=_device_name(resolved_device),
     )
 
 
-def run_tell(executable, *, randkey, pop_arrays, generation, fitness, species_leaves):
+def run_tell(executable, *, randkey, pop_arrays, generation, fitness, species_leaves, residency="numpy"):
     """Run the tell graph; returns the next ``randkey``/``generation``/``pop``/``species``.
 
     Args:
@@ -225,11 +519,17 @@ def run_tell(executable, *, randkey, pop_arrays, generation, fitness, species_le
         generation (array-like): 0-d float32 generation counter.
         fitness (array-like): ``(NP,)`` float32, maximized.
         species_leaves: the ``SpeciesState`` leaves (same layout as at build time).
+        residency (str): ``"numpy"`` stages host arrays and materializes the results;
+            ``"device"`` stages nothing (every operand must already be a tensor on the
+            executable's device) and returns device tensors, so its output can be fed
+            straight back into the next :func:`run_tell` call.
 
     Returns:
         dict: ``randkey`` (0-d int64), ``generation`` (0-d float32), ``pop`` (tuple of
         the four payload arrays) and ``species`` (rebuilt ``SpeciesState``).
     """
+    if _residency(residency) == "device":
+        return _run_tell_device(executable, randkey, pop_arrays, generation, fitness, species_leaves)
     arrays = tuple(_host(array) for array in pop_arrays)
     if len(arrays) != 4:
         raise ValueError(f"pop_arrays must hold the 4 GenomeTensors payloads, got {len(arrays)}")
@@ -268,6 +568,36 @@ def run_tell(executable, *, randkey, pop_arrays, generation, fitness, species_le
         "generation": _to_numpy(flat[1]),
         "pop": next_pop,
         "species": evoxc.tree_unflatten(next_species, executable.species_tree),
+    }
+
+
+def _run_tell_device(executable, randkey, pop_arrays, generation, fitness, species_leaves):
+    """Device-resident :func:`run_tell`: validate from metadata, stage nothing, return device tensors."""
+    arrays = tuple(pop_arrays)
+    if len(arrays) != len(POP_OPERANDS):
+        raise ValueError(f"pop_arrays must hold the {len(POP_OPERANDS)} GenomeTensors payloads, got {len(arrays)}")
+    for array, name, shape in zip(arrays, POP_OPERANDS, executable.pop_shapes, strict=True):
+        _device_tensor(executable, array, name, shape)
+    leaves = tuple(species_leaves)
+    if len(leaves) != int(executable.species_leaf_count):
+        raise ValueError(
+            f"species_leaves must hold {executable.species_leaf_count} leaves, got {len(leaves)}"
+        )
+    for index, leaf in enumerate(leaves):
+        _device_tensor(executable, leaf, f"species_{index}")
+    n_policies = int(executable.n_policies)
+    key = _device_tensor(executable, randkey, "randkey", (), dtype="integer")
+    gen = _device_tensor(executable, generation, "generation", (), dtype="floating")
+    fit = _device_tensor(executable, fitness, "fitness", (n_policies,), dtype="floating")
+    flat = _outputs(evoxc.run(executable, key, *arrays, gen, fit, *leaves))
+    n_leaves = int(executable.species_leaf_count)
+    return {
+        "randkey": flat[0],
+        "generation": flat[1],
+        "pop": tuple(flat[2 + index] for index in range(len(POP_OPERANDS))),
+        "species": evoxc.tree_unflatten(
+            [flat[2 + len(POP_OPERANDS) + index] for index in range(n_leaves)], executable.species_tree
+        ),
     }
 
 
