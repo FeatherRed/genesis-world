@@ -652,10 +652,29 @@ def read_view(field, envs_idx=None, idx=None):
     shape and the strides of the view, which a DLPack consumer reads.
     """
     if len(field.shape) <= 1:
-        return view_of(field, row_mask=idx, col_mask=envs_idx)
+        return view_of(field, row_mask=_read_selection(idx), col_mask=_read_selection(envs_idx))
     view = DeviceView(field).movedim(len(field.shape) - 1, 0)
-    selection = _normalize_mask((envs_idx, idx), True)
+    selection = _normalize_mask((_read_selection(envs_idx), _read_selection(idx)), True)
     return view[selection + (slice(None),) * (view.ndim - len(selection))]
+
+
+def _read_selection(index):
+    """`index` as 'read_view' reads it: a selection naming no entry selects the empty slice instead of raising.
+
+    A read selecting no entry at all, as the empty index array of a getter asked for zero entries does, names the empty
+    slice, which the view reads as the empty array of the shape the torch path returns for that selection. The
+    selection is inspected without reading it back from the device unless it lives there, which '_normalize_mask'
+    reads anyway.
+    """
+    if index is None or isinstance(index, (slice, range, int, np.integer)):
+        return index
+    if isinstance(index, np.ndarray):
+        return slice(0, 0) if index.size == 0 else index
+    if isinstance(index, (list, tuple)):
+        return slice(0, 0) if not len(index) else index
+    if _is_device_selection(index):
+        return slice(0, 0) if not to_numpy_values(index).size else index
+    return index
 
 
 def _contiguous_strides(shape) -> tuple[int, ...]:
