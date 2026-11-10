@@ -22,19 +22,32 @@ What each check pins, in order:
 ``trainer``
     End-to-end determinism of :class:`trainer.NeuroevolutionTrainer` against a simulator-free env: identical fitness history, records (timings aside) and seed table over two runs, the env is never closed, the ``output_dir`` artifacts, and the fitness tolerance.
 
+``device_contract``
+    The device result contract on the plumbing-only ``cpu:0`` device: ``validate_evaluation_device`` accepts a well-formed device result and rejects a wrong dtype, a wrong shape, a host array where a tensor is required, a ``cpu:0`` tensor when ``rocm:0`` is expected, and a missing key; ``evolution_graphs.fitness_rule_graph`` is bit-identical to ``env_base._fitness_from_episode_returns`` on ``NaN``/``+inf``/``-inf`` columns at the Go2 magnitude; ``build_verification`` accepts a correct result and rejects a ``1e-3`` fitness offset and a ``returns`` that is not the policy-major tiling, in both residencies; and ``device_runtime.device_setup`` is bitwise identical to ``Pipeline(...).setup()`` for both genome widths (the four payload leaves, all ten species leaves, the key and the generation counter).
+
+``device_trainer``
+    The device residency of the trainer on ``cpu:0``: two runs of one master seed share their fitness history and records (timings and cache counters aside), every runtime leaf is placed on ``cpu:0``, every ``evaluate`` call receives four ``evoxc`` tensors and no numpy array, the numpy residency of the same env agrees on the fitness history, a ``NaN`` episode is counted as 0 and a fitness off by ``1e-3`` is rejected.
+
+``device_hardware``
+    The same residency on the first non-CPU ``evoxc`` device (``iree`` unless ``EVOXC_BACKEND``/``EVOXC_DEVICE`` say otherwise): placement at initialization, at the fitness, at the tell output and on the next generation's payload, and a fitness history that equals the numpy residency's exactly; with no accelerator the check prints ``SKIP device_hardware`` and the CPU checks alone decide the exit code.
+
 ``large_returns``
     The aggregation rule at the Go2 pilot's episode-return magnitude (~±100): an env whose float32 returns sit there and whose fitness is the real ``evolution_graphs`` fitness graph must be accepted, and the trainer's fitness must equal that graph bit for bit while a float64 mean of the same returns differs by more than the tolerance; the same env with the fitness off by 1e-3 must still be rejected, so the check is not vacuous.
 
 ``import_hygiene``
-    An AST scan proving the six sibling modules import no ``torch`` / ``genesis`` / ``tensordict`` and no ``go2_*`` / ``hover_*`` task module, and that those packages are absent from ``sys.modules``.
+    An AST scan proving every sibling module of this directory -- ``selfcheck.py`` and the ``verify_device.py`` CLI included -- imports no ``torch`` / ``genesis`` / ``tensordict`` and no ``go2_*`` / ``hover_*`` task module, and that those packages are absent from ``sys.modules``.
 
 Genome budgets are the smallest the dense initial network of a width allows, because ``DefaultGenome`` rejects a budget smaller than ``num_inputs + num_outputs`` nodes and ``num_inputs * num_outputs`` connections.
+
+Only the ``device_hardware`` check needs an accelerator; every other check runs on ``cpu:0`` with the ``numpy`` backend, which is the plumbing-only mode of the device residency (placement, tiling and staging are exercised, no GPU is used).
+It runs last on purpose: ``evoxc.devices()`` imports ``torch`` to probe the GPU runtimes, so the ``sys.modules`` half of ``import_hygiene`` has to be checked while only the numpy path has run.
 """
 
 from __future__ import annotations
 
 import ast
 import json
+import os
 import shutil
 import sys
 import tempfile
@@ -49,8 +62,32 @@ from tensorneat import Pipeline, algorithm, genome
 from tensorneat.algorithm.neat.species import SpeciesState
 from tensorneat.common.tools import to_numpy
 
-from env_base import BatchedEpisodeEnv, rows_for, validate_evaluation
-from evolution_graphs import ExecutableCache, build_fitness, build_tell, run_fitness, run_tell
+from device_env import SyntheticDeviceEnv
+from device_runtime import (
+    assert_payload_resident,
+    device_placement,
+    device_setup,
+    is_device_tensor,
+)
+from env_base import (
+    BatchedEpisodeEnv,
+    _fitness_from_episode_returns,
+    rows_for,
+    validate_evaluation,
+    validate_evaluation_device,
+)
+from evolution_graphs import (
+    ExecutableCache,
+    build_fitness,
+    build_fitness_rule,
+    build_tell,
+    build_verification,
+    run_fitness,
+    run_fitness_rule,
+    run_tell,
+    run_verification,
+)
+from evox_runtime import _to_numpy, resolve_backend_device
 from policy_graphs import build_policy, run_policy
 from seeding import (
     EPISODES_PER_POLICY,
@@ -60,6 +97,7 @@ from seeding import (
     perturbation_from_seed,
 )
 from trainer import NeuroevolutionTrainer, TraceOnlyProblem, pop_arrays_of, species_leaves_of
+from verify_device import ensure_pjrt_plugin, float_max_abs_diff, reachable_devices
 
 #: Policies per generation in every check: small enough that the numpy backend stays at a few seconds.
 POP_SIZE = 3
@@ -75,6 +113,15 @@ EPISODES = EPISODES_PER_POLICY
 GENOME_WIDTHS = ((45, 12), (17, 4))
 #: The one master seed the trainer check documents its reproducibility guarantee for.
 MASTER_SEED = 0
+#: ``evoxc`` backend and device of the plumbing-only device checks: the host, no compiler required.
+PLUMBING_BACKEND = "numpy"
+PLUMBING_DEVICE = "cpu:0"
+#: Population size and generations of the plumbing-only device checks.
+DEVICE_POP_SIZE = POP_SIZE
+DEVICE_GENERATIONS = 2
+#: Population size and generations of the accelerator check, at the Go2 pilot's population.
+HARDWARE_POP_SIZE = 8
+HARDWARE_GENERATIONS = 2
 #: The sibling modules the import-hygiene check parses.
 HYGIENE_FILES = (
     "seeding.py",
@@ -82,7 +129,10 @@ HYGIENE_FILES = (
     "evox_runtime.py",
     "evolution_graphs.py",
     "policy_graphs.py",
+    "device_runtime.py",
+    "device_env.py",
     "trainer.py",
+    "verify_device.py",
 )
 #: Top-level packages the shared layer must stay importable without.
 FORBIDDEN_PACKAGES = ("torch", "genesis", "tensordict")
@@ -95,6 +145,13 @@ TIMING_FIELDS = (
     "env_steps_per_s",
     "executable_build_time_s",
     "tell_build_time_s",
+)
+#: Record and config fields reflecting the state of an executable cache, stripped with the timings.
+CACHE_FIELDS = (
+    "cache_hits",
+    "cache_misses",
+    "cache_hits_delta",
+    "cache_misses_delta",
 )
 
 
@@ -117,12 +174,94 @@ def _expect_value_error(thunk, label):
 
 
 def _strip_timings(value):
-    """Return ``value`` without the wall-clock-derived fields, recursively."""
+    """Return ``value`` without the wall-clock-derived and cache-derived fields, recursively."""
     if isinstance(value, dict):
-        return {key: _strip_timings(item) for key, item in value.items() if key not in TIMING_FIELDS}
+        return {
+            key: _strip_timings(item)
+            for key, item in value.items()
+            if key not in TIMING_FIELDS and key not in CACHE_FIELDS
+        }
     if isinstance(value, (list, tuple)):
         return [_strip_timings(item) for item in value]
     return value
+
+
+def _array_equal(left, right):
+    """Exact equality of two arrays, treating the NaN padding of an unused genome slot as equal."""
+    left = np.asarray(left)
+    right = np.asarray(right)
+    if left.shape != right.shape:
+        return False
+    return bool(np.array_equal(left, right, equal_nan=True))
+
+
+def _plumbing_device():
+    """The ``cpu:0`` ``evoxc`` device object of the plumbing-only device checks."""
+    return resolve_backend_device(PLUMBING_BACKEND, PLUMBING_DEVICE)[1]
+
+
+def _stage(array):
+    """Stage one host array as a ``cpu:0`` device tensor, the plumbing mode's only transfer."""
+    evoxc.backends.get(PLUMBING_BACKEND)
+    return evoxc.from_numpy(np.ascontiguousarray(np.asarray(array)))
+
+
+def _device_result(episode_returns, reported_fitness=None):
+    """Build a well-formed device ``evaluate`` result of ``episode_returns`` on ``cpu:0``."""
+    episode_returns = np.asarray(episode_returns, dtype=np.float32)
+    pop_size, episodes = episode_returns.shape
+    fitness = _fitness_from_episode_returns(episode_returns) if reported_fitness is None else reported_fitness
+    return {
+        "seeds": _stage(np.arange(11, 11 + episodes, dtype=np.int64)),
+        "episode_returns": _stage(episode_returns),
+        "returns": _stage(episode_returns.reshape(-1)),
+        "fitness": _stage(fitness),
+        "steps": 25,
+        "env_steps": 25 * rows_for(pop_size, episodes),
+        "wall_time_s": 0.01,
+    }
+
+
+class _EnvWrapper:
+    """Delegate every attribute to the wrapped env, so a wrapper stays a ``BatchedEpisodeEnv``."""
+
+    def __init__(self, env):
+        self.env = env
+
+    def __getattr__(self, name):
+        if name == "env":
+            raise AttributeError(name)
+        return getattr(self.env, name)
+
+    def close(self):
+        """Close the wrapped env."""
+        self.env.close()
+
+
+class _PayloadRecorder(_EnvWrapper):
+    """Record the genome payload every ``evaluate`` call receives, without changing anything else."""
+
+    def __init__(self, env):
+        super().__init__(env)
+        self.payloads = []
+
+    def evaluate(self, pop_arrays, generation):
+        """Record the payload of one generation and run it on the wrapped env."""
+        self.payloads.append(tuple(pop_arrays))
+        return self.env.evaluate(pop_arrays, generation)
+
+
+class _FitnessOffsetEnv(_EnvWrapper):
+    """Report the wrapped env's fitness shifted by ``offset``, to drive the device verification's tolerance."""
+
+    def __init__(self, env, offset):
+        super().__init__(env)
+        self.offset = np.float32(offset)
+
+    def evaluate(self, pop_arrays, generation):
+        """Run one generation and shift the device fitness tensor by the offset."""
+        result = self.env.evaluate(pop_arrays, generation)
+        return dict(result, fitness=_stage(_to_numpy(result["fitness"]) + self.offset))
 
 
 def _imported_modules(tree):
@@ -274,8 +413,12 @@ def check_seeding():
 class _MinimalEnv:
     """The smallest object that satisfies :class:`env_base.BatchedEpisodeEnv`.
 
-    It never runs anything; the check only asks whether the runtime-checkable protocol accepts it.
+    It never runs anything; the check only asks whether the runtime-checkable protocol accepts it, so it declares the numpy residency and no device of its own.
     """
+
+    residency = "numpy"
+    backend = None
+    device = None
 
     def __init__(self):
         self.rows = rows_for(1, EPISODES)
@@ -374,6 +517,227 @@ def check_env_base():
     missing = {key: value for key, value in well_formed.items() if key != "env_steps"}
     message = _expect_value_error(lambda: validate_evaluation(missing, pop_size), "a missing required key")
     _require("env_steps" in message, f"the rejection message must name the missing key, got {message}")
+
+
+# --- 2b. Device result contract ------------------------------------------------------
+
+
+def _host_init_state(num_inputs, num_outputs, pop_size):
+    """Return the ``Pipeline.setup()`` state of one width: the host reference of device-first initialization."""
+    algo = algorithm.NEAT(_genome(num_inputs, num_outputs), pop_size=pop_size, species_size=min(3, pop_size))
+    pipeline = Pipeline(
+        algo,
+        TraceOnlyProblem(num_inputs, num_outputs),
+        seed=evolution_seed(MASTER_SEED),
+        backend="numpy",
+        is_detailed=False,
+    )
+    return pipeline.setup()
+
+
+def check_device_contract():
+    """Pin the device result contract, the device fitness rule, the verification graph and device-first init."""
+    pop_size = DEVICE_POP_SIZE
+    episode_returns = np.array(
+        [
+            [99.5, -42.25, 7.0],
+            [np.nan, 100.0, -100.0],
+            [np.inf, -np.inf, 3.5],
+        ],
+        dtype=np.float32,
+    )
+    _require(
+        episode_returns.shape == (pop_size, EPISODES),
+        f"the device contract check needs a ({pop_size}, {EPISODES}) return matrix, got {episode_returns.shape}",
+    )
+    well_formed = _device_result(episode_returns)
+    _require(
+        validate_evaluation_device(well_formed, pop_size) is None,
+        "a well-formed device result must be accepted",
+    )
+    _require(
+        validate_evaluation_device(well_formed, pop_size, device=_plumbing_device()) is None,
+        "a well-formed device result on cpu:0 must be accepted when cpu:0 is the expected device",
+    )
+
+    message = _expect_value_error(
+        lambda: validate_evaluation_device(
+            dict(
+                well_formed,
+                episode_returns=_stage(
+                    np.nan_to_num(episode_returns, nan=0.0, posinf=0.0, neginf=0.0).astype(np.int32)
+                ),
+            ),
+            pop_size,
+        ),
+        "an integer episode_returns tensor",
+    )
+    _require("episode_returns" in message, f"the rejection message must name episode_returns, got {message}")
+    message = _expect_value_error(
+        lambda: validate_evaluation_device(
+            dict(well_formed, returns=_stage(episode_returns.reshape(-1)[:-1])), pop_size
+        ),
+        "a wrong returns shape",
+    )
+    _require("returns" in message, f"the rejection message must name returns, got {message}")
+    message = _expect_value_error(
+        lambda: validate_evaluation_device(dict(well_formed, episode_returns=episode_returns), pop_size),
+        "a host array where a device tensor is required",
+    )
+    _require("episode_returns" in message, f"the rejection message must name episode_returns, got {message}")
+    message = _expect_value_error(
+        lambda: validate_evaluation_device(
+            well_formed, pop_size, device=resolve_backend_device(PLUMBING_BACKEND, "rocm:0")[1]
+        ),
+        "a cpu:0 tensor when the generation is expected on rocm:0",
+    )
+    _require("rocm:0" in message, f"the rejection message must name rocm:0, got {message}")
+    message = _expect_value_error(
+        lambda: validate_evaluation_device(
+            {key: value for key, value in well_formed.items() if key != "env_steps"}, pop_size
+        ),
+        "a device result missing a required key",
+    )
+    _require("env_steps" in message, f"the rejection message must name the missing key, got {message}")
+
+    rule = build_fitness_rule(pop_size, episodes_per_policy=EPISODES, backend=PLUMBING_BACKEND, device=PLUMBING_DEVICE)
+    graph_fitness = run_fitness_rule(rule, episode_returns.reshape(-1))
+    host_fitness = _fitness_from_episode_returns(episode_returns)
+    _require(
+        np.asarray(graph_fitness).shape == (pop_size,) and np.asarray(graph_fitness).dtype == np.float32,
+        f"the device fitness rule must return ({pop_size},) float32, got "
+        f"{np.asarray(graph_fitness).shape} {np.asarray(graph_fitness).dtype}",
+    )
+    _require(
+        np.array_equal(np.asarray(graph_fitness), host_fitness),
+        f"the device fitness rule {np.asarray(graph_fitness).tolist()} must equal "
+        f"env_base._fitness_from_episode_returns {host_fitness.tolist()} bit for bit",
+    )
+    _require(
+        np.all(np.isfinite(host_fitness)) and host_fitness[1] == np.float32(0.0),
+        f"a non-finite episode must count as 0 and never propagate, got {host_fitness.tolist()}",
+    )
+    exact_returns = np.array(
+        [
+            [np.inf, 2.0, 4.0],
+            [-np.inf, np.nan, 3.0],
+            [np.nan, np.nan, np.nan],
+        ],
+        dtype=np.float32,
+    )
+    _require(
+        np.array_equal(
+            np.asarray(run_fitness_rule(rule, exact_returns.reshape(-1))),
+            np.array([2.0, 1.0, 0.0], dtype=np.float32),
+        ),
+        "the device rule must zero every non-finite episode before the float32 mean, so [inf, 2, 4] -> 2, "
+        f"[-inf, nan, 3] -> 1 and an all-NaN row -> 0, got "
+        f"{np.asarray(run_fitness_rule(rule, exact_returns.reshape(-1))).tolist()}",
+    )
+
+    verification = build_verification(
+        pop_size, episodes_per_policy=EPISODES, backend=PLUMBING_BACKEND, device=PLUMBING_DEVICE
+    )
+    returns = episode_returns.reshape(-1)
+    accepted = run_verification(verification, returns=returns, episode_returns=episode_returns, fitness=host_fitness)
+    _require(accepted["returns_match"], f"a correct device result must match its tiling, got {accepted}")
+    _require(accepted["fitness_match"], f"a correct device result must match the fitness rule, got {accepted}")
+    _require(
+        accepted["fitness_max_abs_diff"] == 0.0,
+        f"a correct device result must have no fitness deviation, got {accepted['fitness_max_abs_diff']}",
+    )
+    offset = run_verification(
+        verification,
+        returns=returns,
+        episode_returns=episode_returns,
+        fitness=host_fitness + np.float32(1e-3),
+    )
+    _require(
+        offset["returns_match"] and not offset["fitness_match"], f"a 1e-3 fitness offset must be rejected: {offset}"
+    )
+    _require(
+        offset["fitness_max_abs_diff"] >= 1e-3,
+        f"the reported deviation must carry the offset, got {offset['fitness_max_abs_diff']}",
+    )
+    rolled = run_verification(
+        verification, returns=np.roll(returns, 1), episode_returns=episode_returns, fitness=host_fitness
+    )
+    _require(not rolled["returns_match"], f"a returns tensor that is not the tiling must be rejected: {rolled}")
+
+    staged = run_verification(
+        verification,
+        returns=_stage(returns),
+        episode_returns=_stage(episode_returns),
+        fitness=_stage(host_fitness),
+        residency="device",
+    )
+    _require(
+        staged["returns_match"] and staged["fitness_match"] and staged["fitness_max_abs_diff"] == 0.0,
+        f"the verification graph must accept the same result as device tensors, got {staged}",
+    )
+    staged_offset = run_verification(
+        verification,
+        returns=_stage(returns),
+        episode_returns=_stage(episode_returns),
+        fitness=_stage(host_fitness + np.float32(1e-3)),
+        residency="device",
+    )
+    _require(
+        staged_offset["returns_match"] and not staged_offset["fitness_match"],
+        f"the verification graph must reject a 1e-3 fitness offset on device tensors, got {staged_offset}",
+    )
+
+    for num_inputs, num_outputs in GENOME_WIDTHS:
+        host_state = _host_init_state(num_inputs, num_outputs, pop_size)
+        algo = algorithm.NEAT(_genome(num_inputs, num_outputs), pop_size=pop_size, species_size=min(3, pop_size))
+        _config, device_state = device_setup(
+            algo,
+            TraceOnlyProblem(num_inputs, num_outputs),
+            seed=evolution_seed(MASTER_SEED),
+            backend=PLUMBING_BACKEND,
+            device=PLUMBING_DEVICE,
+        )
+        device_pop = tuple(_to_numpy(leaf) for leaf in device_state.pop)
+        device_species = tuple(_to_numpy(leaf) for leaf in evoxc.tree_leaves(device_state.species))
+        assert_payload_resident(
+            tuple(device_state.pop),
+            tuple(evoxc.tree_leaves(device_state.species)),
+            device_state.randkey,
+            device_state.generation,
+            _plumbing_device(),
+        )
+        host_pop = pop_arrays_of(host_state)
+        host_species = tuple(_to_numpy(leaf) for leaf in species_leaves_of(host_state.species))
+        _require(
+            len(device_pop) == len(host_pop),
+            f"the {num_inputs} -> {num_outputs} payload must have {len(host_pop)} leaves, got {len(device_pop)}",
+        )
+        for index, (host_leaf, device_leaf) in enumerate(zip(host_pop, device_pop)):
+            _require(
+                _array_equal(host_leaf, device_leaf),
+                f"the {num_inputs} -> {num_outputs} payload leaf {index} of device-first init must equal "
+                f"Pipeline.setup() bit for bit (max abs diff {float_max_abs_diff(host_leaf, device_leaf)!r})",
+            )
+        _require(
+            len(device_species) == len(host_species),
+            f"the species pytree must keep its {len(host_species)} leaves, got {len(device_species)}",
+        )
+        for index, (host_leaf, device_leaf) in enumerate(zip(host_species, device_species)):
+            _require(
+                _array_equal(host_leaf, device_leaf),
+                f"the {num_inputs} -> {num_outputs} species leaf {index} of device-first init must equal "
+                f"Pipeline.setup() bit for bit (max abs diff {float_max_abs_diff(host_leaf, device_leaf)!r})",
+            )
+        _require(
+            int(_to_numpy(host_state.randkey)) == int(_to_numpy(device_state.randkey)),
+            f"the {num_inputs} -> {num_outputs} randkey must survive device-first init, got "
+            f"{int(_to_numpy(device_state.randkey))} instead of {int(_to_numpy(host_state.randkey))}",
+        )
+        _require(
+            float(_to_numpy(host_state.generation)) == float(_to_numpy(device_state.generation)),
+            f"the {num_inputs} -> {num_outputs} generation counter must start at the host value, got "
+            f"{float(_to_numpy(device_state.generation))}",
+        )
 
 
 # --- 3. Graphs ----------------------------------------------------------------------
@@ -720,6 +1084,250 @@ def check_trainer():
     )
 
 
+# --- 4b. Device trainer (plumbing-only device) --------------------------------------
+
+
+def check_device_trainer():
+    """Pin the device residency of the trainer on ``cpu:0``: determinism, placement and the fitness rule."""
+
+    def train(residency, *, nan_episodes=(), fitness_offset=None, record_payloads=False):
+        """Run one trainer pass against a fresh synthetic env; returns ``(trainer, env, recorder)``."""
+        env = SyntheticDeviceEnv(
+            DEVICE_POP_SIZE,
+            residency=residency,
+            backend=PLUMBING_BACKEND,
+            device=PLUMBING_DEVICE,
+            nan_episodes=nan_episodes,
+        )
+        wrapped = env if fitness_offset is None else _FitnessOffsetEnv(env, fitness_offset)
+        recorder = None
+        if record_payloads:
+            recorder = _PayloadRecorder(wrapped)
+            wrapped = recorder
+        trainer = NeuroevolutionTrainer(
+            wrapped,
+            DEVICE_POP_SIZE,
+            DEVICE_GENERATIONS,
+            master_seed=MASTER_SEED,
+            num_inputs=45,
+            num_outputs=12,
+            residency=residency,
+        )
+        trainer.run()
+        return trainer, env, recorder
+
+    trainer_a, env_a, recorder = train("device", record_payloads=True)
+    trainer_b, env_b, _ = train("device")
+    _require(
+        len(trainer_a.records) == DEVICE_GENERATIONS,
+        f"the device trainer must record {DEVICE_GENERATIONS} generations, got {len(trainer_a.records)}",
+    )
+    _require(
+        trainer_a.fitness_history == trainer_b.fitness_history,
+        f"two device runs of one master seed must share their fitness history, got "
+        f"{trainer_a.fitness_history} and {trainer_b.fitness_history}",
+    )
+    _require(
+        _strip_timings(trainer_a.records) == _strip_timings(trainer_b.records),
+        "two device runs of one master seed must share their generation records (timings and cache aside)",
+    )
+
+    placement = trainer_a.placement
+    target = PLUMBING_DEVICE
+    for key in ("randkey", "generation", "fitness", "episode_returns", "returns", "seeds"):
+        _require(
+            placement.get(key) == target,
+            f"the device residency must keep {key} on {target}, got {placement.get(key)!r}",
+        )
+    _require(
+        len(placement.get("pop", ())) == 4 and set(placement["pop"]) == {target},
+        f"the four payload leaves must live on {target}, got {placement.get('pop')!r}",
+    )
+    _require(
+        len(placement.get("species", ())) == 10 and set(placement["species"]) == {target},
+        f"the ten species leaves must live on {target}, got {placement.get('species')!r}",
+    )
+
+    _require(
+        recorder is not None and len(recorder.payloads) == DEVICE_GENERATIONS,
+        f"every generation must hand a payload to the env, got {0 if recorder is None else len(recorder.payloads)}",
+    )
+    for generation, payload in enumerate(recorder.payloads):
+        _require(
+            len(payload) == 4,
+            f"generation {generation} must receive the four payload leaves, got {len(payload)}",
+        )
+        for index, leaf in enumerate(payload):
+            _require(
+                not isinstance(leaf, np.ndarray) and is_device_tensor(leaf),
+                f"generation {generation} payload leaf {index} must be an evoxc tensor under device "
+                f"residency, got {type(leaf).__name__}",
+            )
+            _require(
+                device_placement(leaf) == target,
+                f"generation {generation} payload leaf {index} must live on {target}, got {device_placement(leaf)}",
+            )
+
+    trainer_numpy, env_numpy, _ = train("numpy")
+    _require(
+        trainer_numpy.fitness_history == trainer_a.fitness_history,
+        f"the numpy residency of the same env must reproduce the device fitness history, got "
+        f"{trainer_numpy.fitness_history} and {trainer_a.fitness_history}",
+    )
+    _require(
+        trainer_numpy.placement.get("randkey") == "host" and trainer_numpy.placement.get("fitness") == "host",
+        f"the numpy residency must report host placement, got {trainer_numpy.placement}",
+    )
+
+    trainer_nan, env_nan, _ = train("device", nan_episodes=(0,))
+    nan_record = trainer_nan.records[0]
+    nan_episode_returns = np.asarray(nan_record["episode_returns"], dtype=np.float32)
+    _require(
+        bool(np.isnan(nan_episode_returns[:, 0]).all()),
+        f"the unscored episode column must reach the record as NaN, got {nan_episode_returns[:, 0]}",
+    )
+    _require(
+        np.array_equal(
+            np.asarray(nan_record["fitness"], dtype=np.float32),
+            _fitness_from_episode_returns(nan_episode_returns),
+        ),
+        f"a NaN episode must be counted as 0 on the device, got {nan_record['fitness']}",
+    )
+
+    message = _expect_value_error(
+        lambda: train("device", fitness_offset=1e-3),
+        "a device fitness off by 1e-3",
+    )
+    _require("fitness" in message, f"the rejection message must name the fitness, got {message}")
+
+    for trainer, env in (
+        (trainer_a, env_a),
+        (trainer_b, env_b),
+        (trainer_numpy, env_numpy),
+        (trainer_nan, env_nan),
+    ):
+        trainer.close()
+        # A closed SyntheticDeviceEnv refuses to hand out its executables, so this is the lifecycle check.
+        _require(env.executables() is not None, "the trainer must never close the env it was handed")
+        env.close()
+
+
+# --- 4c. Device hardware ------------------------------------------------------------
+
+
+def check_device_hardware():
+    """Verify the device residency on the first reachable non-CPU device, or print ``SKIP``."""
+    devices = evoxc.devices()
+    available = [f"{entry.kind}:{entry.index}" for entry in devices]
+    backend = os.environ.get("EVOXC_BACKEND") or "iree"
+    device_spec = os.environ.get("EVOXC_DEVICE") or None
+    plugin_path = ensure_pjrt_plugin(backend)
+    if backend == "xla" and plugin_path is None:
+        raise AssertionError(
+            "EVOXC_BACKEND=xla needs its PJRT plugin visible: set EVOXC_PJRT_PLUGIN to the xla_rocm_plugin.so "
+            "or put its jax_plugins/ directory on PYTHONPATH (the xla adapter's placement provider reads no "
+            "compile options)"
+        )
+    usable, skipped = reachable_devices(devices, backend)
+    if device_spec is not None:
+        device = resolve_backend_device(backend, device_spec)[1]
+    elif usable:
+        device = usable[0]
+    else:
+        reasons = "; ".join(f"{entry['device']} unreachable ({entry['error']})" for entry in skipped)
+        print(
+            f"SKIP device_hardware: no non-CPU evoxc device is reachable through {backend} "
+            f"(available: {available}{'; ' + reasons if reasons else ''})"
+        )
+        return
+    if device.kind == "cpu":
+        print(f"SKIP device_hardware: EVOXC_DEVICE={device_spec} names a cpu-kind device; the CPU checks cover it")
+        return
+    target = f"{device.kind}:{device.index}"
+    backend, device = resolve_backend_device(backend, device)
+
+    env = SyntheticDeviceEnv(
+        HARDWARE_POP_SIZE,
+        residency="device",
+        backend=backend,
+        device=device,
+    )
+    trainer = NeuroevolutionTrainer(
+        env,
+        HARDWARE_POP_SIZE,
+        HARDWARE_GENERATIONS,
+        master_seed=MASTER_SEED,
+        num_inputs=45,
+        num_outputs=12,
+        residency="device",
+        plugin_path=plugin_path,
+    )
+    trainer.setup()
+    assert_payload_resident(
+        trainer.pop_arrays,
+        trainer.species_leaves,
+        trainer.randkey,
+        trainer.generation_counter,
+        device,
+    )
+    _require(
+        set(trainer.placement["pop"]) == {target} and set(trainer.placement["species"]) == {target},
+        f"initialization must be device-resident on {target}, got {trainer.placement}",
+    )
+    _require(
+        trainer.placement["randkey"] == target and trainer.placement["generation"] == target,
+        f"the key and the generation counter must be on {target}, got {trainer.placement}",
+    )
+
+    trainer.run()
+    placement = trainer.placement
+    for key in ("fitness", "episode_returns", "returns", "seeds"):
+        _require(
+            placement.get(key) == target,
+            f"the device result's {key} must be on {target}, got {placement.get(key)!r}",
+        )
+    assert_payload_resident(
+        trainer.pop_arrays,
+        trainer.species_leaves,
+        trainer.randkey,
+        trainer.generation_counter,
+        device,
+    )
+    _require(
+        set(placement["pop"]) == {target} and set(placement["species"]) == {target},
+        f"the tell graph's output payload must stay on {target}, got {placement}",
+    )
+
+    reference_env = SyntheticDeviceEnv(HARDWARE_POP_SIZE, residency="numpy", backend="numpy", device="cpu:0")
+    reference = NeuroevolutionTrainer(
+        reference_env,
+        HARDWARE_POP_SIZE,
+        HARDWARE_GENERATIONS,
+        master_seed=MASTER_SEED,
+        num_inputs=45,
+        num_outputs=12,
+        residency="numpy",
+    )
+    reference.run()
+    _require(
+        trainer.fitness_history == reference.fitness_history,
+        f"the {target} residency must reproduce the numpy residency's fitness history exactly, got "
+        f"{trainer.fitness_history} and {reference.fitness_history}",
+    )
+    _require(
+        not np.isnan(np.asarray(trainer.fitness_history, dtype=np.float32)).any(),
+        f"the {target} fitness history must be finite, got {trainer.fitness_history}",
+    )
+    print(
+        f"  device_hardware: {backend}@{target} pop {HARDWARE_POP_SIZE}, "
+        f"fitness {[round(value, 6) for value in trainer.fitness_history]}"
+    )
+    trainer.close()
+    env.close()
+    reference.close()
+    reference_env.close()
+
+
 # --- 5. Large-return aggregation ----------------------------------------------------
 
 
@@ -806,10 +1414,13 @@ def check_import_hygiene():
 CHECKS = (
     ("seeding", check_seeding),
     ("env_base", check_env_base),
+    ("device_contract", check_device_contract),
     ("graphs", check_graphs),
     ("trainer", check_trainer),
+    ("device_trainer", check_device_trainer),
     ("large_returns", check_large_returns),
     ("import_hygiene", check_import_hygiene),
+    ("device_hardware", check_device_hardware),
 )
 
 
