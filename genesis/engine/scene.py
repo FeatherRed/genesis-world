@@ -1128,10 +1128,12 @@ class Scene(RBC):
         """
         Return whether each environment flagged an error since its last reset, such as an overflow of contacts or a 'nan'.
 
-        A flagged error raises at the beginning of the next step, before anything else, until it is cleared: by resetting
-        the state of the environment, or with 'clear_errno'. Without PyTorch the result is the zero-copy view of one
-        device-resident buffer, which the next call rewrites, where a torch scene returns a boolean tensor of its own.
-        Either form is accepted by 'clear_errno'.
+        The result is boolean-valued and batch-shaped '(n_envs,)': a fresh 'torch.bool' tensor with PyTorch, and
+        without it a live zero-copy device view of a 'gs.qd_bool' field, whose 'dtype' is 'np.bool_', whose 'to_numpy()'
+        is a host bool array and whose DLPack export is 'kDLBool'. A flagged error raises at the beginning of the next
+        step, before anything else, until it is cleared: by resetting the state of the environment, or with
+        'clear_errno'. The torch-free view aliases one buffer, which the next call rewrites, and either form is
+        accepted by 'clear_errno'.
         """
         return self._sim.get_error_envs_mask()
 

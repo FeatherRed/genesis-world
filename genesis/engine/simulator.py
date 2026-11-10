@@ -408,8 +408,9 @@ class Simulator(RBC):
     def get_error_envs_mask(self) -> "torch.Tensor | DeviceView":
         """Return whether each env flagged an error in any solver since its last reset.
 
-        A torch-free scene merges the masks of the solvers into one device-resident buffer in a kernel and returns the
-        zero-copy view of it, which the next call rewrites, where the torch path returns a boolean tensor of its own.
+        The result is boolean-valued and batch-shaped '(n_envs,)': a fresh 'torch.bool' tensor with PyTorch, and without
+        it the zero-copy view of one device-resident 'gs.qd_bool' buffer, which this call rewrites and 'clear_errno'
+        accepts back.
         """
         if not HAS_TORCH:
             kernel_zero_mask(self._errno_mask)

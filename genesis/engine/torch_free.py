@@ -82,8 +82,12 @@ def steps_field(n_envs: int):
 
 
 def mask_field(n_envs: int):
-    """Allocate the mask of the environments that flagged an error, which Quadrants zeroes, as the solvers keep one."""
-    return qd.field(gs.qd_int, shape=(n_envs,))
+    """Allocate the mask of the environments that flagged an error, which Quadrants zeroes, as the solvers keep one.
+
+    The buffer holds one boolean flag per environment, so that the mask a torch-free scene returns has the dtype and the
+    values of the torch one. Apple Metal stores 'gs.qd_bool' as 'int32', which is why every write casts explicitly.
+    """
+    return qd.field(gs.qd_bool, shape=(n_envs,))
 
 
 def steps_values(steps) -> np.ndarray:
@@ -119,11 +123,15 @@ def kernel_clear_counters(counters: qd.Tensor, envs_idx: qd.Tensor):
 def kernel_zero_mask(mask: qd.Tensor):
     """Clear the mask of the environments that flagged an error."""
     for i_b in range(mask.shape[0]):
-        mask[i_b] = 0
+        mask[i_b] = qd.cast(False, gs.qd_bool)
 
 
 @qd.kernel
 def kernel_or_mask(mask: qd.Tensor, solver_mask: qd.Tensor):
-    """Add the error flags of one solver to the mask of the whole simulator, in place on the device."""
+    """Add the error flags of one solver to the mask of the whole simulator, in place on the device.
+
+    Both buffers hold one boolean flag per environment, which are compared against 0 before their disjunction and cast
+    back, so that the kernel compiles whatever 'gs.qd_bool' is stored as (Apple Metal stores it as 'int32').
+    """
     for i_b in range(mask.shape[0]):
-        mask[i_b] |= solver_mask[i_b]
+        mask[i_b] = qd.cast((mask[i_b] != 0) | (solver_mask[i_b] != 0), gs.qd_bool)

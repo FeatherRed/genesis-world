@@ -326,10 +326,10 @@ def _is_device_selection(index) -> bool:
 def _resolve_flag_mask(values: np.ndarray, max_size: int) -> np.ndarray:
     """Indices a device-resident selection of one flag per entry flags, as 'mask_indices' reads such a mask.
 
-    A torch-free scene states the mask of the entries a call selects as a device buffer holding one flag for each of
-    them, which 'Solver.get_error_envs_mask' returns and 'Simulator.clear_errno' reads back. A non-zero flag selects
-    its entry, exactly as a true entry of a boolean mask does. A selection of another shape, or holding a value other
-    than 0 and 1, names its entries itself and is returned unchanged.
+    A boolean mask, which 'Solver.get_error_envs_mask' gives without PyTorch, is read by the boolean branch of
+    'sanitize_index_values' like any other mask. A device buffer holding one integer 0/1 flag per entry states the same
+    selection: a non-zero flag selects its entry, exactly as a true entry of a boolean mask does. A selection of
+    another shape, or holding a value other than 0 and 1, names its entries itself and is returned unchanged.
     """
     if values.ndim != 1 or values.size != max_size or values.dtype.kind not in "iu":
         return values
@@ -341,9 +341,10 @@ def _resolve_flag_mask(values: np.ndarray, max_size: int) -> np.ndarray:
 def envs_flag_mask(envs_idx, num_envs: int) -> "np.ndarray | None":
     """The boolean mask over every environment of the scene that `envs_idx` states, or None if it names its entries.
 
-    A boolean mask states one flag per environment, be it on the host or on the device, and so does a device-resident
-    buffer of one 0/1 flag per environment, which is the mask form of a torch-free scene (see '_resolve_flag_mask').
-    An index collection names the environments it selects whatever its values, as PyTorch reads it.
+    A boolean mask states one flag per environment, be it on the host or on the device, which is the form
+    'Solver.get_error_envs_mask' gives without PyTorch. A device buffer of one integer 0/1 flag per environment states
+    the same selection and is read as the boolean mask it is (see '_resolve_flag_mask'). An index collection names the
+    environments it selects whatever its values, as PyTorch reads it.
     """
     if not isinstance(envs_idx, np.ndarray) and not _is_device_selection(envs_idx):
         return None

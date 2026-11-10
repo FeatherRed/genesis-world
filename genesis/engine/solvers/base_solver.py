@@ -367,8 +367,8 @@ class Solver(RBC):
         """
         Return whether each env flagged an error since its last reset (see 'register_errors').
 
-        A torch-free scene returns a zero-copy device view of the int32 flags of '_errno_mask', a non-zero entry
-        meaning a flag, where the torch path returns a boolean tensor.
+        The result is boolean-valued and batch-shaped '(n_envs,)': a fresh 'torch.bool' tensor with PyTorch, a live
+        zero-copy device view of the boolean '_errno_mask' field without it, which the next call rewrites.
         """
         if not HAS_TORCH:
             return view_of(self._errno_mask)
@@ -620,7 +620,7 @@ class Solver(RBC):
         else:
             # Quadrants zeroes the memory of a field, and the mask of the flagged envs starts with none of them
             self._errno_latched = qd_field(gs.qd_int, (self._B,))
-            self._errno_mask = qd_field(gs.qd_int, (self._B,))
+            self._errno_mask = qd_field(gs.qd_bool, (self._B,))
         if self._requires_grad:
             self._error_messages[BackwardErrorCode.INVALID_GRAD_NAN] = (
                 "The backward pass produced a 'nan' or 'inf' gradient of the state. The rollout is likely too stiff to "
@@ -930,13 +930,14 @@ def kernel_set_gravity(tensor: qd.types.ndarray(), envs_idx: qd.types.ndarray(),
 # The kernels of the error flags of a torch-free scene, which has no torch operation to merge, mask or clear them
 # (see Solver.update_errno, flag_errno and clear_errno). The qd.Tensor annotation accepts both forms the buffers are
 # allocated in: a field, as the latch and its mask are, and a member of a struct field, as the flags of a solver are.
+# The mask holds one boolean flag per env, which every write casts because Apple Metal stores 'gs.qd_bool' as 'int32'.
 
 
 @qd.kernel
 def kernel_merge_errno(errno: qd.Tensor, errno_latched: qd.Tensor, errno_mask: qd.Tensor):
     for i_b in range(errno_latched.shape[0]):
         errno_latched[i_b] |= errno[i_b]
-        errno_mask[i_b] = qd.cast(errno_latched[i_b] != 0, qd.i32)
+        errno_mask[i_b] = qd.cast(errno_latched[i_b] != 0, gs.qd_bool)
 
 
 @qd.kernel
@@ -944,7 +945,7 @@ def kernel_flag_errno(envs_idx: qd.Tensor, code: qd.i32, errno_latched: qd.Tenso
     for i_b_ in range(envs_idx.shape[0]):
         i_b = envs_idx[i_b_]
         errno_latched[i_b] |= code
-        errno_mask[i_b] = qd.cast(errno_latched[i_b] != 0, qd.i32)
+        errno_mask[i_b] = qd.cast(errno_latched[i_b] != 0, gs.qd_bool)
 
 
 @qd.kernel
@@ -952,7 +953,7 @@ def kernel_clear_errno(envs_idx: qd.Tensor, errno_latched: qd.Tensor, errno_mask
     for i_b_ in range(envs_idx.shape[0]):
         i_b = envs_idx[i_b_]
         errno_latched[i_b] = 0
-        errno_mask[i_b] = 0
+        errno_mask[i_b] = qd.cast(False, gs.qd_bool)
 
 
 @qd.kernel
@@ -961,4 +962,4 @@ def kernel_clear_errno_flags(envs_idx: qd.Tensor, errno: qd.Tensor, errno_latche
         i_b = envs_idx[i_b_]
         errno[i_b] = 0
         errno_latched[i_b] = 0
-        errno_mask[i_b] = 0
+        errno_mask[i_b] = qd.cast(False, gs.qd_bool)
