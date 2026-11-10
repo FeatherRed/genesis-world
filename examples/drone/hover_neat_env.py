@@ -71,8 +71,8 @@ through ``genesis.utils.misc.tensor_to_array`` (``drone.get_pos`` / ``get_quat``
 ``get_ang``, ``scene.get_error_envs_mask``) and the writes pass numpy arrays straight to the setters
 (``array_like`` inputs, ``envs_idx`` included), so every read and every write crosses the device
 boundary exactly once.  ``residency="device"`` is the opt-in zero-copy device-resident rollout,
-implemented in ``hover_device_rollout.py`` and imported only when that residency is selected; it
-needs torch at the Genesis export boundary only.
+implemented in ``hover_device_rollout.py`` and imported only when that residency is selected; it is
+torch-free as well, so a whole generation of it runs in a process where ``import torch`` fails.
 
 The module has no CLI; like the other ``*_env.py`` modules it is excluded from the example smoke
 tests.  ``hover_neat_check.py`` is its smoke/parity CLI.
@@ -105,11 +105,16 @@ from hover_kernels import (
     run_controls,
     run_reset_obs,
 )
+from hover_device_kernels import build_episode_returns
 
 # Importing ``hover_kernels`` also puts the shared ``examples/neuroevolution`` layer on
 # ``sys.path``; the environment contract, the seeding rules, the executable cache and the
 # fitness/policy graphs live there now, not in the task module.
-from env_base import BatchedEpisodeEnv, validate_evaluation  # noqa: E402  (path set up above)
+from env_base import (  # noqa: E402  (path set up above)
+    BatchedEpisodeEnv,
+    validate_evaluation,
+    validate_evaluation_device,
+)
 from evolution_graphs import ExecutableCache, build_fitness, run_fitness  # noqa: E402
 from evox_runtime import resolve_backend_device  # noqa: E402
 from policy_graphs import build_policy, run_policy  # noqa: E402
@@ -147,9 +152,8 @@ class HoverNeatEnv:
     Two rollout residencies are selectable.  ``residency="numpy"`` (the default) is the
     correctness-first host staging: every state read and every actuator write crosses the device
     boundary once, as a numpy array.  ``residency="device"`` is the opt-in zero-copy
-    device-resident rollout implemented in the companion ``hover_device_rollout.py`` module,
-    which needs torch only at the Genesis export boundary; it is imported lazily, inside
-    :meth:`evaluate`, so numpy mode never imports it.
+    device-resident rollout implemented in the companion ``hover_device_rollout.py`` module, which
+    is torch-free too; it is imported lazily, inside :meth:`evaluate`, so numpy mode never imports it.
 
     Args:
         pop_size (int): Policies per generation; the scene has ``EPISODES_PER_POLICY * pop_size``
@@ -176,12 +180,13 @@ class HoverNeatEnv:
         max_episode_length (int): ``ceil(episode_length_s / dt)``, baked into the advance graph.
         horizon (int): ``scene.step()`` calls of one generation.
         backend (str), device (evoxc.Device), device_name (str): The resolved graph target.
-        residency (str): The rollout residency; ``device`` also owns ``_device_rollout``.
+        residency (str): The rollout residency; ``device`` also owns the sixth executable, the
+            episode-returns reshape graph (``episode_returns_executable``).
         perturbation (seeding.Perturbation): The reset perturbation amplitudes in force.
-        cache (ExecutableCache): The one cache the five executables are built and looked up in.
-        executables (callable): Return the five executables, compiling only the missing ones; call
-            it once per generation as the compile-once proof (every call after ``__init__`` is a
-            hit).
+        cache (ExecutableCache): The one cache the five (device residency: six) executables are
+            built and looked up in.
+        executables (callable): Return the executables, compiling only the missing ones; call it
+            once per generation as the compile-once proof (every call after ``__init__`` is a hit).
     """
 
     def __init__(
@@ -215,8 +220,6 @@ class HoverNeatEnv:
             raise ValueError(f"residency must be one of {RESIDENCIES}, got {residency!r}")
         if self.residency == "device" and self.backend == "numpy":
             raise ValueError("residency='device' needs a device evoxc backend, not the numpy backend")
-        # The companion rollout object of ``residency="device"``; built on first ``evaluate``.
-        self._device_rollout = None
 
         if perturbation is None:
             self.perturbation = Perturbation()
@@ -270,8 +273,8 @@ class HoverNeatEnv:
         self._reset_pos = np.ascontiguousarray(np.tile(BASE_INIT_POS, (self.rows, 1)))
         self._reset_quat = np.ascontiguousarray(np.tile(BASE_INIT_QUAT, (self.rows, 1)))
 
-        # The five executables are compiled once, here, and every generation afterwards reuses
-        # them through the same cache (that is what ``cache_hits`` counts).
+        # The executables are compiled once, here, and every generation afterwards reuses them
+        # through the same cache (that is what ``cache_hits`` counts).
         self.cache = ExecutableCache()
         # The declaration that this env satisfies the shared contract: every attribute and method
         # the protocol requires exists by now (``cache`` is the last one built), so a drift in the
@@ -288,13 +291,17 @@ class HoverNeatEnv:
             )
         self._algo, self._policy_config, self._trace_pop = self._build_policy_trace()
         self._pop_shapes = tuple(np.shape(leaf) for leaf in self._trace_pop)
+        executables = self.executables()
         (
             self.controls_executable,
             self.reset_obs_executable,
             self.policy_executable,
             self.advance_executable,
             self.fitness_executable,
-        ) = self.executables()
+        ) = executables[:5]
+        # The device residency drives one more graph, the ``(rows,)`` -> ``(pop_size, episodes)``
+        # reshape of the episode returns (see ``executables``).
+        (self.episode_returns_executable,) = executables[5:] if self.residency == "device" else (None,)
         logger.info(
             "HoverNeatEnv: pop_size=%d rows=%d horizon=%d max_episode_length=%d backend=%s device=%s "
             "residency=%s perturbation=%s",
@@ -341,7 +348,14 @@ class HoverNeatEnv:
         return self._trace_pop
 
     def executables(self):
-        """Return the five executables, compiling only the ones the cache does not hold yet."""
+        """Return the env-side executables, compiling only the ones the cache does not hold yet.
+
+        The numpy residency drives the five graphs ``hover_kernels`` owns (controls, reset
+        observation, policy, advance, fitness).  The device residency additionally drives the
+        ``episode_returns`` graph of ``hover_device_kernels`` -- the ``(rows,)`` ->
+        ``(pop_size, episodes)`` reshape of the returns, which cannot be a host-side ``reshape``
+        without leaving the device -- which is why the tuple grows to six there.
+        """
         cache = self.cache
         controls = cache.get(
             ("controls", self.rows, self.backend, self.device_name),
@@ -378,7 +392,13 @@ class HoverNeatEnv:
             ("fitness", self.pop_size, EPISODES_PER_POLICY, self.backend, self.device_name),
             lambda: build_fitness(self.pop_size, backend=self.backend, device=self.device),
         )
-        return controls, reset_obs, policy, advance, fitness
+        if self.residency != "device":
+            return controls, reset_obs, policy, advance, fitness
+        episode_returns = cache.get(
+            ("episode_returns", self.pop_size, EPISODES_PER_POLICY, self.backend, self.device_name),
+            lambda: build_episode_returns(self.pop_size, backend=self.backend, device=self.device),
+        )
+        return controls, reset_obs, policy, advance, fitness, episode_returns
 
     def _seeds_for(self, generation):
         """Return the ``(EPISODES_PER_POLICY,)`` int64 seeds of one generation."""
@@ -475,8 +495,14 @@ class HoverNeatEnv:
         commands = np.stack([self._draw_commands(rng) for rng in rngs], axis=0).astype(np.float32)
 
         self._reset_pos, self._reset_quat = self._init_poses(seeds)
-        self.drone.set_pos(self._reset_pos, zero_velocity=True, envs_idx=None)
-        self.drone.set_quat(self._reset_quat, zero_velocity=True, envs_idx=None)
+        # The base pose of a free link *is* its qpos, so writing qpos sets exactly the state ``set_pos`` /
+        # ``set_quat`` set (measured bit-identical, before and after stepping), without their fixed-link guard:
+        # a Torch-free process walks that guard over the sanitized device ``links_idx`` and reads past its end,
+        # which refused every perturbed (env-specific) reset. The drone owns no fixed link, so the
+        # ``batch_fixed_verts`` morph option cannot avoid the guard.
+        self.drone.set_qpos(
+            np.concatenate((self._reset_pos, self._reset_quat), axis=1), zero_velocity=True, envs_idx=None
+        )
         self.drone.zero_all_dofs_velocity()
         self.scene.clear_errno()  # drop any flag the previous generation left behind
         obs = run_reset_obs(
@@ -508,8 +534,9 @@ class HoverNeatEnv:
 
         With ``residency="numpy"`` the rows are stepped on the host-staged loop below, and the
         assembled result is checked against the shared contract with
-        :func:`env_base.validate_evaluation`.  With ``residency="device"`` the call is dispatched
-        to ``hover_device_rollout.DeviceRollout``, which owns the same contract.
+        :func:`env_base.validate_evaluation`.  With ``residency="device"`` the call is dispatched to
+        ``hover_device_rollout.DeviceRollout``, whose four training leaves stay on the device and are
+        checked with :func:`env_base.validate_evaluation_device` instead.
 
         Args:
             pop_arrays (tuple): The four genome payload arrays (``node_keys``, ``node_attrs``,
@@ -523,20 +550,31 @@ class HoverNeatEnv:
             this generation), ``env_steps`` (``steps * rows``), ``wall_time_s``,
             ``steps_per_s``, ``env_steps_per_s``, ``cache_hits``, ``cache_misses``,
             ``end_reasons`` (counts of ``timeout`` / ``crash`` / ``error`` / ``unfinished``) and
-            ``commands`` (rows, 3) the final targets.
+            ``commands`` (rows, 3) the final targets.  The four training leaves are numpy arrays in
+            the numpy residency and device tensors in the device residency.
 
         Raises:
             IndexError: If ``generation`` is outside the supplied seed table.
             ValueError: If the assembled result violates the shared evaluation contract.
         """
         if self.residency == "device":
-            if self._device_rollout is None:
-                # Imported here, not at module level: the device rollout is the only part of this
-                # stack that touches torch, and numpy mode must never import it.
-                from hover_device_rollout import DeviceRollout
+            # Imported here, not at module level: the device rollout is the only part of this stack
+            # that speaks IREE directly, and numpy mode must never import it.
+            from hover_device_rollout import DeviceRollout
 
-                self._device_rollout = DeviceRollout(self)
-            return self._device_rollout.evaluate(pop_arrays, generation)
+            result = DeviceRollout(
+                self,
+                (
+                    self.controls_executable,
+                    self.reset_obs_executable,
+                    self.policy_executable,
+                    self.advance_executable,
+                    self.fitness_executable,
+                    self.episode_returns_executable,
+                ),
+            ).evaluate(pop_arrays, generation)
+            validate_evaluation_device(result, self.pop_size, self.episodes_per_policy, self.device)
+            return result
 
         generation = int(generation)
         pop_arrays = tuple(pop_arrays)

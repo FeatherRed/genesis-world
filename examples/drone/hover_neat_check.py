@@ -20,16 +20,22 @@ Four things this script is for, all of them cheap enough for the example smoke s
   fingerprint determinism, the same numeric tolerances, and the analytic reset observation must
   still match the live reset state at a perturbed pose.
 * **``--imports``** statically proves that the migrated stack stays free of ``torch``: an AST
-  scan of ``hover_kernels.py``, ``hover_neat_env.py``, ``hover_neat_train.py`` (skipped with a
-  note while it does not exist yet) and the six modules of the shared
-  ``examples/neuroevolution`` layer.  ``hover_device_rollout.py`` exports to Genesis through
-  ``torch.from_dlpack`` and imports torch lazily inside its helpers, and is therefore
-  deliberately outside that list.
+  scan of ``hover_kernels.py``, ``hover_device_kernels.py``, ``hover_device_rollout.py``,
+  ``hover_neat_env.py``, ``hover_neat_train.py`` (skipped with a note while a file does not exist
+  yet) and the six modules of the shared ``examples/neuroevolution`` layer.  The device rollout is
+  inside that list: it exports to Genesis through the torch-free DLPack bridge of
+  ``genesis.utils.device_buffer``, not through ``torch.from_dlpack``.
 * **``--residency``** selects the rollout residency of every env this script builds:
   ``numpy`` (the default, host-staged) or ``device`` (the zero-copy device-resident rollout of
   ``hover_device_rollout.py``, which needs a non-numpy graph backend, e.g.
   ``--evoxc-backend iree --evoxc-device cpu:0``).  It applies to the default mode and to
   ``--parity``.
+* **``--torch-free``** is the Torch claim of the device residency, mirroring
+  ``examples/locomotion/go2_neat_train.py --torch-free``: it implies ``--residency device``, defaults
+  the graphs to ``iree@rocm:0`` and refuses the flags that would import Torch (a host rollout, a numpy
+  graph backend).  It applies to every mode above and, at the end of the run, prints
+  ``torch_free<TAB>1|0`` for the fact that ``"torch"`` never reached the process -- the exit code is 1
+  when it did.  ``--imports`` is a static scan, so it proves its part of the claim without it.
 * **``--residency-parity``** scores generation 0 twice -- once with a numpy-residency env, once
   with a device-residency env built from the same seed, population, horizon and perturbation --
   and prints the disagreement as ``name<TAB>value`` lines: ``returns_max_abs_diff``,
@@ -122,9 +128,15 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--residency",
         choices=("numpy", "device"),
-        default="numpy",
+        default=None,
         help="rollout residency of every env built here: numpy (default) or device "
         "(the zero-copy rollout of hover_device_rollout.py, needs a non-numpy graph backend)",
+    )
+    parser.add_argument(
+        "--torch-free",
+        action="store_true",
+        help="run with the Torch claim of the device residency: implies --residency device and "
+        "iree graphs, and prints torch_free<TAB>0|1 for `\"torch\" in sys.modules` at the end",
     )
     parser.add_argument(
         "--residency-parity",
@@ -148,9 +160,51 @@ def _parse_args(argv=None):
     return parser.parse_args(argv)
 
 
+def _resolve_torch_free(args):
+    """Resolve ``--torch-free``: imply the device residency and refuse what would import Torch.
+
+    The claim is the device residency's (no host array at a graph boundary), so it is the only
+    residency this flag can run, and the graphs have to be a device backend.  Everything else is
+    inherited from the flags, so a refusal always names the flag that has to go.
+    """
+    if not args.torch_free:
+        if args.residency is None:
+            args.residency = "numpy"
+        return
+    if args.residency == "numpy":
+        raise SystemExit(
+            "--torch-free runs the device-resident rollout, which stages no host array at a graph "
+            "boundary, so --residency numpy is not available here; drop --residency numpy (device "
+            "residency is implied) or drop --torch-free"
+        )
+    if args.evoxc_backend == "numpy":
+        raise SystemExit(
+            "--torch-free needs a device evoxc backend (device residency is IREE-backed), got "
+            "--evoxc-backend numpy; drop --evoxc-backend numpy or drop --torch-free"
+        )
+    args.residency = "device"
+
+
+def _torch_in_process():
+    """Whether ``torch`` has been imported in this process (the torch-free claim, reported only)."""
+    return "torch" in sys.modules
+
+
+def _report_torch_free():
+    """Print the ``--torch-free`` verdict; returns the exit-code contribution (0 ok, 1 imported)."""
+    imported = _torch_in_process()
+    print(f"torch_free\t{int(not imported)}")
+    if imported:
+        print(
+            "# torch reached the process through an imported module; the torch-free paths (the device "
+            "rollout of hover_device_rollout.py, the device kernels) must not import it"
+        )
+    return 1 if imported else 0
+
+
 def _resolve_targets(args):
     """Resolve the graph backend/device: explicit flags win, then the GPU defaults, then CPU."""
-    backend = args.evoxc_backend or ("iree" if args.gpu else "numpy")
+    backend = args.evoxc_backend or ("iree" if (args.gpu or args.torch_free) else "numpy")
     device = args.evoxc_device or ("rocm:0" if args.gpu else "cpu:0")
     return backend, device
 
@@ -167,11 +221,61 @@ def _perturbation(args):
     return Perturbation(*amplitudes)
 
 
+def _refuse_cpu_genesis_over_device_graphs(args):
+    """Refuse device-resident graphs over a CPU Genesis.
+
+    The device residency exports the graphs' output as a DLPack source on the graph's device and
+    writes it straight into the scene, so a CPU Genesis refuses it deep inside the simulator
+    (``Only a host DLPack source can be copied into a CPU buffer``); ``-g/--gpu`` puts Genesis on the
+    graph's device and is the way out.  Every mode that builds a scene reaches that path --
+    ``--residency device`` in the default scoring or ``--parity``, and ``--residency-parity``'s
+    second half, which is always the device residency -- while the numpy residency is host-staged
+    at both graph boundaries and therefore runs over a CPU Genesis in any mode.  ``--imports``
+    builds neither graph nor scene, so it is exempt.
+    """
+    if args.imports or not (args.residency_parity or args.residency == "device"):
+        return
+    backend, device = _resolve_targets(args)
+    kind = str(device).partition(":")[0].strip()
+    if args.gpu or not kind or kind == "cpu":
+        return
+    mode = "--residency-parity" if args.residency_parity else "--residency device"
+    raise SystemExit(
+        f"{mode} with graphs on {device} ({backend}) needs Genesis on the same device, but -g/--gpu was "
+        f"not given, so Genesis would stay on the CPU and refuse the device DLPack source the rollout "
+        f'exports ("Only a host DLPack source can be copied into a CPU buffer"); add -g/--gpu to put '
+        f"Genesis on the graphs' device, or drop --evoxc-device {device} to keep both on the CPU"
+    )
+
+
 def _print_rows(values):
     """Print ``name<TAB>max_abs_diff`` lines; return the names that exceed their tolerance."""
     for name, value in values.items():
         print(f"{name}\t{value:.3e}")
     return [name for name, value in values.items() if not value <= TOLERANCES[name]]
+
+
+def _leaf(result, name):
+    """One training leaf of an evaluation result as a host array.
+
+    ``residency="numpy"`` hands the four training leaves back as numpy arrays, while
+    ``residency="device"`` hands device tensors back.  A device tensor is materialized through its
+    payload's explicit readback (``data.to_host()``, the same call the device rollout's ``_host``
+    makes), because ``Tensor.numpy()`` needs host memory and raises ``DeviceError`` on a tensor that
+    lives on a GPU (``iree@rocm:0``); the ``numpy``/``np.asarray`` fallbacks stay for a value that
+    carries no such readback, so nothing else in the script has to know which residency produced
+    the result.
+    """
+    value = result[name]
+    if isinstance(value, np.ndarray):
+        return value
+    to_host = getattr(getattr(value, "data", None), "to_host", None)
+    if callable(to_host):
+        return np.asarray(to_host())
+    numpy = getattr(value, "numpy", None)
+    if callable(numpy) and not isinstance(value, (list, tuple)):
+        return np.asarray(numpy())
+    return np.asarray(value)
 
 
 # --- Fixed-trace graph parity -------------------------------------------------------
@@ -413,7 +517,7 @@ def _scene_parity(args, backend, device):
         # (c) One deterministic episode, twice in process: identical returns and a fingerprint.
         first = env.evaluate(pop_arrays, 0)
         second = env.evaluate(pop_arrays, 0)
-        values["fingerprint_repeat"] = float(np.abs(first["returns"] - second["returns"]).max())
+        values["fingerprint_repeat"] = float(np.abs(_leaf(first, "returns") - _leaf(second, "returns")).max())
         fingerprint = first
     finally:
         env.close()
@@ -422,9 +526,9 @@ def _scene_parity(args, backend, device):
 
 def _print_fingerprint(result):
     """Print the cross-process fingerprint: seed triple, per-row returns, their sum."""
-    seeds = ",".join(str(int(seed)) for seed in result["seeds"])
-    returns = ",".join(f"{value:.9f}" for value in result["returns"])
-    total = f"{float(np.sum(result['returns'])):.9f}"
+    seeds = ",".join(str(int(seed)) for seed in _leaf(result, "seeds"))
+    returns = ",".join(f"{value:.9f}" for value in _leaf(result, "returns"))
+    total = f"{float(np.sum(_leaf(result, 'returns'))):.9f}"
     print(f"fingerprint\tseeds={seeds}\treturns={returns}\tsum={total}")
 
 
@@ -503,11 +607,11 @@ def run_residency_parity(args):
     device_result, live = _score_generation(args, backend, device, "device")
 
     values = {
-        "returns_max_abs_diff": float(np.abs(staged_result["returns"] - device_result["returns"]).max()),
-        "fitness_max_abs_diff": float(np.abs(staged_result["fitness"] - device_result["fitness"]).max()),
+        "returns_max_abs_diff": float(np.abs(_leaf(staged_result, "returns") - _leaf(device_result, "returns")).max()),
+        "fitness_max_abs_diff": float(np.abs(_leaf(staged_result, "fitness") - _leaf(device_result, "fitness")).max()),
         "end_reasons_equal": int(staged_result["end_reasons"] == device_result["end_reasons"]),
         "live_buffer_vs_getter": float(live),
-        "seeds_equal": int(np.array_equal(staged_result["seeds"], device_result["seeds"])),
+        "seeds_equal": int(np.array_equal(_leaf(staged_result, "seeds"), _leaf(device_result, "seeds"))),
     }
     failed = []
     for name, value in values.items():
@@ -532,8 +636,14 @@ def run_residency_parity(args):
 
 #: ``examples/`` root, so the printed module labels stay relative to the example tree.
 _EXAMPLES_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-#: Drone modules of the migrated stack; ``hover_neat_train.py`` may not exist yet.
-_HOVER_MODULES = ("hover_kernels.py", "hover_neat_env.py", "hover_neat_train.py")
+#: Drone modules of the migrated stack; a file that does not exist yet is skipped with a note.
+_HOVER_MODULES = (
+    "hover_kernels.py",
+    "hover_device_kernels.py",
+    "hover_device_rollout.py",
+    "hover_neat_env.py",
+    "hover_neat_train.py",
+)
 #: The shared layer's modules, which are torch-free by contract (see its CONTEXT.md).
 _SHARED_MODULES = (
     "seeding.py",
@@ -616,8 +726,8 @@ def run_default(args):
             result = env.evaluate(pop_arrays, generation)
             results.append(result)
             if not args.quiet:
-                seeds = ",".join(str(int(seed)) for seed in result["seeds"])
-                fitness = ", ".join(f"{value:.6f}" for value in result["fitness"])
+                seeds = ",".join(str(int(seed)) for seed in _leaf(result, "seeds"))
+                fitness = ", ".join(f"{value:.6f}" for value in _leaf(result, "fitness"))
                 print(
                     f"[gen {generation}] seeds=[{seeds}] fitness=[{fitness}] "
                     f"end_reasons={result['end_reasons']} steps={result['steps']} "
@@ -630,9 +740,9 @@ def run_default(args):
 
     env_steps = sum(result["env_steps"] for result in results)
     wall_time_s = sum(result["wall_time_s"] for result in results)
-    best = max((float(np.max(result["fitness"])) for result in results), default=float("nan"))
+    best = max((float(np.max(_leaf(result, "fitness"))) for result in results), default=float("nan"))
     print(
-        f"SUMMARY\tgenerations={len(results)}\tpop_size={args.pop_size}\trows={results[0]['returns'].size} "
+        f"SUMMARY\tgenerations={len(results)}\tpop_size={args.pop_size}\trows={_leaf(results[0], 'returns').size} "
         f"backend={backend}\tdevice={device}\tenv_steps={env_steps} wall_time_s={wall_time_s:.3f} "
         f"steps_per_s={sum(result['steps'] for result in results) / wall_time_s:.1f} "
         f"env_steps_per_s={env_steps / wall_time_s:.1f} max_fitness={best:.6f}"
@@ -642,11 +752,17 @@ def run_default(args):
 
 def main(argv=None):
     args = _parse_args(argv)
+    _resolve_torch_free(args)
+    _refuse_cpu_genesis_over_device_graphs(args)
     if args.imports:
-        return run_imports()
-    if args.residency_parity:
-        return run_residency_parity(args)
-    return run_parity(args) if args.parity else run_default(args)
+        code = run_imports()
+    elif args.residency_parity:
+        code = run_residency_parity(args)
+    else:
+        code = run_parity(args) if args.parity else run_default(args)
+    if args.torch_free:
+        code = max(code, _report_torch_free())
+    return code
 
 
 if __name__ == "__main__":

@@ -53,26 +53,13 @@ number is also asserted in the test that measures it, and lives in that test's d
 ``{"timeout": rows}``, so this module's ``done`` check can only pin the host metadata both residencies
 report (``end_reasons``/``steps``/``env_steps``); termination-*mask* parity is pilot-level.
 
-Not covered yet: the Torch-free Go2 pilot
------------------------------------------
-``examples/locomotion/go2_neat_env.py``'s ``residency="device"`` dispatch still goes through
-``go2_device_rollout.py``, which imports ``torch`` (and ``genesis``) for its DLPack bridge, so the Go2
-pilot's device path cannot run without torch today; ``test_go2_torch_free_pilot_parity`` detects that
-with an AST scan and skips.  A follow-up must add, against the torch/numpy reference, at pilot level
-(Go2 walking, 45 -> 12, ``max_episode_length=1000``, pop 8 / 24 rows):
-
-1. **observations**: the per-row observation the device rollout builds equals
-   ``go2_env._update_observation``'s (base position/quaternion/velocities, dof position/velocity, last
-   action) to the reduction tolerance;
-2. **reward terms**: every term of ``go2_legacy_reference.walking_reward_terms`` plus the total, per
-   term at 1e-5 and 1e-6 on the total (the profile ``test_go2_evox_parity.py`` uses);
-3. **roll/pitch termination mask**: identical ``done`` flags, including the ``max_episode_length``
-   timeout and the never-re-arming ``alive`` mask (the profile ``test_go2_neat_kernels.py`` pins at
-   graph level);
-4. **episode returns**: the ``(pop, 3)`` generation matrix, elementwise;
-5. **fitness**: the policy-major episode mean, i.e. the trainer's one aggregation rule;
-6. **first population update**: one ``run_tell`` from the same generation-0 state -- integer leaves /
-   ``randkey`` / ``generation`` exact, float leaves within 1e-5.
+Where the task-specific parity lives
+------------------------------------
+This module is task-agnostic: it drives the shared layer with ``SyntheticDeviceEnv`` and never touches a
+simulator.  The pilot-level parity of the Torch-free, GPU-resident Go2 trainer -- per-step observations
+and reward terms, the roll/pitch termination mask including the timeout and the never-re-arming
+``alive``, episode returns, fitness, the first population update and the documented end-to-end numbers
+-- lives in ``tests/test_go2_device_parity.py``.
 
 Example::
 
@@ -86,7 +73,6 @@ device and is marked ``slow``.
 
 from __future__ import annotations
 
-import ast
 import os
 import sys
 from pathlib import Path
@@ -937,63 +923,3 @@ def test_device_first_population_update_parity():
         label="next generation species",
     )
     _assert_next_key_and_generation(reference, actual)
-
-
-# --- D. Pilot-level parity: not available yet ---------------------------------------
-
-#: The two modules the Go2 pilot's ``residency="device"`` dispatch goes through.
-PILOT_MODULES = (
-    LOCOMOTION_DIR / "go2_device_rollout.py",
-    LOCOMOTION_DIR / "go2_neat_env.py",
-)
-
-
-def _torch_imports(path):
-    """Return the ``torch`` modules ``path`` imports, from an AST scan; empty when absent/unparsable.
-
-    The file is parsed, never imported (importing it needs ``torch``, ``genesis`` and a GPU); a
-    missing or unparsable file yields an empty list, so the detector cannot fail the suite itself.
-    """
-    try:
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-    except (OSError, SyntaxError):
-        return []
-    modules = []
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            modules.extend(
-                alias.name for alias in node.names if alias.name == "torch" or alias.name.startswith("torch.")
-            )
-        elif isinstance(node, ast.ImportFrom) and node.module:
-            if node.module == "torch" or node.module.startswith("torch."):
-                modules.append(node.module)
-    return modules
-
-
-def test_go2_torch_free_pilot_parity():
-    """Placeholder: the Torch-free Go2 pilot does not exist yet, so pilot parity cannot be pinned.
-
-    ``go2_neat_env.py``'s ``residency="device"`` dispatch routes through ``go2_device_rollout.py``,
-    whose DLPack bridge imports ``torch`` (and ``genesis``); until that bridge is Torch-free there is
-    no device-resident Go2 rollout to compare against the torch/numpy reference, so this test skips
-    naming the offending modules instead of faking a comparison.  Once neither module imports torch,
-    this placeholder fails and must be replaced by the pilot-level cases listed in the module
-    docstring (observations, reward terms, roll/pitch termination mask, episode returns, fitness and
-    the first population update).
-    """
-    offenders = {}
-    for path in PILOT_MODULES:
-        imports = _torch_imports(path)
-        if imports:
-            offenders[path.name] = sorted(set(imports))
-    if offenders:
-        pytest.skip(
-            "Torch-free Go2 pilot not available yet: "
-            + "; ".join(f"{name} imports {', '.join(imports)}" for name, imports in offenders.items())
-        )
-    pytest.fail(
-        "the Go2 pilot no longer imports torch, so the pilot-level parity cases are now expected: "
-        "replace this placeholder with observations, reward terms, roll/pitch termination mask, "
-        "episode returns, fitness and first-population-update parity against the torch/numpy "
-        "reference (see this module's docstring), using fixed seeds and the documented tolerances."
-    )

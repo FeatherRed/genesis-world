@@ -77,6 +77,20 @@ during evaluation, try removing the `--record` option.
 
 For the latest updates, detailed documentation, and additional resources, visit this repository: [GenesisDroneEnv](https://github.com/KafuuChikai/GenesisDroneEnv).
 
+#### 3.3 Torch-free GPU-resident training
+
+`hover_neat_train.py --torch-free` runs the EvoX Compiler hover trainer end to end with no Torch in the
+process, plus `hover_neat_check.py --torch-free` for a cheap environment-level check. Run them from the
+repository root:
+
+```bash
+PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_train.py --torch-free --pop-size 8 --generations 2 -o out/hover_neat_pop8
+PYTHONPATH=/tmp/notorch:$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_train.py --torch-free --pop-size 8 --generations 2 -o out/hover_neat_pop8
+PYTHONPATH=$PWD /root/evox-robotics/.venv/bin/python examples/drone/hover_neat_check.py --torch-free --pop-size 2 --horizon 5
+```
+
+`--torch-free` implies the zero-copy device residency, defaults the graphs and the evolution to `iree@rocm:0` (an explicit `--evoxc-device` wins), keeps `gs.gpu` in array mode (`performance_mode=False`), and refuses a viewer, a numpy rollout/tell backend or an XLA tell; what stays host-side is only the per-step command draw, the solver-error latch, the `end_code` readback while stopping on done, and the per-generation reset write.
+
 ### 4. Quadcopter Controller (`quadcopter_controller.py` & `fly_route.py`)
 A PID-based controller to provide stable point-to-point flight without controlling each rotor. Parameters
 have been tuned for controlled flight but not optimized. Stored in `fly_route.py`. Run `fly_route.py` to

@@ -35,6 +35,13 @@ every actuator write crosses the device boundary once, as a numpy array, and the
 companion ``hover_device_rollout.py`` and is imported lazily by ``HoverNeatEnv.evaluate``; it needs
 a device ``evoxc`` backend (``iree``/``xla``) and is not implemented in this file.
 
+``--torch-free`` is the device residency with the Torch claim enforced: it refuses any configuration
+that would import Torch (a viewer, a host rollout, an XLA ``tell``) and, because device residency is
+single-backend, leaves ``tell()`` on the environment's own backend/device (``iree@rocm:0``) instead of
+forwarding ``--tell-backend`` / ``--pjrt-plugin``.  It mirrors
+``examples/locomotion/go2_neat_train.py --torch-free`` flag for flag; the guard after the scene build,
+after the evolution-graph build and after the last generation proves the claim instead of reporting it.
+
 Artifacts (git-ignored, never committed)
 ----------------------------------------
 ``<output-dir>/history.jsonl``  one JSON object per generation (seeds, returns, fitness, end reasons).
@@ -91,6 +98,7 @@ def _parse_args(argv=None):
             "  python examples/drone/hover_neat_train.py --pop-size 8 --generations 2\n"
             "  python examples/drone/hover_neat_train.py --pop-size 8 --generations 2 -g\n"
             "  python examples/drone/hover_neat_train.py -g --evoxc-device rocm:0 -v  # AMD recipe\n"
+            "  python examples/drone/hover_neat_train.py --torch-free --pop-size 8 --generations 2\n"
         ),
     )
     parser.add_argument(
@@ -154,7 +162,9 @@ def _parse_args(argv=None):
         default=None,
         help=(
             "Evolution (tell) backend override. Defaults to the rollout backend and device, except on "
-            "ROCm where it defaults to xla because IREE/ROCm tell compilation does not terminate."
+            "ROCm where it defaults to xla because IREE/ROCm tell compilation does not terminate. "
+            "Under --torch-free evolution always runs on the rollout backend/device, so an explicit "
+            "numpy or xla is rejected."
         ),
     )
     parser.add_argument(
@@ -170,10 +180,20 @@ def _parse_args(argv=None):
     parser.add_argument(
         "--residency",
         choices=("numpy", "device"),
-        default="numpy",
+        default=argparse.SUPPRESS,
         help=(
-            "Rollout residency: numpy = host staging (default), device = the zero-copy device rollout "
-            "of hover_device_rollout.py, which needs a device evoxc backend."
+            "Rollout residency: numpy = host staging (the default), device = the zero-copy device "
+            "rollout of hover_device_rollout.py, which needs a device evoxc backend. --torch-free "
+            "implies device, so an explicit numpy is refused there."
+        ),
+    )
+    parser.add_argument(
+        "--torch-free",
+        action="store_true",
+        help=(
+            "Run the whole training loop without Torch: implies --residency device and defaults the "
+            "rollout graphs to IREE on rocm:0 (CUDA: cuda:0), with evolution on the same "
+            "backend/device. Refuses a configuration that would import torch."
         ),
     )
     parser.add_argument(
@@ -185,6 +205,26 @@ def _parse_args(argv=None):
     parser.add_argument("-v", "--vis", action="store_true", help="Open the Genesis viewer.")
     parser.add_argument("--quiet", action="store_true", help="Write the artifacts without the header/summary lines.")
     return parser.parse_args(argv)
+
+
+def _torch_in_process():
+    """Whether ``torch`` has been imported in this process (the torch-free claim, reported only)."""
+    return "torch" in sys.modules
+
+
+def _refuse_torch_import(torch_free, stage):
+    """Fail a ``--torch-free`` run as soon as Torch reaches the process.
+
+    A configuration that imports Torch is not the configuration the flag promises (the
+    device-resident loop creates no Torch tensor itself, so an import means an imported module
+    pulled it in), so it is refused here instead of being reported after the work is done.
+    """
+    if torch_free and _torch_in_process():
+        raise RuntimeError(
+            f"--torch-free was requested, but 'torch' reached the process {stage}; the device-resident "
+            "loop never imports it, so an imported module did -- refusing to continue with a claim that "
+            "is no longer true (report the module that pulled it in, or drop --torch-free)"
+        )
 
 
 # --- Artifacts ----------------------------------------------------------------------
@@ -204,7 +244,7 @@ def _write_summary(path, summary):
     path.write_text(json.dumps(summary, indent=2, default=_to_json) + "\n", encoding="utf-8")
 
 
-def _task_config(args, env, perturbation, show_viewer):
+def _task_config(args, env, perturbation, show_viewer, torch_free):
     """Return the drone-specific ``summary.json`` config fields the shared trainer does not know."""
     return {
         "horizon": int(env.horizon),
@@ -215,7 +255,7 @@ def _task_config(args, env, perturbation, show_viewer):
             "joint_pos": float(perturbation.joint_pos),
             "is_zero": bool(perturbation.is_zero),
         },
-        "genesis_backend": "gpu" if args.gpu else "cpu",
+        "genesis_backend": "gpu" if (args.gpu or torch_free) else "cpu",
         "evoxc_backend": env.backend,
         "evoxc_device": env.device_name,
         "residency": env.residency,
@@ -223,6 +263,8 @@ def _task_config(args, env, perturbation, show_viewer):
         "genome_num_outputs": NUM_ACTIONS,
         "show_viewer": bool(show_viewer),
         "stop_when_done": bool(args.stop_when_done),
+        "torch_free": bool(torch_free),
+        "torch_in_process": _torch_in_process(),
     }
 
 
@@ -236,16 +278,17 @@ def _perturbation_label(perturbation):
     )
 
 
-def _format_header(args, env, trainer, pop_size, generations, perturbation, show_viewer):
+def _format_header(args, env, trainer, pop_size, generations, perturbation, show_viewer, torch_free):
     """One line with every resolved choice of the run: sizes, targets, seed and perturbation."""
     return (
         f"Hover NEAT: pop_size={pop_size} rows={env.rows} generations={generations} "
         f"horizon={env.horizon} max_episode_length={env.max_episode_length} "
-        f"genesis={'gpu' if args.gpu else 'cpu'} evoxc={env.backend}@{env.device_name} "
+        f"genesis={'gpu' if (args.gpu or torch_free) else 'cpu'} evoxc={env.backend}@{env.device_name} "
         f"tell={trainer.tell_backend}@{trainer.tell_device_name} "
         f"master_seed={trainer.master_seed} evolution_seed={trainer.evolution_seed} "
         f"perturbation={_perturbation_label(perturbation)} "
-        f"residency={env.residency} show_viewer={show_viewer}"
+        f"residency={env.residency} show_viewer={show_viewer} "
+        f"torch_free={torch_free} torch_in_process={_torch_in_process()}"
     )
 
 
@@ -283,23 +326,78 @@ def main(argv=None):
         )
     )
 
-    backend = args.evoxc_backend or ("iree" if args.gpu else "numpy")
+    torch_free = bool(args.torch_free)
+    # ``None`` means --residency was not given at all, so the default (numpy) cannot be confused
+    # with an explicit request for it, which is what --torch-free has to refuse.
+    residency = getattr(args, "residency", None)
+    if torch_free and residency == "numpy":
+        # Device residency is the only mode in which no host/Torch tensor is created at a graph
+        # boundary, so it is the only one a Torch-free process can run.
+        raise ValueError(
+            "--torch-free runs the device-resident rollout, which stages no host array at a graph "
+            f"boundary, so --residency {residency!r} is not available here; drop --residency "
+            "numpy (device residency is implied) or drop --torch-free"
+        )
+    args.residency = "device" if torch_free else (residency or "numpy")
+    backend = args.evoxc_backend or ("iree" if (args.gpu or torch_free) else "numpy")
     if args.evoxc_device:
         device = args.evoxc_device
-    elif args.gpu and backend != "numpy":
+    elif (args.gpu or torch_free) and backend != "numpy":
         device = "rocm:0"  # the documented GPU target of this stack
     else:
         device = None
+    if torch_free and backend == "numpy":
+        raise ValueError(
+            "--torch-free needs a non-CPU rollout backend (device residency is IREE-backed), got "
+            f"--evoxc-backend {backend!r}; drop --evoxc-backend numpy or drop --torch-free"
+        )
+    if torch_free and args.vis:
+        raise ValueError(
+            "--torch-free runs without Torch, but the built-in viewer is a Torch consumer; drop "
+            "-v/--vis or drop --torch-free"
+        )
+    if torch_free and args.tell_backend == "xla":
+        raise ValueError(
+            "--torch-free keeps the rollout and the evolution on one backend/device, and an XLA "
+            "payload cannot enter the IREE executables that run the rollout (there is no "
+            "device-to-device transfer between the two runtimes), so --tell-backend xla is not "
+            "available here; drop --tell-backend xla, evolution then runs on the env's own "
+            "backend/device (iree on the rollout device), or drop --torch-free"
+        )
+    if torch_free and args.tell_backend == "numpy":
+        raise ValueError(
+            "device residency runs every graph on one backend/device, so --torch-free cannot use "
+            f"--tell-backend {args.tell_backend!r}; evolution runs on the rollout backend/device "
+            "(iree on the rollout device), or drop --torch-free"
+        )
+    if torch_free and args.pjrt_plugin:
+        raise ValueError(
+            "--pjrt-plugin is an XLA compile option and --torch-free never compiles an XLA graph "
+            "(evolution runs on the IREE rollout backend); drop --pjrt-plugin or drop --torch-free"
+        )
+    # ``--torch-free`` is single-backend: ``tell_backend=None`` resolves to the env's own
+    # backend/device inside ``NeuroevolutionTrainer`` (iree on the rollout device), the trainer
+    # rejects any other pair, and no PJRT plugin is forwarded.
+    tell_backend = None if torch_free else args.tell_backend
+    plugin_path = None if torch_free else args.pjrt_plugin
     show_viewer = bool(args.vis) and not pytest_mode
 
-    if args.pjrt_plugin:
+    if plugin_path:
         # ``Tensor.to`` passes no options, so the option-less PJRT discovery used for device
         # staging must see the same plugin as the xla tell build.
-        os.environ.setdefault("EVOXC_PJRT_PLUGIN", str(args.pjrt_plugin))
+        os.environ.setdefault("EVOXC_PJRT_PLUGIN", str(plugin_path))
 
     if not gs._initialized:
-        if args.gpu:
-            gs.init(backend=gs.gpu, precision="32", logging_level="warning", performance_mode=True)
+        if args.gpu or torch_free:
+            # ``performance_mode=True`` hands the state to Quadrants ndarrays whose staged writes the
+            # torch-free setters cannot consume yet (and its build fails torch-free), so the
+            # torch-free path keeps the array mode off.
+            gs.init(
+                backend=gs.gpu,
+                precision="32",
+                logging_level="warning",
+                performance_mode=not torch_free,
+            )
         else:
             gs.init(backend=gs.cpu, precision="32", logging_level="warning")
 
@@ -320,6 +418,7 @@ def main(argv=None):
         perturbation=perturbation,
         residency=args.residency,
     )
+    _refuse_torch_import(torch_free, "while building the scene and the compiled graphs")
     trainer = NeuroevolutionTrainer(
         env,
         pop_size,
@@ -332,30 +431,36 @@ def main(argv=None):
         species_size=SPECIES_SIZE,
         # The tell target is inherited: numpy rollout -> numpy tell on cpu:0, ROCm -> xla on the
         # env device; ``--tell-backend`` overrides the backend only.
-        tell_backend=args.tell_backend,
-        plugin_path=args.pjrt_plugin,
+        tell_backend=tell_backend,
+        plugin_path=plugin_path,
         output_dir=output_dir,
         logger=logger,
     )
     try:
         trainer.setup()
+        _refuse_torch_import(torch_free, "while building the evolution graph")
         if not args.quiet:
             print(
-                _format_header(args, env, trainer, pop_size, generations, perturbation, show_viewer),
+                _format_header(args, env, trainer, pop_size, generations, perturbation, show_viewer, torch_free),
                 flush=True,
             )
         summary = trainer.run()
-        summary["config"].update(_task_config(args, env, perturbation, show_viewer))
+        summary["config"].update(_task_config(args, env, perturbation, show_viewer, torch_free))
         _write_summary(trainer.summary_path, summary)
     finally:
         trainer.close()
         env.close()
+
+    # The loop belongs to the trainer, so the last point at which the claim can be checked once
+    # every generation has run is here; the artifacts are already on disk.
+    _refuse_torch_import(torch_free, "after the generations completed")
 
     if not args.quiet:
         best = summary["totals"]["best_fitness"]
         print(
             f"done: {generations} generations, {summary['totals']['steps']} steps, "
             f"best fitness {'n/a' if best is None else f'{best:+.4f}'}; "
+            f"torch_in_process={_torch_in_process()}; "
             f"wrote {trainer.history_path} and {trainer.summary_path}"
         )
     if trainer.tell_backend == "xla" and trainer.tell_device.kind != "cpu":

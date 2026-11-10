@@ -1,94 +1,133 @@
-"""Opt-in device-resident (zero-copy) rollout of the drone hover evaluation environment.
+"""Device-resident (zero-copy) rollout of one generation of the drone TensorNEAT hover task.
 
-:class:`DeviceRollout` scores one generation of the TensorNEAT hover task exactly like the
-host-staged loop of :meth:`hover_neat_env.HoverNeatEnv.evaluate`, but it never moves the
-per-step state to the host: the compiled graphs consume the simulation state straight out of
-the live Quadrants buffers, hand their results to each other in device memory, and only the
-genome payload leaves, two host draws per step and the small per-generation result ever cross
-the PCIe bus.  It is selected with ``HoverNeatEnv(..., residency="device")`` and imported
-lazily by that env, so the default numpy residency never imports this module or torch.
+:class:`DeviceRollout` scores one generation of the TensorNEAT hover task exactly like the host-staged
+loop of :meth:`hover_neat_env.HoverNeatEnv.evaluate`, but every value that crosses a graph boundary
+stays on the accelerator, and nothing on the path of the loop performs a Torch operation.  It is
+selected with ``HoverNeatEnv(..., residency="device")`` and imported lazily by that env, so the
+default numpy residency never imports this module nor IREE.
 
 Why it exists
 -------------
 The numpy residency is the correctness-first boundary: every read materializes a host array
-(``drone.get_pos`` / ``get_quat`` / ``get_vel`` / ``get_ang`` / ``scene.get_error_envs_mask``)
-and every write stages one back (``drone.set_propellers_rpm``).  That is one full state
-round-trip per ``scene.step()``, which dominates the wall time at the 24-row batch size of the
-TensorNEAT pilot.  This module removes all of it except the parts that are genuinely host-side
-(the command draws and the solver-error latch) plus the one actuator write Genesis requires.
+(``drone.get_pos`` / ``get_quat`` / ``get_vel`` / ``get_ang`` / ``scene.get_error_envs_mask``) and
+every write stages one back (``drone.set_propellers_rpm``).  That is one full state round trip per
+``scene.step()``, which dominates the wall time at the 24-row batch size of the TensorNEAT pilot.
+This module removes all of it except the parts that are genuinely host-side (the command draws and
+the solver-error latch) plus the one actuator write.
 
-Interop recipe
---------------
-Everything below was verified on this host (AMD Instinct MI300X VF, ROCm 7.1, torch
-2.13.0+rocm7.1, evoxc 0.1.0, iree-base-runtime 3.13.0) and on the CPU/``local-task`` device.
+No Torch
+--------
+This module imports no Torch, at module scope or inside a helper, and calls no Torch operation: a
+whole generation runs in a process where ``import torch`` fails.  ``hover_neat_check.py --imports``
+scans it, and ``hover_neat_check.py --torch-free`` proves the runtime claim.  The counterparts of the
+Torch-side primitives are the torch-free ones Genesis ships: ``genesis.utils.device_buffer.DeviceView``
+reads a Quadrants buffer without leaving the device, ``copy_from_dlpack`` writes one from any DLPack
+producer, and the getters of a torch-free scene already return the device views this loop imports.
 
-* **Quadrants -> IREE.** ``qd_to_torch(field, copy=False)`` gives a torch tensor aliasing the
-  live solver buffer; ``torch.utils.dlpack.to_dlpack`` turns it into a capsule and
-  ``runtime_device.from_dlpack_capsule(capsule)`` wraps the SAME memory in a
-  ``HalBufferView``, from which ``iree.runtime.DeviceArray(runtime_device, view)`` and
-  ``evoxc.Tensor(IreeDevicePayload(array, device))`` complete the operand.  The torch view is
-  kept alive here (it owns nothing, but it must outlive the imported buffer), so the import is
-  cached for the generation instead of rebuilt per step.
-* **The one staging copy.** That import requires the pointer to be aligned (64 bytes for the
-  ``local-task`` heap, 256 for HIP) while a *link slice* of the Quadrants state is not (the
-  drone's base link starts 12 or 24 bytes into the field on CPU), so each state field is
-  copied once per step into a persistent torch staging buffer (``copy_`` on the device, a few
-  dozen bytes, no host round trip) and the import is taken over that buffer.  The staged
-  values are bit-identical to the buffers; ``--residency-parity`` proves it against the entity
-  getters (measured difference exactly ``0.0``).
-* **Which solver fields.** ``env.scene.sim.rigid_solver.dyn_state.links``, sliced to
-  ``env.drone.base_link_idx`` exactly like the getters:
-  ``get_pos`` = ``links.pos``, ``get_quat`` = ``links.quat``,
-  ``get_ang`` = ``links.cd_ang`` and
-  ``get_vel`` = ``cd_vel + cd_ang x (pos - root_COM)`` (the transport term of
-  ``RigidSolver.get_links_vel``; the propellers of ``cf2x.urdf`` are massless, so it is zero
-  here, and it is still computed so the mapping stays exact for any model).
-* **IREE -> Genesis.** ``IreeDevicePayload.__dlpack__`` exports the same HAL buffer, so
-  ``torch.from_dlpack(rpm)`` aliases the graph output on a CUDA/ROCm device.  A CPU-kind
-  payload does not export (by design — its read path is ``.numpy()``, which is a zero-copy
-  mapping on ``local-task``), so the CPU path takes ``torch.from_numpy(rpm.numpy())`` instead.
-  ``IreeExecutable.run`` blocks on its HIP queue before returning, so no wait is needed for
-  the graph itself; the single documented ``torch.cuda.synchronize()`` at the export ->
-  ``set_propellers_rpm`` hand-off is there because the Quadrants kernel that consumes it runs
-  on torch's stream.  It is the only synchronisation in this module and must be measured
-  separately from the graph time.
-* **Torch.** ``import torch`` happens inside the helpers that stage or export buffers, never at
-  module level, because torch is exactly the Genesis boundary here: the graphs themselves are
-  ``evoxc`` all the way down.  This module is therefore deliberately outside the
-  ``hover_neat_check.py --imports`` torch-free list.
-* **One runtime device.** The five executable objects of one env are loaded with HAL devices
-  that evoxc creates per load (``_acquire_runtime_device`` caches only Vulkan), so they are not
-  the same object; every imported operand therefore uses the single runtime device of the
-  advance executable, and evoxc passes buffers between executables because it compares
-  ``core.Device`` labels, not HAL object identity (verified by feeding one executable's output
-  into another).
+Interop contract (Genesis / Quadrants <-> IREE on one ROCm, CUDA or CPU device)
+-----------------------------------------------------------------------------
+``evoxc.run`` enforces a strict run boundary: every tensor leaf must already live on the executable's
+device.  The bridge only ever hands device values over, through DLPack in both directions:
 
-Host round-trips left
----------------------
-Two per step, both unavoidable and both small:
+* live getter -> graph input (``_live`` + ``_operand``): a torch-free ``drone.get_pos`` /
+  ``get_quat`` / ``get_vel`` / ``get_ang`` is a ``DeviceView`` of the live solver buffer, already in
+  the operand layout ``hover_advance`` takes (``get_vel`` even carries the
+  ``cd_vel + cd_ang x (pos - root_COM)`` transport term the entity getter composes).  A strided view
+  is compacted with ``DeviceView.contiguous()``, on the device, because IREE refuses a strided
+  DLTensor; then ``capsule = view.__dlpack__()`` and ``hal.from_dlpack_capsule(capsule)`` wrap the
+  *same* memory as an IREE HAL buffer view, which ``evoxc.core.Tensor(IreeDevicePayload(...))``
+  completes -- the call form of ``evoxc.backends.adapters.iree._device_array_from_dlpack``.
+* graph output -> graph input: an executable's output is passed straight to the next one (the raw
+  action to the controls graph, the clipped action and the RPMs back into the loop, the observation
+  and the state operands into the advance graph, ``returns`` / ``alive`` / ``episode_length`` /
+  ``end_code`` back into the advance graph, and ``returns`` into the fitness and episode-returns
+  graphs).  ``IreeExecutable.run`` passes a same-device payload through with no staging.
+* graph output -> drone actuator (``_write_rpm``): the RPMs of ``hover_controls`` are copied
+  device-to-device into a persistent ``(rows, n_propellers)`` Quadrants buffer with
+  ``genesis.utils.device_buffer.copy_from_dlpack``, and that buffer is handed to the solver
+  (see 'Actuator bridge').
+* ``episode_returns`` is the compiled ``(rows,)`` -> ``(pop_size, episodes)`` reshape graph
+  (``hover_device_kernels.run_episode_returns``), not a host copy: ``DeviceArray.reshape`` and every
+  numpy function on a device array return a HOST ``numpy.ndarray``, so nothing in this module
+  reshapes, slices or ``np.*``-es a device value.
 
-* ``scene.get_error_envs_mask()`` — the solver-error latch is only exposed as a host query, and
-  it is one ``(rows,)`` bool.  It is uploaded again as the ``error_mask`` operand, and
-  ``scene.clear_errno()`` runs whenever a row is flagged (the graph latched the row dead, and a
-  latched error otherwise re-raises on the next ``scene.step()``).  A device-side error latch
-  in Genesis would remove this hop.
-* the two command draws ``x ~ U(-1, 1)``, ``y ~ U(-1, 1)`` (plus the pinned ``z``) that the
-  numpy loop also burns per row per step: they are host RNG by contract, so the draw is
-  uploaded as ``resampled_commands``.  Moving the RNG graph-side would remove this hop but
-  would change the command stream.
+Synchronization: IREE's queue is not Quadrants' stream and the DLPack import adds no fence, so this
+module fences explicitly -- once per step and once per reset:
 
-When ``stop_when_done`` is set the loop also reads the ``(rows,)`` int8 ``end_code`` back each
-step (``end_reasons`` and the "is every row done" test are host bookkeeping); with
-``stop_when_done=False`` that read happens once, at the end of the generation.  Nothing else is
-downloaded before the end of the generation, where exactly ``returns``, ``fitness``,
-``end_code`` and ``commands`` are materialized.
+* ``_sync()`` after ``scene.step()``, before the advance graph imports the buffers Genesis just wrote
+  (Quadrants -> IREE);
+* ``_sync()`` once after the generation's reset write, before the reset observation and the first
+  step read the state;
+* ``copy_from_dlpack`` synchronizes around the rotor write itself, because the producer (IREE) and
+  the consumer (the Quadrants kernel of ``scene.step()``) are on different streams.
+
+Nothing else needs a fence: ``IreeExecutable.run`` blocks on its own queue before returning, so an
+exported output is complete by the time it is handed on.
+
+Actuator bridge
+---------------
+``DroneEntity.set_propellers_rpm`` cannot take a device tensor without Torch: its input goes through
+``RigidSolver._sanitize_io_variables``, whose torch-free branch has no DLPack case, and the write it
+ends in transposes its operand with ``.T`` (see the module report in the pull request).  The one
+actuator write therefore bypasses the entity setter and calls the solver method the setter forwards
+to, with the same arguments::
+
+    drone.solver.set_drone_rpm(
+        drone.propellers_idx, drone.KF, drone.KM, rpm_buffer, drone.propellers_spin, drone.model == "RACE"
+    )
+
+``kernel_set_drone_rpm`` reads ``propellers_rpm[i_b, i_prop]``, so the destination is batch-first.
+Two things the entity setter does on top of that call are dropped, and neither touches the physics:
+
+* ``_propellers_revs``, the accumulated angle ``update_propeller_vgeoms`` animates the propellers
+  with: a device rollout of a headless evaluation has no visual geometry to animate, and the state it
+  would feed is not part of any observation, reward or termination rule;
+* the ``set_propellers_rpm`` once-per-step guard, which this loop satisfies by construction (one
+  write per ``scene.step()``).
+
+The numpy residency keeps calling ``drone.set_propellers_rpm`` with numpy arrays, unchanged.
+
+What stays on the device
+------------------------
+The observation, the raw and clipped actions, the rotor RPMs, the current and previous commands,
+``last_actions``, ``last_base_pos``, the four state operands, ``returns``, ``alive``,
+``episode_length``, the latched ``end_code`` and the reset observation.
+
+Host touches that remain (exhaustive)
+-------------------------------------
+Per step:
+
+* the ``(rows, 3)`` command draw (``x ~ U(-1, 1)``, ``y ~ U(-1, 1)``, ``z`` pinned to 1.0), staged once
+  per step: the stream is host RNG by contract, so it is drawn here and uploaded as
+  ``resampled_commands``;
+* ``scene.get_error_envs_mask()``: the solver-error latch is only exposed as a host query, and it is
+  one ``(rows,)`` row.  It is read, uploaded as the ``error_mask`` operand, and ``scene.clear_errno()``
+  runs whenever a row is flagged (the graph latched the row dead, and a latched error otherwise
+  re-raises on the next ``scene.step()``);
+* while ``stop_when_done`` is on, the ``(rows,)`` int8 ``end_code`` readback that reproduces the numpy
+  loop bound (the "is every row done" test); with ``stop_when_done=False`` that read happens once, at
+  the end of the generation.
+
+Per generation: the seeds of the generation (returned device-resident, staged only if a previous
+caller handed host arrays), the four genome payload leaves (device-resident under the trainer, host
+arrays are staged when this class is called directly), the ``(rows, 3)`` / ``(rows, 4)`` reset pose and
+the first command row, the discarded host observation ``HoverNeatEnv.reset_generation`` returns (the
+reset observation this loop uses is recomputed on the device), and -- at the end -- exactly
+``end_code`` (when ``stop_when_done`` is off), ``commands``, and the ``steps``/``wall_time_s``/
+``end_reasons`` bookkeeping.  ``returns``, ``episode_returns``, ``fitness`` and ``seeds`` leave the
+generation as device tensors, which is what ``env_base.validate_evaluation_device`` accepts and what
+``trainer.NeuroevolutionTrainer`` consumes.
+
+The termination decision is not a host decision: it happens inside ``run_advance``, which owns the
+``end_code`` latch, and the host only reads the resulting code.
 
 Semantics
 ---------
-Identical to the numpy residency: the same reset (``HoverNeatEnv.reset_generation``), the same
-command stream, the same reward/termination graphs, no mid-episode reset, and the same result
-mapping (validated with ``env_base.validate_evaluation``).  The only difference is where the
-operands live.
+Identical to the numpy residency: the same reset (``HoverNeatEnv.reset_generation``), the same command
+stream, the same reward and termination graphs, no mid-episode reset, and the same result mapping
+(validated with ``env_base.validate_evaluation_device``).  The only difference is where the operands
+live, so both residencies agree bit for bit on ``returns``, ``episode_returns``, ``fitness`` and
+``end_reasons``.
 """
 
 from __future__ import annotations
@@ -97,24 +136,25 @@ import logging
 import time
 
 import numpy as np
+import quadrants as qd
 
 import evoxc
 
-from genesis.utils.misc import qd_to_torch
+from genesis.utils.device_buffer import copy_from_dlpack
+from genesis.utils.misc import data_to_array
 
-# Importing ``hover_kernels`` first: it puts the shared ``examples/neuroevolution`` layer on
-# ``sys.path`` (the env contract and the payload-leaf names live there).
+import hover_kernels  # noqa: F401  (imported first: it owns the shared-layer ``sys.path`` shim)
+from hover_device_kernels import run_episode_returns
 from hover_kernels import END_REASONS, NUM_ACTIONS
 
-from env_base import validate_evaluation  # noqa: E402  (path set up above)
-from evox_runtime import POP_OPERANDS, _outputs  # noqa: E402
+from evox_runtime import POP_OPERANDS, _outputs  # noqa: E402  (path set up above)
 
 logger = logging.getLogger(__name__)
 
-#: Indices of the leaves ``hover_kernels.hover_advance`` returns, by name.  The graph returns a
-#: fixed list (obs, the six reward terms, five masks, commands, episode_length, returns, alive,
-#: yaw, end_code, base_pos); this module only consumes the carried bookkeeping, so the names are
-#: spelled out once here and the count is checked against ``len(_ADVANCE_LEAVES)``.
+#: Indices of the leaves ``hover_kernels.hover_advance`` returns, by name.  The graph returns a fixed
+#: list (obs, the six reward terms, five masks, commands, episode_length, returns, alive, yaw,
+#: end_code, base_pos); this module only consumes the carried bookkeeping, so the names are spelled
+#: out once here and the count is checked against ``len(_ADVANCE_LEAVES)``.
 _ADVANCE_LEAVES = (
     "obs",
     "reward_target",
@@ -137,32 +177,41 @@ _ADVANCE_LEAVES = (
 )
 _ADVANCE_INDEX = {name: index for index, name in enumerate(_ADVANCE_LEAVES)}
 
-#: The live solver fields of ``dyn_state.links`` the base-state getters read, by getter name.
-_STATE_FIELDS = ("pos", "quat", "cd_vel", "cd_ang", "root_COM")
+#: The executables one generation drives, in the order ``HoverNeatEnv.executables`` returns them under
+#: this residency.
+_EXECUTABLE_NAMES = ("controls", "reset_obs", "policy", "advance", "fitness", "episode_returns")
+
+#: The base-state getters the advance graph takes as operands, with the solver buffer each reads.
+_STATE_GETTERS = (("base_pos", "get_pos"), ("base_quat", "get_quat"), ("vel", "get_vel"), ("ang", "get_ang"))
 
 
 class DeviceRollout:
     """Score one hover generation without leaving the device (see the module docstring).
 
+    One instance serves one generation: the live getter views are imported per step and re-derived
+    after every reset, so nothing cached here can go stale.
+
     Args:
         env (hover_neat_env.HoverNeatEnv): The environment this rollout scores for.  Its
-            executables (built on ``env.backend`` / ``env.device``), its seeded reset, its
-            command generators and its drone are reused as-is; the rollout owns no scene and
-            never destroys one.
+            executables (built on ``env.backend`` / ``env.device``), its seeded reset, its command
+            generators and its drone are reused as-is; the rollout owns no scene and never destroys
+            one.
+        executables (tuple | None): ``(controls, reset_obs, policy, advance, fitness,
+            episode_returns)``; ``None`` asks the env for them, which is a cache hit after the first
+            call (``HoverNeatEnv.executables``).
 
     Attributes:
         env (HoverNeatEnv): The owning environment.
         rows (int), pop_size (int): Row and policy counts of one generation.
-        runtime_device: The IREE HAL device every imported operand is bound to.
+        backend (str), device (evoxc.Device): The graph target every executable lives on.
 
     The env's public task API is treated as read-only input: ``rows``, ``pop_size``,
-    ``episodes_per_policy``, ``horizon``, ``stop_when_done``, ``backend``, ``device``,
-    ``cache``, ``drone``, ``scene``, ``policy_executable`` / ``controls_executable`` /
-    ``advance_executable`` / ``fitness_executable``, ``_seeds_for``, ``_command_generators``,
-    ``_draw_commands``, ``reset_generation``, ``executables`` and ``_reset_pos``.
+    ``episodes_per_policy``, ``horizon``, ``stop_when_done``, ``backend``, ``device``, ``cache``,
+    ``drone``, ``scene``, ``*_executable``, ``_seeds_for``, ``_command_generators``,
+    ``_draw_commands``, ``reset_generation``, ``executables``, ``_reset_pos`` and ``_reset_quat``.
     """
 
-    def __init__(self, env):
+    def __init__(self, env, executables=None):
         if env.backend != "iree":
             raise ValueError(
                 f"residency='device' needs the IREE backend (the zero-copy interop is IREE's "
@@ -171,24 +220,39 @@ class DeviceRollout:
         self.env = env
         self.rows = int(env.rows)
         self.pop_size = int(env.pop_size)
+        self.backend = str(env.backend)
         self.device = env.device
-        # Imported here, not at module level: ``iree`` is an optional dependency of ``evoxc``
-        # and this module is only imported when the device residency is selected.
-        import iree.runtime as iree_runtime
-        from evoxc.backends.adapters.iree import IreeDevicePayload
-
-        self._rt = iree_runtime
-        self._payload_cls = IreeDevicePayload
-        # One HAL device for every imported operand (see the module docstring: the executable
-        # objects each own a HAL device, and evoxc passes buffers across them).
-        self.runtime_device = env.advance_executable.backend_executable.runtime_device
-        self._state = None
-        self._state_key = None
+        members = tuple(env.executables() if executables is None else executables)
+        if len(members) != len(_EXECUTABLE_NAMES):
+            raise ValueError(
+                f"device residency drives the {len(_EXECUTABLE_NAMES)} executables "
+                f"{', '.join(_EXECUTABLE_NAMES)}, got {len(members)}"
+            )
+        (
+            self.controls_executable,
+            self.reset_obs_executable,
+            self.policy_executable,
+            self.advance_executable,
+            self.fitness_executable,
+            self.episode_returns_executable,
+        ) = members
+        for name, executable in zip(_EXECUTABLE_NAMES, members, strict=True):
+            if executable.device != self.device:
+                raise ValueError(f"{name} must live on {self.device}, got {executable.device}")
+        # The one persistent device buffer of the loop: the destination of the rotor write.  It is
+        # ``(rows, n_propellers)`` because ``kernel_set_drone_rpm`` reads ``propellers_rpm[i_b,
+        # i_prop]``, and float32 because that is what ``hover_controls`` emits.
+        self._rpm = qd.ndarray(qd.f32, shape=(self.rows, int(env.drone.n_propellers)))
+        # The HAL device every imported operand is bound to: the one the advance graph runs on, which
+        # is the only graph an imported (DLPack) operand is handed to.  A backend that does not expose
+        # it is covered by ``_note_hal``, which discovers it from the first device payload staged.
+        self._hal = getattr(getattr(self.advance_executable, "backend_executable", None), "runtime_device", None)
         self._closed = False
 
-    # ------------------------------------------------------------------ public API
+    # --- public API -------------------------------------------------------------------
+
     def evaluate(self, pop_arrays, generation):
-        """Simulate one generation on the device; returns the numpy path's result mapping.
+        """Simulate one generation on the device; returns the mapping the numpy path returns.
 
         Args:
             pop_arrays (tuple): The four genome payload leaves, in the shapes the policy graph
@@ -197,114 +261,93 @@ class DeviceRollout:
 
         Returns:
             dict: ``seeds`` (3,) int64, ``episode_returns`` (pop_size, 3) float32, ``returns``
-            (rows,) float32, ``fitness`` (pop_size,) float32, ``steps``, ``env_steps``,
-            ``wall_time_s``, ``steps_per_s``, ``env_steps_per_s``, ``cache_hits``,
-            ``cache_misses``, ``end_reasons`` and ``commands`` -- exactly what
-            ``HoverNeatEnv.evaluate`` returns in numpy mode.
+            (rows,) float32 and ``fitness`` (pop_size,) float32 as device tensors, plus the host
+            bookkeeping ``steps``, ``env_steps``, ``wall_time_s``, ``steps_per_s``,
+            ``env_steps_per_s``, ``cache_hits``, ``cache_misses``, ``end_reasons`` and
+            ``commands`` -- exactly what ``HoverNeatEnv.evaluate`` returns in numpy mode.
         """
         if self._closed:
             raise RuntimeError("DeviceRollout was closed; build a new one for a new env")
         env = self.env
         generation = int(generation)
-        payloads = self._policy_payloads(pop_arrays)
+        start = time.perf_counter()
+        pop_operands = self._pop_operands(pop_arrays)
         seeds = env._seeds_for(generation)
         rngs = env._command_generators(seeds, generation)
-        env.executables()  # compile-once proof: every call after ``__init__`` is a cache hit
 
-        start = time.perf_counter()
-        # The reset stays in ONE place: the env writes the state and returns the generation's
-        # first commands plus the analytic reset observation, both as host arrays.
-        commands, obs = env.reset_generation(generation, rngs)
-        commands_t = self._host_operand(commands)
-        obs_t = self._host_operand(obs)
-        last_base_pos_t = self._host_operand(env._reset_pos)
-        returns_t = self._host_operand(np.zeros(self.rows, dtype=np.float32))
-        episode_length_t = self._host_operand(np.zeros(self.rows, dtype=np.int32))
-        alive_t = self._host_operand(np.ones(self.rows, dtype=bool))
-        last_actions_t = self._host_operand(np.zeros((self.rows, NUM_ACTIONS), dtype=np.float32))
-        end_code_t = self._host_operand(np.full(self.rows, END_REASONS["unfinished"], dtype=np.int8))
-        # The state views are imported afresh for every generation: the reset wrote the state
-        # the previous generation's views were staged from.
-        self.invalidate()
+        # The reset stays in ONE place: the env writes the state and draws the generation's first
+        # command row.  Its host observation is discarded, because the same observation is recomputed
+        # on the device below from the very pose the reset wrote.
+        commands, _host_obs = env.reset_generation(generation, rngs)
+        self._sync()  # the reset landed in Quadrants' stream; the graphs must not read ahead of it
+        commands_op = self._stage(commands)
+        reset_pos = self._stage(env._reset_pos)
+        obs = self._reset_obs(commands_op, reset_pos, self._stage(env._reset_quat))
 
-        steps = 0
-        alive_any = True
+        returns = self._stage(np.zeros(self.rows, dtype=np.float32))
+        alive = self._stage(np.ones(self.rows, dtype=bool))
+        episode_length = self._stage(np.zeros(self.rows, dtype=np.int32))
+        last_actions = self._stage(np.zeros((self.rows, NUM_ACTIONS), dtype=np.float32))
+        end_code = self._stage(np.full(self.rows, END_REASONS["unfinished"], dtype=np.int8))
+        # ``hover_advance`` never writes an operand, so the reset pose can be both the reset
+        # observation's pose and the first step's ``last_base_pos``.
+        last_base_pos = reset_pos
+
         ending = np.full(self.rows, END_REASONS["unfinished"], dtype=np.int8)
-        while steps < env.horizon and (not env.stop_when_done or alive_any):
-            raw_actions_t = evoxc.run(env.policy_executable, *payloads, obs_t)
-            raw_actions_t = _first(raw_actions_t)
-            clipped_t, rpm_t = _outputs(evoxc.run(env.controls_executable, raw_actions_t))[:2]
-            env.drone.set_propellers_rpm(self._export(rpm_t))  # once per scene.step(), or it raises
+        host_alive = True
+        steps = 0
+        while steps < env.horizon and (not env.stop_when_done or host_alive):
+            raw_actions = self._run_policy(pop_operands, obs)
+            clipped, rpm = self._run_controls(raw_actions)
+            self._write_rpm(rpm)  # once per scene.step()
             env.scene.step()
             steps += 1
+            self._sync()  # Genesis wrote the state buffers; the advance graph reads them next
 
-            state = self._read_state()
             # Every row burns its three command draws every step, reached target or not.
             resampled = np.stack([env._draw_commands(rng) for rng in rngs], axis=0).astype(np.float32)
-            error_mask = self._error_mask()
-            outputs = evoxc.run(
-                env.advance_executable,
-                commands_t,
-                state["pos"],
-                last_base_pos_t,
-                state["quat"],
-                state["vel"],
-                state["ang"],
-                clipped_t,
-                last_actions_t,
-                episode_length_t,
-                self._host_operand(resampled),
-                self._host_operand(error_mask),
-                alive_t,
-                returns_t,
-                end_code_t,
-                # The static specialization of the graph: the same value build_advance baked in.
-                int(env.max_episode_length),
+            drone = env.drone
+            leaves = self._run_advance(
+                commands_op,
+                self._live(drone.get_pos()),
+                last_base_pos,
+                self._live(drone.get_quat()),
+                self._live(drone.get_vel()),
+                self._live(drone.get_ang()),
+                clipped,
+                last_actions,
+                episode_length,
+                self._stage(resampled),
+                self._error_mask(),
+                alive,
+                returns,
+                end_code,
             )
-            leaves = _outputs(outputs)
-            if len(leaves) != len(_ADVANCE_LEAVES):
-                raise RuntimeError(
-                    f"hover_advance returned {len(leaves)} leaves, expected {len(_ADVANCE_LEAVES)}: "
-                    "the graph and this rollout disagree about the carried bookkeeping"
-                )
-            obs_t = leaves[_ADVANCE_INDEX["obs"]]
-            commands_t = leaves[_ADVANCE_INDEX["commands"]]
-            episode_length_t = leaves[_ADVANCE_INDEX["episode_length"]]
-            returns_t = leaves[_ADVANCE_INDEX["returns"]]
-            alive_t = leaves[_ADVANCE_INDEX["alive"]]
-            end_code_t = leaves[_ADVANCE_INDEX["end_code"]]
+            obs = leaves[_ADVANCE_INDEX["obs"]]
+            commands_op = leaves[_ADVANCE_INDEX["commands"]]
+            episode_length = leaves[_ADVANCE_INDEX["episode_length"]]
+            returns = leaves[_ADVANCE_INDEX["returns"]]
+            alive = leaves[_ADVANCE_INDEX["alive"]]
+            end_code = leaves[_ADVANCE_INDEX["end_code"]]
             # The graph's snapshot is a fresh buffer, so the next step's position cannot alias it.
-            last_base_pos_t = leaves[_ADVANCE_INDEX["base_pos"]]
-            last_actions_t = clipped_t
+            last_base_pos = leaves[_ADVANCE_INDEX["base_pos"]]
+            last_actions = clipped
 
             if env.stop_when_done:
                 # The latched code is the host's only view of "is every row done"; the numpy loop
-                # reads ``alive`` for the same decision.
-                ending = self._download(end_code_t).astype(np.int8)
-                alive_any = bool(np.any(ending == END_REASONS["unfinished"]))
+                # reads ``alive`` for the same decision, and ``alive`` never re-arms.
+                ending = np.asarray(self._host(end_code), dtype=np.int8)
+                host_alive = bool(np.any(ending == END_REASONS["unfinished"]))
         wall_time_s = time.perf_counter() - start
 
         if not env.stop_when_done:
-            ending = self._download(end_code_t).astype(np.int8)
-        returns = self._download(returns_t).astype(np.float32)
-        fitness_executable = env.fitness_executable
-        fitness = self._download(
-            _first(
-                evoxc.run(
-                    fitness_executable,
-                    returns_t,
-                    # The graph's static specializations (see ``evolution_graphs.run_fitness``).
-                    int(fitness_executable.n_policies),
-                    int(fitness_executable.episodes_per_policy),
-                )
-            )
-        ).astype(np.float32)
-        commands = self._download(commands_t).astype(np.float32)
-
+            ending = np.asarray(self._host(end_code), dtype=np.int8)
+        fitness = self._fitness(returns)
+        commands_host = np.asarray(self._host(commands_op), dtype=np.float32)
         env_steps = steps * self.rows
-        result = {
-            "seeds": seeds,
-            "episode_returns": returns.reshape(self.pop_size, env.episodes_per_policy).copy(),
+        return {
+            "seeds": self._stage(np.ascontiguousarray(seeds, dtype=np.int64)),
+            "episode_returns": self._episode_returns(returns),
             "returns": returns,
             "fitness": fitness,
             "steps": steps,
@@ -315,172 +358,204 @@ class DeviceRollout:
             "cache_hits": env.cache.hits,
             "cache_misses": env.cache.misses,
             "end_reasons": {name: int(np.count_nonzero(ending == code)) for name, code in END_REASONS.items()},
-            "commands": commands,
+            "commands": commands_host,
         }
-        validate_evaluation(result, self.pop_size, episodes=env.episodes_per_policy)
-        return result
 
     def state_parity(self):
-        """Max abs difference between the live-buffer reads and the entity getters.
+        """Max abs difference between the imported state operands and the drone getters.
 
-        Reads the drone's base state both ways -- through the live solver buffers (the exact
-        mapping this rollout feeds to ``hover_advance``) and through ``drone.get_pos`` /
-        ``get_quat`` / ``get_vel`` / ``get_ang`` -- and returns the largest disagreement, which
-        must be exactly ``0.0``.  It is the proof of the field mapping; there is no fallback to
-        the getters on the rollout path.
+        Imports the four getter results exactly as a step does -- ``DeviceView.contiguous()`` for a
+        strided view, then the DLPack import -- reads each imported operand back once and compares it
+        with the host value of the same getter.  It is the proof of the operand mapping (layout,
+        compaction and device), and it must be exactly ``0.0``; it is a diagnostic, so its readbacks
+        are deliberately outside the rollout path.
         """
-        self._ensure_state()
-        state = self._read_state()
-        env = self.env
-        getters = {
-            "pos": env.drone.get_pos(),
-            "quat": env.drone.get_quat(),
-            "vel": env.drone.get_vel(),
-            "ang": env.drone.get_ang(),
-        }
         difference = 0.0
-        for name, getter in getters.items():
-            staged = self._state["staged"][name]
-            difference = max(difference, float(np.abs(self._download(staged) - self._download(getter)).max()))
+        for name, getter_name in _STATE_GETTERS:
+            value = getattr(self.env.drone, getter_name)()
+            imported = self._live(value)
+            staged = np.asarray(self._host(imported), dtype=np.float32)
+            expected = np.asarray(data_to_array(value), dtype=np.float32)
+            difference = max(difference, float(np.abs(staged - expected).max()))
+            logger.debug("device rollout state parity: %s %.3e", name, difference)
         return difference
 
-    def invalidate(self):
-        """Drop the cached live-state views (their buffers are re-read every step anyway)."""
-        self._state = None
-        self._state_key = None
-
     def close(self):
-        """Drop the views and the imported buffers (idempotent; never touches the env's scene)."""
-        self.invalidate()
+        """Drop the persistent buffers (idempotent; never touches the env's scene)."""
+        self._rpm = None
+        self._hal = None
         self._closed = True
 
-    # ------------------------------------------------------------------ operand staging
-    def _policy_payloads(self, pop_arrays):
-        """Upload the four genome payload leaves once, validating their shapes as run_policy does."""
-        arrays = tuple(np.ascontiguousarray(leaf) for leaf in tuple(pop_arrays))
+    # --- DLPack bridge ----------------------------------------------------------------
+
+    def _note_hal(self, tensor):
+        """Remember the HAL device of a device payload (the fallback for a backend that hides it)."""
+        if self._hal is None:
+            array = getattr(getattr(tensor, "data", None), "device_array", None)
+            if array is not None:
+                self._hal = array._device
+
+    def _operand(self, value):
+        """Wrap one live device view as an ``evoxc`` operand sharing its memory (zero-copy)."""
+        import evoxc.core
+        import iree.runtime as rt
+        from evoxc.backends.adapters.iree import IreeDevicePayload
+
+        if self._hal is None:
+            raise RuntimeError("the HAL device of the graphs is not known; no executable exposed one")
+        view = self._hal.from_dlpack_capsule(value.__dlpack__())
+        return evoxc.core.Tensor(IreeDevicePayload(rt.DeviceArray(self._hal, view), self.device))
+
+    def _live(self, value):
+        """A live getter result as a graph operand (compacted on the device when strided).
+
+        ``drone.get_pos`` / ``get_quat`` / ``get_ang`` return a strided view of the live solver buffer
+        in a torch-free scene (the link slice of a batch-last field), which IREE refuses, so it is
+        materialized with ``DeviceView.contiguous()`` -- a device-to-device copy, never a host one.
+        ``get_vel`` is already contiguous, and a torch scene hands out contiguous tensors, whose
+        ``is_contiguous`` is a method rather than a property.
+        """
+        flag = getattr(value, "is_contiguous", None)
+        flagged = flag() if callable(flag) else flag
+        if flagged is False:
+            value = value.contiguous()
+        return self._operand(value)
+
+    def _stage(self, array):
+        """Copy one host array onto the device (the only host -> device staging of the loop)."""
+        # IREE and XLA can both serve one device in one process, and a transfer resolves the provider
+        # of the last backend looked up, so re-select this executable's backend before staging.
+        evoxc.backends.get(self.backend)
+        tensor = evoxc.from_numpy(np.ascontiguousarray(array)).to(self.device)
+        self._note_hal(tensor)
+        return tensor
+
+    def _host(self, tensor):
+        """Materialize one output on the host (the payload owns an explicit readback)."""
+        return tensor.data.to_host()
+
+    @staticmethod
+    def _sync():
+        """Drain Quadrants' stream so the graphs (on IREE's queue) see the finished state."""
+        qd.sync()
+
+    # --- the one actuator write -------------------------------------------------------
+
+    def _write_rpm(self, rpm):
+        """Write the rotor RPMs of ``hover_controls`` to the drone, device to device."""
+        copy_from_dlpack(self._rpm, self._rpm_source(rpm), transpose=False)
+        drone = self.env.drone
+        # Exactly what ``DroneEntity.set_propellers_rpm`` forwards to (see 'Actuator bridge').
+        drone.solver.set_drone_rpm(
+            drone.propellers_idx, drone.KF, drone.KM, self._rpm, drone.propellers_spin, drone.model == "RACE"
+        )
+
+    def _rpm_source(self, rpm):
+        """The DLPack producer of the rotor write: the graph output, or its CPU-kind host mapping.
+
+        An IREE CPU-kind payload does not export DLPack -- its own read path is ``.numpy()``, a
+        zero-copy mapping of the ``local-task`` buffer -- and the copy of a CPU build is host to host
+        either way, because the device of a CPU build *is* the host.
+        """
+        if self.device.kind == "cpu":
+            return self._host(rpm)
+        return rpm
+
+    # --- graphs -----------------------------------------------------------------------
+
+    def _pop_operands(self, pop_arrays):
+        """Hand the four genome payload leaves over: pass-through when device-resident."""
+        from device_runtime import assert_device_resident, is_device_tensor
+
+        shapes = tuple(self.policy_executable.pop_shapes)
+        arrays = tuple(pop_arrays)
         if len(arrays) != len(POP_OPERANDS):
             raise ValueError(f"pop_arrays must hold the {len(POP_OPERANDS)} GenomeTensors payloads, got {len(arrays)}")
-        shapes = getattr(self.env.policy_executable, "pop_shapes", None)
-        if shapes is not None:
-            for name, array, shape in zip(POP_OPERANDS, arrays, shapes, strict=True):
-                if array.shape != tuple(shape):
-                    raise ValueError(
-                        f"pop_arrays leaf {name} must keep the built shape {tuple(shape)}, got {array.shape}"
-                    )
-        return tuple(self._host_operand(array) for array in arrays)
+        operands = []
+        for name, array, shape in zip(POP_OPERANDS, arrays, shapes, strict=True):
+            if is_device_tensor(array):
+                # The trainer path: the leaves never leave the device, so nothing is staged.
+                operand = assert_device_resident(array, self.device, "pop_arrays leaf")
+            else:
+                operand = self._stage(array)
+            if tuple(int(dim) for dim in operand.shape) != tuple(shape):
+                raise ValueError(f"pop_arrays leaf {name} must keep the built shape {tuple(shape)}, got {operand.shape}")
+            operands.append(operand)
+        return operands
 
-    def _host_operand(self, array):
-        """A device tensor over a host array (``evoxc``'s own staging path)."""
-        arr = np.asarray(array)
-        if arr.ndim > 0:
-            arr = np.ascontiguousarray(arr)
-        # Re-select this env's backend first: Tensor.to resolves the transfer provider of the
-        # last looked-up backend, and one process may hold IREE and XLA (see evox_runtime).
-        evoxc.backends.get(self.env.backend)
-        return evoxc.from_numpy(arr).to(self.device)
+    def _reset_obs(self, commands, base_init_pos, base_init_quat):
+        """The observation of the generation's reset, computed from the reset pose on the device."""
+        return _outputs(evoxc.run(self.reset_obs_executable, commands, base_init_pos, base_init_quat))[0]
 
-    def _import(self, torch_tensor):
-        """An ``evoxc`` tensor aliasing ``torch_tensor`` memory (no copy, no host round trip)."""
-        import torch
+    def _run_policy(self, pop_operands, obs):
+        """One policy forward pass; ``obs`` is the previous graph's output (no staging)."""
+        return _outputs(evoxc.run(self.policy_executable, *pop_operands, obs))[0]
 
-        capsule = torch.utils.dlpack.to_dlpack(torch_tensor)
-        view = self.runtime_device.from_dlpack_capsule(capsule)
-        array = self._rt.DeviceArray(self.runtime_device, view)
-        return evoxc.Tensor(self._payload_cls(array, self.device))
+    def _run_controls(self, raw_actions):
+        """Clip the raw action and build the rotor RPMs (``hover_kernels.hover_controls``)."""
+        clipped, rpm = _outputs(evoxc.run(self.controls_executable, raw_actions))[:2]
+        return clipped, rpm
 
-    def _download(self, tensor):
-        """Materialize one operand on the host (the only device -> host path of this module)."""
-        if isinstance(tensor, np.ndarray):
-            return tensor
-        if isinstance(tensor, evoxc.Tensor):
-            tensor = tensor.to(evoxc.Device("cpu", 0))
-            return tensor.numpy()
-        import torch
+    def _run_advance(
+        self,
+        commands,
+        base_pos,
+        last_base_pos,
+        base_quat,
+        base_lin_vel_world,
+        base_ang_vel_world,
+        actions,
+        last_actions,
+        episode_length,
+        resampled_commands,
+        error_mask,
+        alive,
+        returns,
+        end_code,
+    ):
+        """One advance step, operand for operand in the order ``hover_kernels`` declares them."""
+        executable = self.advance_executable
+        outputs = evoxc.run(
+            executable,
+            commands,
+            base_pos,
+            last_base_pos,
+            base_quat,
+            base_lin_vel_world,
+            base_ang_vel_world,
+            actions,
+            last_actions,
+            episode_length,
+            resampled_commands,
+            error_mask,
+            alive,
+            returns,
+            end_code,
+            # The static specialization of the graph: the same value build_advance baked in.
+            int(executable.max_episode_length),
+        )
+        leaves = _outputs(outputs)
+        if len(leaves) != len(_ADVANCE_LEAVES):
+            raise RuntimeError(
+                f"hover_advance returned {len(leaves)} leaves, expected {len(_ADVANCE_LEAVES)}: "
+                "the graph and this rollout disagree about the carried bookkeeping"
+            )
+        return leaves
 
-        if isinstance(tensor, torch.Tensor):
-            return tensor.detach().cpu().numpy()
-        raise TypeError(f"cannot materialize {type(tensor).__name__} on the host")
+    def _fitness(self, returns):
+        """The fitness graph on the device-resident returns of the generation."""
+        executable = self.fitness_executable
+        return _outputs(evoxc.run(executable, returns, executable.n_policies, executable.episodes_per_policy))[0]
 
-    def _export(self, tensor):
-        """Hand one graph output to Genesis: a torch view over the SAME device memory.
-
-        On a CUDA/ROCm device the ``IreeDevicePayload`` DLPack export shares the HAL buffer; on
-        the CPU (``local-task``) the payload's ``.numpy()`` is itself a zero-copy mapping of the
-        buffer, so ``torch.from_numpy`` gives the same aliasing.  This is the only
-        synchronisation in the module: the Quadrants kernel Genesis launches next reads the
-        buffer on torch's stream, while IREE wrote it on its own queue (``IreeExecutable.run``
-        has already blocked on that queue, so the buffer is complete).  Measure it separately.
-        """
-        import torch
-
-        if self.device.kind == "cpu":
-            value = torch.from_numpy(tensor.numpy())
-        else:
-            value = torch.from_dlpack(tensor)
-            torch.cuda.synchronize()
-        return value
-
-    # ------------------------------------------------------------------ live solver state
-    def _ensure_state(self):
-        """Build (once per generation) the staging buffers and the imported state operands."""
-        import torch
-
-        import genesis as gs
-
-        links = self.env.scene.sim.rigid_solver.dyn_state.links
-        base_link_idx = self.env.drone.base_link_idx
-        fields = {name: getattr(links, name) for name in _STATE_FIELDS}
-        # Keyed by buffer identity: a new set of field wrappers means new buffers.
-        key = tuple(id(field) for field in fields.values())
-        if self._state is not None and self._state_key == key:
-            return self._state
-        torch_device = gs.device
-        staged = {
-            name: torch.empty((self.rows, width), dtype=torch.float32, device=torch_device)
-            for name, width in (("pos", 3), ("quat", 4), ("vel", 3), ("ang", 3))
-        }
-        # The getters read these fields; the slices alias the live solver buffers (no copy).
-        views = {name: qd_to_torch(field, copy=False)[base_link_idx] for name, field in fields.items()}
-        self._state = {
-            "views": views,
-            # The staged buffers are the imported operands: the import is alignment-safe and
-            # stays valid, while the values are refreshed in place every step (see _read_state).
-            "staged": staged,
-            "operands": {name: self._import(buffer) for name, buffer in staged.items()},
-        }
-        self._state_key = key
-        logger.debug("device rollout: imported %d live state buffers (rows=%d)", len(staged), self.rows)
-        return self._state
-
-    def _read_state(self):
-        """Refresh the staging buffers from the live solver state; returns the state operands."""
-        import torch
-
-        state = self._ensure_state()
-        staged, views = state["staged"], state["views"]
-        staged["pos"].copy_(views["pos"])
-        staged["quat"].copy_(views["quat"])
-        staged["ang"].copy_(views["cd_ang"])
-        staged["vel"].copy_(views["cd_vel"])
-        # ``RigidSolver.get_links_vel``: cd_vel + cd_ang x (pos - root_COM).  On the device, no
-        # host round trip; zero for the massless-propeller cf2x model and exact for any other.
-        delta = views["pos"] - views["root_COM"]
-        staged["vel"].add_(torch.cross(views["cd_ang"], delta, dim=-1))
-        return {name: state["operands"][name] for name in ("pos", "quat", "vel", "ang")}
+    def _episode_returns(self, returns):
+        """The policy-major ``(pop_size, episodes)`` view of ``returns``, as a graph."""
+        return run_episode_returns(self.episode_returns_executable, returns)
 
     def _error_mask(self):
-        """The solver-error latch as a host bool array (see the module docstring)."""
-        from genesis.utils.misc import tensor_to_array
-
-        mask = tensor_to_array(self.env.scene.get_error_envs_mask()).astype(bool)
+        """The solver-error latch as a device bool operand (host query, see the module docstring)."""
+        mask = data_to_array(self.env.scene.get_error_envs_mask()).astype(bool)
         if mask.any():
-            # The graph latched the flagged rows dead; a latched error otherwise re-raises on
-            # the next ``scene.step()`` (see 'Scene.get_error_envs_mask').
+            # The graph latched the flagged rows dead; a latched error otherwise re-raises on the next
+            # ``scene.step()`` (see 'Scene.get_error_envs_mask').
             self.env.scene.clear_errno()
-        return mask
-
-
-def _first(result):
-    """The single output leaf of a one-output ``evoxc.run`` call."""
-    leaves = _outputs(result)
-    return leaves[0]
+        return self._stage(mask)
