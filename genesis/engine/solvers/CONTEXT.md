@@ -40,8 +40,8 @@ Framed solvers (MPM, FEM) additionally expose `copy_frame(source, target)`; `Tim
 ### Error / errno handling
 `register_errors(errno, messages)` declares one bit per error and its message; `update_errno()` merges the device flags into `_errno_latched` once per step (a numba-jitted `merge_errno` runs the CPU merge).
 `check_errno(blocking, context)` raises the first flagged error; non-blocking CUDA checks read a pinned copy enqueued one call earlier.
-`flag_errno`/`clear_errno`/`get_error_envs_mask` set/clear/read per-env flags; `ErrorCode` bits live in `genesis/utils/array_class.py`.
-Without PyTorch the latch stays a `gs.tc_int` qd field and a device-side mask kernel maintains it, so `get_error_envs_mask()` returns a device-resident `DeviceView` and a non-blocking check reads the host only once every `ERRNO_CHECK_INTERVAL` (64) steps (see "Torch-free mode").
+`flag_errno`/`clear_errno`/`get_error_envs_mask` set/clear/read per-env flags, and the mask is boolean-valued `(n_envs,)` in both modes: `_errno_latched > 0` as a fresh `torch.bool` tensor with PyTorch, a live zero-copy `DeviceView` of the `gs.qd_bool` `_errno_mask` field without it; `ErrorCode` bits live in `genesis/utils/array_class.py`.
+Without PyTorch the latch stays a `gs.tc_int` qd field, the kernels `kernel_merge_errno`/`kernel_flag_errno`/`kernel_clear_errno`/`kernel_clear_errno_flags` maintain the boolean `_errno_mask` beside it (every write casts to `gs.qd_bool`, which Apple Metal stores as `int32`), `get_error_envs_mask()` returns a `DeviceView` of it, and a non-blocking check reads the host only once every `ERRNO_CHECK_INTERVAL` (64) steps (see "Torch-free mode").
 `build()` registers `ErrorCode.INVALID_GRAD_NAN` for differentiable scenes (NaN/inf adjoint of the state).
 
 ### Autodiff hooks
