@@ -814,7 +814,7 @@ def stage_kernel_values(value, dtype):
 
 
 class _HipAsyncCopies:
-    """The asynchronous device-to-device HIP transfers a stream-ordered staging copy issues.
+    """The asynchronous device-to-device HIP transfer a stream-ordered staging copy issues.
 
     'genesis.utils.device_buffer' owns the synchronous transfers of a write into a device buffer, and this class binds
     the two asynchronous counterparts, with the same conventions: the library is loaded on first use only, so no HIP
@@ -830,14 +830,6 @@ class _HipAsyncCopies:
                 "but it could not be loaded.",
                 e,
             )
-        self._library.hipMemcpyAsync.argtypes = [
-            ctypes.c_void_p,
-            ctypes.c_void_p,
-            ctypes.c_size_t,
-            ctypes.c_int,
-            ctypes.c_void_p,
-        ]
-        self._library.hipMemcpyAsync.restype = ctypes.c_int
         self._library.hipMemcpy2DAsync.argtypes = [
             ctypes.c_void_p,
             ctypes.c_size_t,
@@ -854,12 +846,6 @@ class _HipAsyncCopies:
     def _check(status: int, function_name: str) -> None:
         if status != 0:
             gs.raise_exception(f"The HIP call '{function_name}' failed with the error code {status}.")
-
-    def copy(self, dst_ptr: int, src_ptr: int, nbytes: int) -> None:
-        self._check(
-            self._library.hipMemcpyAsync(dst_ptr, src_ptr, nbytes, _HIP_MEMCPY_DEVICE_TO_DEVICE, _QUADRANTS_STREAM),
-            "hipMemcpyAsync",
-        )
 
     def copy_2d(
         self, dst_ptr: int, dst_pitch: int, src_ptr: int, src_pitch: int, width: int, height: int
