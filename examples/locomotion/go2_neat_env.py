@@ -16,7 +16,9 @@ the ``END_REASONS`` classification of the rows that ended.
 its ``rows`` / ``episodes_per_policy`` / ``max_episode_length`` / ``cache`` attributes and its
 ``evaluate`` / ``close`` methods are exactly what a ``trainer.NeuroevolutionTrainer`` drives, and
 :meth:`Go2NeatEnv.evaluate` validates its own result with
-:func:`env_base.validate_evaluation` before returning it.
+:func:`env_base.validate_evaluation` before returning it -- and, under the device residency, with
+:func:`env_base.validate_evaluation_device`, which checks the training leaves by tensor metadata
+instead of materializing them.
 
 Seeding
 -------
@@ -53,9 +55,12 @@ Residency
   The per-step state read, the control-target write and the reset write are the only boundaries,
   and they are torch-free: reads go through ``genesis.utils.misc.tensor_to_array`` and writes
   hand NumPy arrays to the Genesis setters, which take ``array_like``.
-* ``"device"``: the same generation with every operand resident on the ``evoxc`` device.  The loop,
-  the DLPack bridge and the exhaustive list of remaining host touches live in
-  :mod:`go2_device_rollout`; this module only dispatches.  It needs a non-CPU ``evoxc`` device
+* ``"device"``: the same generation with every operand resident on the ``evoxc`` device, in a
+  process that needs no Torch at all: the getters hand back ``DeviceView`` zero-copy views, the
+  setters consume DLPack producers device to device, and two extra graphs
+  (``go2_device_kernels``) do the control-target and state-composition work the numpy path does in
+  host arrays.  The loop, the DLPack bridge and the exhaustive list of remaining host touches live
+  in :mod:`go2_device_rollout`; this module only dispatches.  It needs a non-CPU ``evoxc`` device
   (``backend="iree"`` on ``rocm:N`` / ``cuda:N``), because device residency is what the IREE
   runtime provides, and it refuses to be built otherwise.
 
@@ -124,12 +129,14 @@ import genesis as gs
 
 from genesis.utils.geom import inv_quat, quat_to_xyz, transform_quat_by_quat
 from genesis.utils.misc import tensor_to_array
+from genesis.utils.torch_compat import HAS_TORCH
 
 from go2_evox_kernels import resolve_backend_device
 
 # ``go2_neat_kernels`` installs ``examples/neuroevolution`` on ``sys.path`` as its first
 # import-time action, so the shared layer below imports by bare module name and this module
 # needs no sys.path shim of its own.
+from go2_device_kernels import build_control, build_episode_returns, build_state
 from go2_neat_kernels import (
     CLIP_ACTIONS,
     DEFAULT_COMMANDS,
@@ -148,7 +155,7 @@ from go2_neat_kernels import (
     run_obs,
     run_policy,
 )
-from env_base import BatchedEpisodeEnv, validate_evaluation
+from env_base import BatchedEpisodeEnv, validate_evaluation, validate_evaluation_device
 from evox_runtime import _device_name
 from seeding import EPISODES_PER_POLICY, Perturbation, evolution_seed, generation_seed_table
 from seeding import perturbation_from_seed as _perturbation_from_seed
@@ -378,9 +385,10 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         rows (int): Number of environment rows, ``3 * pop_size`` (also ``n_envs``).
         episodes_per_policy (int): ``seeding.EPISODES_PER_POLICY``, the row tiling factor.
         max_episode_length (int): ``ceil(episode_length_s / dt)``, baked into the advance graph.
-        cache (ExecutableCache): The one cache the four executables are built and looked up in.
-        executables (callable): Return the four executables, compiling only the missing ones; call it
-            once per generation as the compile-once proof (every call after ``__init__`` is a hit).
+        cache (ExecutableCache): The one cache the executables are built and looked up in.
+        executables (callable): Return the four env-side executables (seven under the device
+            residency), compiling only the missing ones; call it once per generation as the
+            compile-once proof (every call after ``__init__`` is a hit).
     """
 
     episodes_per_policy = EPISODES_PER_POLICY
@@ -454,6 +462,10 @@ class Go2NeatEnv(BatchedEpisodeEnv):
                 # memory and exceeding it raises.
                 max_collision_pairs=20,
                 tolerance=1e-5,
+                # Torch-free Genesis builds the dofs-info write for a per-environment buffer; the
+                # torch path keeps the shared buffer ``go2_env`` uses. The values written are the
+                # same either way (every row gets ``CFG['kp']`` / ``CFG['kd']``).
+                batch_dofs_info=not HAS_TORCH,
             ),
             vis_options=gs.options.VisOptions(
                 rendered_envs_idx=[0],
@@ -522,13 +534,17 @@ class Go2NeatEnv(BatchedEpisodeEnv):
             "actions": np.zeros((self.rows, NUM_ACTIONS), dtype=np.float32),
         }
 
-        # The four executables are compiled once, here, and every generation afterwards reuses
-        # them through the same cache (that is what ``cache_hits`` counts).
+        # The four (device residency: seven) executables are compiled once, here, and every
+        # generation afterwards reuses them through the same cache (that is what ``cache_hits``
+        # counts).
         self.cache = ExecutableCache()
         self._algo, self._policy_config, self._trace_pop = self._build_policy_trace()
         self._pop_shapes = tuple(np.shape(leaf) for leaf in self._trace_pop)
-        self.obs_executable, self.policy_executable, self.advance_executable, self.fitness_executable = (
-            self.executables()
+        executables = self.executables()
+        self.obs_executable, self.policy_executable, self.advance_executable, self.fitness_executable = executables[:4]
+        # Only the device residency drives the three device-side graphs (see ``executables``).
+        self.control_executable, self.state_executable, self.episode_returns_executable = (
+            executables[4:] if self.residency == "device" else (None, None, None)
         )
         logger.info(
             "Go2NeatEnv: pop_size=%d rows=%d horizon=%d max_episode_length=%d backend=%s device=%s",
@@ -565,7 +581,15 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         return algo, pipeline._static_config(state), pop_arrays_of(state)
 
     def executables(self):
-        """Return the four executables, compiling only the ones the cache does not hold yet."""
+        """Return the env-side executables, compiling only the ones the cache does not hold yet.
+
+        The numpy residency drives the four graphs ``go2_neat_kernels`` owns (obs, policy, advance,
+        fitness). The device residency additionally drives the three graphs of
+        ``go2_device_kernels`` -- control (raw action -> PD targets), state (live solver buffers
+        -> graph operands) and episode-returns (the ``(rows,)`` -> ``(pop_size, episodes)`` reshape,
+        which cannot be a host-side ``reshape`` without leaving the device) -- which is why the
+        tuple grows to seven there.
+        """
         cache = self.cache
         obs = cache.get(
             ("obs", self.rows, self.backend, self.device_name),
@@ -597,7 +621,44 @@ class Go2NeatEnv(BatchedEpisodeEnv):
             ("fitness", self.pop_size, EPISODES_PER_POLICY, self.backend, self.device_name),
             lambda: build_fitness(self.pop_size, backend=self.backend, device=self.device),
         )
-        return obs, policy, advance, fitness
+        if self.residency != "device":
+            return obs, policy, advance, fitness
+        control = cache.get(
+            ("control", self.rows, self.action_scale, CLIP_ACTIONS, self.backend, self.device_name),
+            lambda: build_control(
+                self.rows,
+                action_scale=self.action_scale,
+                actions_dof_idx=self.actions_dof_idx,
+                clip_actions=CLIP_ACTIONS,
+                backend=self.backend,
+                device=self.device,
+            ),
+        )
+        # ``get_error_envs_mask`` is a bool tensor with Torch and the zero-copy view of an int32
+        # buffer without it, and a compiled graph has one input dtype, so the state graph is built
+        # for the mask this scene hands out.
+        mask_is_bool = self._error_mask_is_bool()
+        state = cache.get(
+            ("state", self.rows, NUM_ACTIONS, mask_is_bool, self.backend, self.device_name),
+            lambda: build_state(
+                self.rows,
+                num_dof=NUM_ACTIONS,
+                qpos_dof_slot=self._qpos_dof_slot,
+                mask_is_bool=mask_is_bool,
+                backend=self.backend,
+                device=self.device,
+            ),
+        )
+        episode_returns = cache.get(
+            ("episode_returns", self.pop_size, EPISODES_PER_POLICY, self.backend, self.device_name),
+            lambda: build_episode_returns(self.pop_size, backend=self.backend, device=self.device),
+        )
+        return obs, policy, advance, fitness, control, state, episode_returns
+
+    def _error_mask_is_bool(self):
+        """Whether this scene hands out a boolean error mask (Torch present) instead of an int32 view."""
+        mask = self.scene.get_error_envs_mask()
+        return str(getattr(mask, "dtype", "")).rsplit(".", 1)[-1] == "bool"
 
     def _seeds_for(self, generation):
         """Return the ``(EPISODES_PER_POLICY,)`` int64 seeds of one generation."""
@@ -717,6 +778,9 @@ class Go2NeatEnv(BatchedEpisodeEnv):
                     self.policy_executable,
                     self.advance_executable,
                     self.fitness_executable,
+                    self.control_executable,
+                    self.state_executable,
+                    self.episode_returns_executable,
                 ),
                 pop_arrays=pop_arrays,
                 seeds=seeds,
@@ -727,7 +791,10 @@ class Go2NeatEnv(BatchedEpisodeEnv):
             )
         else:
             result = self._evaluate_numpy(pop_arrays, seeds, init_qpos, row_init_qpos)
-        validate_evaluation(result, self.pop_size, self.episodes_per_policy)
+        if self.residency == "device":
+            validate_evaluation_device(result, self.pop_size, self.episodes_per_policy, self.device)
+        else:
+            validate_evaluation(result, self.pop_size, self.episodes_per_policy)
         return result
 
     def _evaluate_numpy(self, pop_arrays, seeds, init_qpos, row_init_qpos):
