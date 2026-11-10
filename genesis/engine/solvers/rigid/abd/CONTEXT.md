@@ -57,9 +57,8 @@ State lives in Quadrants structs (`DynState`, `DynInfo`, `RigidInfo`, `Constrain
 
 ## torch_free_kernels.py — device-side setters of the torch-free write path
 - `kernel_copy_dofs_pos`, `kernel_scatter_dofs_pos`: rebuild a batch-first row of dof positions from device values instead of patching a tensor view.
-- Staged whole-tile writes of a batch-last `DlpackStager` buffer: `kernel_set_qpos_staged` (still the one `KinematicSolver.set_qpos` calls), `kernel_set_dofs_velocity_staged`, `kernel_set_dofs_position_staged`, `kernel_control_dofs_staged`, `kernel_control_dofs_position_velocity_staged`.
-- Staged batch-first write: `kernel_set_qpos_rows_staged(qs_idx, envs_idx, values, rigid_info, rigid_config, is_broadcast, is_tile)` mirrors `kernel_set_qpos` and reads `values[i_b_, i_q_]` without a template flag set, i.e. one row per environment named by `envs_idx` in its order, the form `RigidSolver.set_qpos` shares with its torch path.
-- Its `is_broadcast` template reads row 0 for every selected environment, and its `is_tile` template reads the row of the environment itself, `values[envs_idx[i_b_], i_q_]`, which is the whole `(n_envs, n_qs)` tile form of `RigidSolver.set_qpos`.
+- Staged batch-last writes of a `DlpackStager` buffer: `kernel_set_qpos_staged` (the one `KinematicSolver.set_qpos` calls), `kernel_set_dofs_velocity_staged`, `kernel_set_dofs_position_staged`, `kernel_control_dofs_staged`, `kernel_control_dofs_position_velocity_staged`.
+- Staged batch-first write: `kernel_set_qpos_rows_staged(qs_idx, envs_idx, values, rigid_info, rigid_config, is_broadcast, is_tile)` mirrors `kernel_set_qpos`, reading `values[i_b_, i_q_]` for one row per environment named by `envs_idx` in its order, row 0 under `is_broadcast`, and the row of the environment itself under `is_tile`, `values[envs_idx[i_b_], i_q_]` — the three value forms of `RigidSolver.set_qpos`.
 - Drone propellers: `kernel_update_drone_propeller_revs(propellers_revs, propellers_rpm, revs_limit)` advances the batch-last `(n_propellers, n_envs)` accumulator of a drone from the batch-first `(n_envs, n_propellers)` RPM values, wrapping at `revs_limit` (`60 / dt`), one thread per entry so no serialization; `kernel_broadcast_drone_rpm(row, out, is_row)` writes a single row of RPM to every environment of the batch-first `out`, its `is_row` template selecting the `(n_propellers,)` read over the `(1, n_propellers)` one.
 - Both drone kernels serve `RigidSolver.set_drone_propellers_rpm` alone, the torch-free counterpart of `DroneEntity.set_propellers_rpm`.
 ## misc.py — coupling, init, wake/hibernation, atomics, helpers
@@ -115,7 +114,7 @@ This directory contains no `qd_to_torch`/`qd_from_torch` calls — it indexes qd
 
 # Notes for Agents
 
-- This sandbox's `rg` returns only one match per file and plain `git grep -n` returns empty; use `git grep -o -n -E "<pattern>" -- genesis/engine/solvers/rigid/abd/*.py` to list `def`/`class`/decorators with line numbers.
+- Long lines are clipped by the `read` tool, so raise its `max_bytes` (up to 131072) for the large files; `git grep -n -E "<pattern>" -- genesis/engine/solvers/rigid/abd/*.py` lists `def`/`class`/decorators with line numbers.
 - `func_*` are `@qd.func`, not `@gs.jit`; do not assume the `func_*`/`kernel_*` naming maps to `gs.jit` pipelines.
 - Cross-module import graph is tight: `forward_dynamics` imports `forward_kinematics` + `misc`; `forward_kinematics` imports `manual_bw` + `misc`; `accessor` imports `forward_dynamics` + `misc`; `diff` imports `forward_dynamics`; `inverse_kinematics` imports `forward_kinematics`.
 - The two trailing `create_virtual_deprecated_module(...)` calls alias legacy module names (`rigid_solver_dynamics_decomp`, `rigid_solver_util_decomp`); keep them in place.
