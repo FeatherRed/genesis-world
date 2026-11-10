@@ -2,24 +2,10 @@ import numpy as np
 
 import genesis as gs
 from genesis.utils.misc import qd_to_torch
-from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, torch
+from genesis.utils.torch_compat import HAS_TORCH, torch
 
 from .description import DroneEntityDescription
 from .rigid_entity import RigidEntity
-
-
-def _is_opaque_producer(value) -> bool:
-    """Whether `value` is an opaque DLPack producer a setter stages on the device instead of reading it on the host.
-
-    Such a producer exposes its 'shape', its 'dtype' and the DLPack protocol alone, without element access, length or
-    iteration, so it can neither be sanitized nor transposed the way a host array and a torch tensor are (see
-    'genesis.engine.solvers.torch_free.is_dlpack_source'). A host array and a torch tensor are DLPack sources as well,
-    and the setters of a scene with PyTorch keep their own path for both of them.
-    """
-    # Local import: the solvers import the entities, so importing them at module scope would close the cycle
-    from genesis.engine.solvers.torch_free import is_dlpack_source
-
-    return is_dlpack_source(value) and not is_torch_tensor(value)
 
 
 class DroneEntity(RigidEntity):
@@ -108,7 +94,10 @@ class DroneEntity(RigidEntity):
             )
             return
 
-        if _is_opaque_producer(propellers_rpm):
+        # Local import: the solvers import the entities, so importing them at module scope would close the cycle
+        from genesis.engine.solvers.torch_free import is_opaque_producer
+
+        if is_opaque_producer(propellers_rpm):
             # An opaque producer is opaque all the same with PyTorch installed, where indexing it on the host would
             # raise: it takes the staged device path of a torch-free scene, and the solver expands a single row to
             # every environment. The accumulator of a scene with PyTorch stays a torch tensor, which advances here on
