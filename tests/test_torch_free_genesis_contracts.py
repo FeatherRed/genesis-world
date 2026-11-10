@@ -19,9 +19,11 @@ import it, and whose epilogue fails the child if torch reached ``sys.modules`` a
 Each child asserts its own contract and prints one machine-readable marker line, which the parent re-checks; every
 child is bounded by a 900 s timeout, one child per ``gs.init`` configuration.  The GPU scenarios are guarded on the
 machine rather than on a marker (the suite has no ``gpu`` marker) and skip cleanly when no GPU is visible; the first
-one also needs a reachable non-CPU ``evoxc`` device, which :func:`tests.device_pilot.reachable_device_or_skip` names
-in its skip reason.  None of them calls ``skip_if_unsafe_hsa_runtime()``: that gate covers Genesis scenes built inside
-the pytest process, while every scene here lives in a child, where ``genesis/utils/hsa.py`` repairs normally.
+one also needs a reachable non-CPU ``evoxc`` device, which :func:`tests.device_pilot.non_cpu_device_or_skip` names
+in its skip reason (an ``EVOXC_DEVICE`` override naming a cpu-kind device skips there too, before the child starts
+and inherits the environment).  The other two never touch ``evoxc``, so they keep running under such an override.
+None of them calls ``skip_if_unsafe_hsa_runtime()``: that gate covers Genesis scenes built inside the pytest process,
+while every scene here lives in a child, where ``genesis/utils/hsa.py`` repairs normally.
 
 Run the module from the repository root::
 
@@ -39,7 +41,7 @@ import json
 import numpy as np
 import pytest
 
-from tests.device_pilot import reachable_device_or_skip
+from tests.device_pilot import non_cpu_device_or_skip
 from tests.torch_block import has_gpu, run_python_checked
 
 pytestmark = [pytest.mark.required, pytest.mark.parametrize("backend", [None])]  # Disable genesis initialization
@@ -399,7 +401,9 @@ def test_strides_less_device_producer_write_lands():
         pytest.skip(SKIP_NO_GPU)
     # The strides-less producer is an 'evoxc' device tensor, and 'evoxc' is an optional, undeclared dependency
     pytest.importorskip("evoxc", reason=SKIP_NO_EVOXC)
-    _, device = reachable_device_or_skip("iree")
+    # A cpu-kind device cannot carry the producer, so an EVOXC_DEVICE override naming one skips here, before the
+    # child is started: the child inherits the environment and would place the producer there too.
+    _, device = non_cpu_device_or_skip("iree", feature="the strides-less DLPack producer")
 
     result = run_python_checked(
         _render(_STRIDES_LESS_PRODUCER_SCRIPT, DEVICE=(device.kind, device.index)), timeout=900

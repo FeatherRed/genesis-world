@@ -23,6 +23,11 @@ Conventions
 * :func:`reachable_device_or_skip` never trusts an enumeration: ``evoxc.devices()`` lists every
   runtime the wheel was built with, so a ROCm-only host also enumerates ``cuda:0``.  The only honest
   reachability test is moving one float32 element there through the backend's placement provider.
+* :func:`non_cpu_device_or_skip` is the gate of a scenario that genuinely needs an accelerator (the
+  zero-copy DLPack bridge, a pilot's device residency): an explicit :data:`DEVICE_ENV_VAR` request
+  wins in :func:`reachable_device_or_skip`, so a ``cpu:0`` override would hand a cpu-kind device to
+  a scenario that cannot run on it, and it is this function's job to skip with a reason naming the
+  override instead of running the scenario and failing.
 * :func:`skip_if_unsafe_hsa_runtime` is the gate every *in-process* Genesis GPU scene needs: on a
   host where ``gs.init``'s HSA repair is warn-only under pytest, the worker keeps PyTorch's bundled
   runtime and can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``.  Child-process scenarios
@@ -32,6 +37,7 @@ Conventions
 from __future__ import annotations
 
 import ast
+import os
 from pathlib import Path
 
 import numpy as np
@@ -43,6 +49,7 @@ __all__ = [
     "assert_allclose",
     "max_abs_diff",
     "max_rel_diff",
+    "non_cpu_device_or_skip",
     "reachable_device_or_skip",
     "skip_if_unsafe_hsa_runtime",
     "skip_unless_torch_free",
@@ -177,7 +184,7 @@ def reachable_device_or_skip(backend="iree"):
     Returns:
         tuple: ``(backend, evoxc.Device)`` of a device that accepted a write.
     """
-    requested = __import__("os").environ.get(DEVICE_ENV_VAR, "").strip()
+    requested = os.environ.get(DEVICE_ENV_VAR, "").strip()
     cache_key = (str(backend), requested)
     cached = _DEVICE_CACHE.get(cache_key)
     if cached is not None:
@@ -206,6 +213,34 @@ def reachable_device_or_skip(backend="iree"):
         + (f" (requested through {DEVICE_ENV_VAR}={requested!r})" if requested else "")
         + f"; probed {', '.join(unusable) or 'no non-CPU device'}"
     )
+
+
+def non_cpu_device_or_skip(backend="iree", *, feature="this scenario"):
+    """Return ``(backend, device)`` of a reachable non-CPU device, or skip the calling test.
+
+    This is the gate of a scenario that cannot run on a cpu-kind device: the zero-copy DLPack bridge,
+    a pilot's device residency, a device-resident producer write.  :func:`reachable_device_or_skip`
+    honours an explicit :data:`DEVICE_ENV_VAR` request, so under ``EVOXC_DEVICE=cpu:0`` it happily
+    returns ``cpu:0``; a scenario that then ran would fail instead of reporting that the session was
+    pointed at a device it cannot use.  The skip reason names that override, so the summary says why
+    the accelerator tier did not run.  Everything else, including reachability, is the
+    :func:`reachable_device_or_skip` contract, so its probe is shared and cached.
+
+    Args:
+        backend (str): The ``evoxc`` backend the caller wants the device for.
+        feature (str): What needs the accelerator, used in the skip reason.
+
+    Returns:
+        tuple: ``(backend, evoxc.Device)`` of a non-CPU device that accepted a write.
+    """
+    resolved_backend, device = reachable_device_or_skip(backend)
+    if getattr(device, "kind", None) == "cpu":
+        requested = os.environ.get(DEVICE_ENV_VAR, "").strip() or f"{device.kind}:{device.index}"
+        pytest.skip(
+            f"{DEVICE_ENV_VAR}={requested} names a cpu-kind device ({device.kind}:{device.index}); "
+            f"{feature} needs a non-CPU evoxc device"
+        )
+    return resolved_backend, device
 
 
 def unsafe_hsa_runtime_reason() -> str | None:
