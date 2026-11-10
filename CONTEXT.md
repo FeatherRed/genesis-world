@@ -19,10 +19,12 @@ Previously named Genesis (academic project since Dec 2024); now developed under 
 - `doc/` → git submodule `https://github.com/Genesis-Embodied-AI/genesis-doc` (documentation source; arrives as an EMPTY placeholder in worktrees — `git submodule update --init` to populate).
 - `imgs/` → README/landing images.
 - Root config files: `pyproject.toml`, `README.md`, `CLAUDE.md` (dev guidelines), `CODING_GUIDELINES.md` (naming/style conventions), `RELEASE.md`, `LICENSE`, `MANIFEST.in`, `.pre-commit-config.yaml`, `.readthedocs.yaml`, `.gitignore`, `.gitattributes`.
+- `TORCH_FREE_GPU_RESIDENT_REPORT.md` → the Torch-free / GPU-resident neuroevolution migration: reproducible commands, test results, the per-boundary data flow, compile time and throughput, and the remaining blocking APIs.
 
 ## Key Facts
 - Python `>=3.12,<3.15`; entry point `gs = "genesis._main:main"` (CLI: `gs launch` / `gs play` / `gs replay` / `gs animate`).
 - Core dependency: `quadrants==1.4.0`; `torch` must be installed separately per backend.
+- `torch` is optional for the rigid path: `import genesis`, `gs.init` and rigid scenes (state access, control, resets, error mask) run with PyTorch unimportable, and compiled-graph training loops can stay device-resident end to end (see `TORCH_FREE_GPU_RESIDENT_REPORT.md`).
 - `genesis/ext/LuisaRender` is a git submodule (`https://github.com/Alif-01/LuisaRender`) and arrives empty in worktrees, as does `doc/`.
 
 ## Constraints
@@ -43,7 +45,8 @@ pytest configured in `pyproject.toml`: `--numprocesses=auto --dist=worksteal --i
 Tests run across backends (cpu/gpu/cuda/amdgpu/metal) and field-vs-ndarray array modes; see `tests/CONTEXT.md` for the full picture.
 
 ## See Also
-- `genesis/CONTEXT.md` — package-level routing into engine/utils/vis/ext/options/recorders/grad.
+- `TORCH_FREE_GPU_RESIDENT_REPORT.md` — the Torch-free / GPU-resident training deliverable (commands, data flow, numbers, blockers).
+- `genesis/CONTEXT.md` — package-level routing into engine/utils/vis/ext/options/recorders/grad; also the Torch-free mode (`genesis/utils/torch_compat.py`, `device_buffer.py`, `hip_copy.py`).
 - `tests/CONTEXT.md`, `examples/CONTEXT.md`, `.github/CONTEXT.md` — the other top-level trees.
 
 ## Status
