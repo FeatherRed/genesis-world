@@ -55,6 +55,10 @@ State lives in Quadrants structs (`DynState`, `DynInfo`, `RigidInfo`, `Constrain
 - `kernel_manual_compute_qacc_bw`: reverses the mass solve via the implicit function theorem, seeding `mass_mat.grad` directly and skipping the LDL^T factor chain.
 - Chain-rule building blocks (`*_grad_*` quaternion/rotation/motion-cross adjoints) live in `genesis/utils/geom.py`, next to their forwards.
 
+## torch_free_kernels.py — device-side setters of the torch-free write path
+- `kernel_copy_dofs_pos`, `kernel_scatter_dofs_pos`: rebuild a batch-first row of dof positions from device values instead of patching a tensor view.
+- Staged whole-tile writes of a batch-last `DlpackStager` buffer: `kernel_set_qpos_staged` (still the one `KinematicSolver.set_qpos` calls), `kernel_set_dofs_velocity_staged`, `kernel_set_dofs_position_staged`, `kernel_control_dofs_staged`, `kernel_control_dofs_position_velocity_staged`.
+- Staged batch-first write: `kernel_set_qpos_rows_staged(qs_idx, envs_idx, values, rigid_info, rigid_config, is_broadcast)` mirrors `kernel_set_qpos` and reads `values[i_b_, i_q_]` (row 0 for every environment when `is_broadcast`), i.e. one row per environment named by `envs_idx` in its order, which is the contract `RigidSolver.set_qpos` shares with its torch path.
 ## misc.py — coupling, init, wake/hibernation, atomics, helpers
 - `linear_to_lower_tri`: linear index → (row, col) of a (strict) lower-triangular matrix.
 - Wake/sleep: `func_wakeup_island`, `func_wakeup_link`, `func_is_awake_link`, `func_is_awake_tree`, `func_hibernate_link`, `func_hibernate_island_if_settled`, `kernel_reset_hibernation`, `kernel_wakeup_coupled_links`.

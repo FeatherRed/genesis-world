@@ -62,6 +62,7 @@ from ..torch_free import (
     is_dlpack_source,
     mps_synchronize,
     read_view,
+    stage_kernel_values,
     to_numpy_values,
 )
 from .abd.accessor import (
@@ -150,7 +151,7 @@ from .abd.torch_free_kernels import (
     kernel_copy_dofs_pos,
     kernel_scatter_dofs_pos,
     kernel_set_dofs_position_staged,
-    kernel_set_qpos_staged,
+    kernel_set_qpos_rows_staged,
 )
 from .collider.collider import Collider
 
@@ -2434,28 +2435,69 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_qpos(self, qpos, qs_idx=None, envs_idx=None, *, skip_forward=False):
+        """Set the generalized positions (configuration) of the given qpos of the given environments.
+
+        Parameters
+        ----------
+        qpos : np.ndarray | gs.utils.DeviceView | torch.Tensor | DLPack producer
+            A host array, a zero-copy 'gs.utils.DeviceView', or any DLPack producer of shape
+            (len(envs_idx), *element_shape), holding one row per selected environment in the order of 'envs_idx', or a
+            single row of shape (1, *element_shape) broadcast to every selected environment.
+            With 'envs_idx' left to None, or naming every environment, a full (n_envs, *element_shape) tile is also
+            accepted, and the row of an environment is the value it is written as.
+            Both residencies apply the selection the same way: the torch path scatters the rows of the environments it
+            names, and the torch-free path stages them on the device before scattering them.
+        qs_idx : None | array_like, optional
+            The qpos to write. None to write the whole configuration. Defaults to None.
+        envs_idx : None | array_like | slice, optional
+            The environments to write, as an integer index array, a slice, or a boolean mask on the host or on the
+            device. None to write every environment. Defaults to None.
+        skip_forward : bool, optional
+            Whether to skip the forward kinematics and the contact clearing the new configuration would require.
+            Defaults to False.
+        """
         if self.constraint_solver is not None:
             self.constraint_solver.reset(envs_idx)
 
         if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(qpos):
-            # A compiled graph hands its configuration over as a DLPack capsule, which the state takes device to
-            # device: the values are staged batch-last, in the layout the write kernel reads them in
+            # A compiled graph hands its configuration over as a DLPack capsule, which writes every row it holds into
+            # the environment it names, the batch axis first, as the torch path scatters a tensor
             qs_idx_ = index_field(qs_idx, self.n_qs, "qs_idx")
             envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
-            values = self._stage_values(qpos, qs_idx_.shape[0], envs_idx)
-            # Teleporting a sleeping body must revive it, otherwise the new pose is silently dropped. Nothing can be
-            # hibernated while the scene is still being built.
-            if self._use_hibernation and self.is_built:
-                kernel_wake_up_entities_by_qs(
+            values_shape = dlpack_info(qpos).shape
+            n_rows = values_shape[0] if values_shape else 0
+            n_selected = envs_idx_.shape[0]
+            if n_rows not in (1, n_selected):
+                gs.raise_exception(
+                    f"The DLPack producer of shape {values_shape} cannot write the {qs_idx_.shape[0]} qpos of the "
+                    f"{n_selected} environments selected. A torch-free set_qpos takes a producer of shape "
+                    f"(len(envs_idx), n_qs) = ({n_selected}, {qs_idx_.shape[0]}), one row per selected environment in "
+                    f"the order of envs_idx, or a single row of shape (1, {qs_idx_.shape[0]}) broadcast to every "
+                    f"selected environment, the batch axis first in both cases."
+                )
+            # A selection naming no environment writes nothing at all, as the torch path scatters no row then
+            if n_selected > 0:
+                # Teleporting a sleeping body must revive it, otherwise the new pose is silently dropped. Nothing can be
+                # hibernated while the scene is still being built.
+                if self._use_hibernation and self.is_built:
+                    kernel_wake_up_entities_by_qs(
+                        qs_idx_,
+                        envs_idx_,
+                        self.dyn_state,
+                        self.constraint_solver.constraint_state,
+                        self.dyn_info,
+                        self.rigid_info,
+                        self.rigid_config,
+                    )
+                # 'stage_kernel_values' preserves the batch-first layout of the producer, and copies it device to device
+                kernel_set_qpos_rows_staged(
                     qs_idx_,
                     envs_idx_,
-                    self.dyn_state,
-                    self.constraint_solver.constraint_state,
-                    self.dyn_info,
+                    stage_kernel_values(qpos, gs.qd_float),
                     self.rigid_info,
                     self.rigid_config,
+                    n_rows == 1,
                 )
-            kernel_set_qpos_staged(qs_idx_, envs_idx_, values, self.rigid_info, self.rigid_config)
         elif gs.use_zerocopy and HAS_TORCH:
             data = qd_to_torch(self.rigid_info.qpos, transpose=True, copy=False)
             qs_mask = indices_to_mask(qs_idx)
@@ -2536,8 +2578,10 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             sol_params_ = _sanitize_sol_params(sol_params_.clone(), self._sol_min_timeconst)
         else:
             # Solver parameters are a handful of model values, so a torch-free scene sanitizes them on the host
+            # The sanitizer writes through views of its argument, which is a copy because 'broadcast_values' may return
+            # a read-only view
             sol_params_ = _sanitize_sol_params(
-                broadcast_values(sol_params, gs.tc_float, (7,), ("",)), self._sol_min_timeconst
+                np.array(broadcast_values(sol_params, gs.tc_float, (7,), ("",))), self._sol_min_timeconst
             )
             sol_params_ = device_tensor_from_numpy(sol_params_, gs.qd_float)
         kernel_set_global_sol_params(sol_params_, self.dyn_info, self.rigid_config)
@@ -2612,6 +2656,12 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 sol_params_ = sol_params_[None]
             else:
                 sol_params_ = _env_first_values(sol_params_)
+        if envs_idx is None:
+            # A kernel takes 'envs_idx' as an ndarray, so a torch-free scene cannot hand it None.
+            # Solver parameters shared by the whole batch state no environment, and the kernel reads no selection for
+            # them: a geom value, and a joint value under 'batch_joints_info=False', are written to every entry.
+            # The whole batch is handed over, as 'set_dofs_position' does, never the caller's selection.
+            envs_idx = index_field(None, self._B, "envs_idx")
 
         kernel_set_sol_params(inputs_idx, envs_idx, sol_params_, self.dyn_info, self.rigid_config, int(constraint_type))
 
@@ -2667,6 +2717,13 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 else:
                     tensor = _env_first_values(tensor)
             tensor_list[j] = tensor
+        if envs_idx_ is None:
+            # A kernel takes 'envs_idx' as an ndarray, so a torch-free scene cannot hand it None.
+            # Dofs info shared by the whole batch states no environment, and the 'kernel_set_dofs_*' kernels ignore
+            # 'envs_idx' under 'batch_dofs_info=False', which is what torch does with the selection of a non-batched
+            # write: it writes the 1-D values to the named dofs of every environment.
+            # The whole batch is handed over, as 'set_dofs_position' does, never the caller's selection.
+            envs_idx_ = index_field(None, self._B, "envs_idx")
         if name == "kp":
             kernel_set_dofs_kp(dofs_idx, envs_idx_, *tensor_list, self.dyn_info, self.rigid_config)
         elif name == "kv":

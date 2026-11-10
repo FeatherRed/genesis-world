@@ -10,6 +10,8 @@ below read the batch-last staging buffer of a 'DlpackStager' instead, one column
 The 'kernel_set_*'/'kernel_control_*' kernels of 'accessor.py' cannot read that buffer, since they index their values
 batch-first ('values[i_b, i_d]') while the staged buffer holds the batch axis last; the staged kernels below mirror them
 entry for entry instead, and reproduce their result bit-exactly.
+A qpos write stages the rows of the environments it selects instead, batch-first, which 'kernel_set_qpos_rows_staged'
+reads (see 'RigidSolver.set_qpos').
 Nothing here imports PyTorch: the buffers are plain kernel arguments, holding the environment axis first or last as each
 kernel states, and the state is the usual 'DynState' struct.
 """
@@ -27,6 +29,7 @@ __all__ = [
     "kernel_scatter_dofs_pos",
     "kernel_set_dofs_position_staged",
     "kernel_set_dofs_velocity_staged",
+    "kernel_set_qpos_rows_staged",
     "kernel_set_qpos_staged",
 ]
 
@@ -91,6 +94,28 @@ def kernel_set_qpos_staged(
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_q_, i_b_ in qd.ndrange(qs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(rigid_info.qpos))):
         rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[i_q_, envs_idx[i_b_]]
+
+
+@qd.kernel(fastcache=True)
+def kernel_set_qpos_rows_staged(
+    qs_idx: qd.types.ndarray(),
+    envs_idx: qd.types.ndarray(),
+    values: qd.types.ndarray(),
+    rigid_info: RigidInfo,
+    rigid_config: qd.template(),
+    is_broadcast: qd.template(),
+):
+    """Write the staged qpos values into the given qpos of the given environments, `values` being batch-first.
+
+    The kernel mirrors 'kernel_set_qpos' for a staged buffer, which holds one row per environment named by `envs_idx`,
+    in its order, rather than one row per environment of the solver: the value written to the qpos
+    `qs_idx[i_q_]` of the environment `envs_idx[i_b_]` is `values[i_b_, i_q_]`.
+    A broadcast producer holds a single row, which every selected environment takes.
+    """
+    qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
+    for i_q_, i_b_ in qd.ndrange(qs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(rigid_info.qpos))):
+        i_b_values = 0 if qd.static(is_broadcast) else i_b_
+        rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[i_b_values, i_q_]
 
 
 @qd.kernel(fastcache=True)
