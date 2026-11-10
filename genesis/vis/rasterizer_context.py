@@ -3,7 +3,6 @@ from functools import partial
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import numpy as np
-import torch
 import trimesh
 
 import genesis as gs
@@ -14,6 +13,7 @@ from genesis.engine.state_change import StateChange, Subscriber
 from genesis.ext import pyrender
 from genesis.ext.pyrender.jit_render import JITRenderer
 from genesis.utils.misc import qd_to_numpy, sanitize_index, tensor_to_array
+from genesis.utils.torch_compat import require_torch, torch
 
 if TYPE_CHECKING:
     from genesis.engine.sensors.base_sensor import Sensor
@@ -166,6 +166,7 @@ class SegmentationColorMap:
 
         # Store the generated map
         if self.to_torch:
+            require_torch("batch renderer")
             self.idxc_to_color = torch.from_numpy(rgb).to(device=gs.device)
         else:
             self.idxc_to_color = rgb

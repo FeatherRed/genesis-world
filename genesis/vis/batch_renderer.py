@@ -1,12 +1,12 @@
 import math
 
 import numpy as np
-import torch
 
 import genesis as gs
 from genesis.repr_base import RBC
 from genesis.constants import IMAGE_TYPE
 from genesis.utils.misc import qd_to_torch
+from genesis.utils.torch_compat import require_torch, torch
 
 from .camera import Camera
 from .rasterizer_context import SegmentationColorMap
@@ -271,6 +271,8 @@ class BatchRenderer(RBC):
     """
 
     def __init__(self, visualizer, renderer_options, vis_options):
+        require_torch("batch renderer")
+
         self._visualizer = visualizer
         self._lights = gs.List()
         self._use_rasterizer = renderer_options.use_rasterizer
