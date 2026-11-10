@@ -50,6 +50,8 @@ Reads: `Solver._read_data` returns `view_of`/`read_view` `DeviceView`s (batch ax
 State snapshots (`get_state`) do not alias: they copy through `torch_free.owned_copy`, a device-to-device `@qd.kernel` copy, which is what lets `scene.reset()` and `set_state` restore real values.
 Writes: numpy sources take the numpy branch of `Solver._sanitize_io_variables` into the existing `kernel_*` entrypoints; a DLPack producer (`__dlpack__`/`__dlpack_device__`, e.g. a compiled-graph output shaped `(B, n)`) is copied device to device with `hipMemcpy2DAsync` on the default HIP stream, which is the stream Quadrants launches on, so a write costs no host wait — `DlpackStager` for the per-value writes into a batch-last buffer, `torch_free.stage_kernel_values` for the batch-first whole-tile writes of `set_qpos`, the base link poses and the drone propeller RPM.
 `set_state`-style sources go through `torch_free.stage_kernel_values` too, and keep the synchronizing `copy_from_dlpack` bridge only as the fallback of a layout, dtype or backend its stream-ordered copy cannot take.
+An *opaque* producer — a DLPack source that is neither a `torch.Tensor` nor a NumPy array, i.e. a compiled graph's `core.Tensor` — is never indexed, `len()`-ed, iterated, `np.asarray`-ed or `from_dlpack`-ed to make a row-selection decision, in EITHER residency (`torch_free.is_opaque_producer`; `is_dlpack_source` alone is also true of a torch tensor).
+Its rows come from `dlpack_info(value).shape` and are picked by the kernel after `stage_kernel_values`, while a `torch.Tensor` and a NumPy array keep the path their own residency has always taken.
 errno stays device-resident: `_errno_latched` and its mask are qd fields, `get_error_envs_mask()` returns a `DeviceView` of the boolean `gs.qd_bool` mask buffer (`dtype == np.bool_`, `to_numpy()` is a host `bool` array, `__dlpack__` exports `kDLBool`), and `check_errno(blocking=False)` reads the host once every `ERRNO_CHECK_INTERVAL = 64` steps instead of every step.
 That mask view is live: the next `get_error_envs_mask()` rewrites the one buffer, so it must be consumed before the next call, and the snapshot is the host copy `mask.to_numpy()` (`DeviceView.contiguous()` returns `self` for the already-contiguous 1-D mask, so it is not a device snapshot); `clear_errno` accepts either form.
 Internal default environment selections travel through `envs_kernel_index` (`solvers/torch_free.py`): with PyTorch it is the scene's `_envs_idx`, without it the cached device `int32` tensor of `sanitize_index_values(envs_idx, -1, scene._B, 0, "envs_idx")`, which spares a host upload at every launch.
@@ -71,6 +73,10 @@ IPC-coupled scenes cannot be checkpointed yet (`Simulator.data`/`__getstate__` r
 Muscle actuation exists only for `FEM.Muscle`/`MPM.Muscle` materials; entity `assert_muscle` raises otherwise.
 `stable_neohookean` (FEM) has no Hessian, so implicit FEM is unsupported for it.
 `MPM.Base._default_Jp` stores solver state on the material object (tech debt).
+An opaque DLPack producer is only handled as a *value*: used as an index selection (`envs_idx`/`dofs_idx`), it still reaches `to_numpy_values`/`indices_to_mask`, which cannot read it — only `rigid_solver._host_link_indices` stages one.
+`KinematicSolver.set_base_links_pos`/`set_base_links_quat`/`set_vverts` have no producer branch and leak NumPy's raw `TypeError` for a device producer in a torch-free scene.
+The fixed-vertex guard of the rigid link-pose writes still reads an opaque producer back on the host through `_is_uniform_along_envs` (`_host_values`), which a device-resident producer cannot take.
+A producer write needs zero-copy: a recording scene refuses it with an actionable message rather than staging it.
 `boundaries/boundaries.py` leaks imported names (`np`, `qd`, `gs`, ...) because `__init__.py` does `from .boundaries import *` with no `__all__`.
 
 ## Dependencies
