@@ -58,7 +58,7 @@ State lives in Quadrants structs (`DynState`, `DynInfo`, `RigidInfo`, `Constrain
 ## torch_free_kernels.py — device-side setters of the torch-free write path
 - `kernel_copy_dofs_pos`, `kernel_scatter_dofs_pos`: rebuild a batch-first row of dof positions from device values instead of patching a tensor view.
 - Staged whole-tile writes of a batch-last `DlpackStager` buffer: `kernel_set_qpos_staged` (still the one `KinematicSolver.set_qpos` calls), `kernel_set_dofs_velocity_staged`, `kernel_set_dofs_position_staged`, `kernel_control_dofs_staged`, `kernel_control_dofs_position_velocity_staged`.
-- Staged batch-first write: `kernel_set_qpos_rows_staged(qs_idx, envs_idx, values, rigid_info, rigid_config, is_broadcast, is_tile)` mirrors `kernel_set_qpos` and reads `values[i_b_, i_q_]`, i.e. one row per environment named by `envs_idx` in its order, which is the contract `RigidSolver.set_qpos` shares with its torch path.
+- Staged batch-first write: `kernel_set_qpos_rows_staged(qs_idx, envs_idx, values, rigid_info, rigid_config, is_broadcast, is_tile)` mirrors `kernel_set_qpos` and reads `values[i_b_, i_q_]` without a template flag set, i.e. one row per environment named by `envs_idx` in its order, the form `RigidSolver.set_qpos` shares with its torch path.
 - Its `is_broadcast` template reads row 0 for every selected environment, and its `is_tile` template reads the row of the environment itself, `values[envs_idx[i_b_], i_q_]`, which is the whole `(n_envs, n_qs)` tile form of `RigidSolver.set_qpos`.
 ## misc.py — coupling, init, wake/hibernation, atomics, helpers
 - `linear_to_lower_tri`: linear index → (row, col) of a (strict) lower-triangular matrix.

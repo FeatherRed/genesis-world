@@ -10,8 +10,8 @@ below read the batch-last staging buffer of a 'DlpackStager' instead, one column
 The 'kernel_set_*'/'kernel_control_*' kernels of 'accessor.py' cannot read that buffer, since they index their values
 batch-first ('values[i_b, i_d]') while the staged buffer holds the batch axis last; the staged kernels below mirror them
 entry for entry instead, and reproduce their result bit-exactly.
-A qpos write stages the rows of the environments it selects instead, batch-first, which 'kernel_set_qpos_rows_staged'
-reads (see 'RigidSolver.set_qpos').
+A qpos write stages its producer batch-first instead, and 'kernel_set_qpos_rows_staged' picks the row of each
+environment, row 0, its row in the selection, or the row of the environment itself (see 'RigidSolver.set_qpos').
 Nothing here imports PyTorch: the buffers are plain kernel arguments, holding the environment axis first or last as each
 kernel states, and the state is the usual 'DynState' struct.
 """
@@ -108,9 +108,9 @@ def kernel_set_qpos_rows_staged(
 ):
     """Write the staged qpos values into the given qpos of the given environments, `values` being batch-first.
 
-    The kernel mirrors 'kernel_set_qpos' for a staged buffer, which holds one row per environment named by `envs_idx`,
-    in its order, rather than one row per environment of the solver: the value written to the qpos
-    `qs_idx[i_q_]` of the environment `envs_idx[i_b_]` is `values[i_b_, i_q_]`.
+    The kernel mirrors 'kernel_set_qpos' for a staged buffer: the value written to the qpos `qs_idx[i_q_]` of the
+    environment `envs_idx[i_b_]` is `values[i_b_, i_q_]` when the buffer holds one row per environment named by
+    `envs_idx`, in its order.
     A broadcast producer holds a single row, which every selected environment takes.
     A whole-tile producer holds one row per environment of the solver, and each selected environment takes the row of
     its own index, `values[envs_idx[i_b_], i_q_]`, the rows of the environments it leaves out being ignored.
