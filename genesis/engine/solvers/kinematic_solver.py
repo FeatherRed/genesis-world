@@ -60,15 +60,21 @@ from .rigid.abd.misc import (
     kernel_init_vvert_fields,
     kernel_update_heterogeneous_links_vgeom,
 )
-from .rigid.abd.torch_free_kernels import kernel_copy_dofs_pos, kernel_scatter_dofs_pos
+from .rigid.abd.torch_free_kernels import (
+    kernel_copy_dofs_pos,
+    kernel_scatter_dofs_pos,
+    kernel_set_dofs_position_staged,
+    kernel_set_dofs_velocity_staged,
+    kernel_set_qpos_staged,
+)
 from .torch_free import (
+    DlpackStager,
     broadcast_values,
     device_tensor_from_numpy,
     index_field,
     is_dlpack_source,
     read_view,
     to_numpy_values,
-    write_from_dlpack,
 )
 
 if TYPE_CHECKING:
@@ -84,10 +90,15 @@ def _host_array(field, *, transpose=False, copy=None):
 
     PyTorch is not needed to read a buffer back to the host, so a torch-free scene reads a zero-copy device view of it
     where a torch scene calls 'qd_to_numpy', whose shortcuts all go through PyTorch.
+    The transposition moves the batch axis, the last one of the shape the field declares, to the front, as 'qd_to_numpy'
+    does, which is not the last physical axis of a buffer of vectors.
     """
     if HAS_TORCH:
         return qd_to_numpy(field, transpose=transpose, copy=copy)
-    return view_of(field, transpose=transpose).to_numpy()
+    view = view_of(field)
+    if transpose and len(field.shape) > 1:
+        view = view.movedim(len(field.shape) - 1, 0)
+    return view.to_numpy()
 
 
 def _env_first_values(values):
@@ -118,9 +129,13 @@ def _offset_buffer_from_numpy(values):
 
     A torch tensor and a Quadrants ndarray of the same values are interchangeable kernel arguments, so the buffer is
     allocated with PyTorch only when it is installed, which converts it to the device and precision of the solver.
+    Quadrants has no zero-length buffer, and a solver holding no link nor visual geom is inactive, so a buffer without
+    any entry keeps one padding row, which no kernel reads.
     """
     if HAS_TORCH:
         return torch.from_numpy(values).to(device=gs.device, dtype=gs.tc_float)
+    if values.size == 0:
+        values = np.zeros((max(1, values.shape[0]), *values.shape[1:]), dtype=values.dtype)
     return device_tensor_from_numpy(values, gs.tc_float)
 
 
@@ -227,6 +242,8 @@ class KinematicSolver(Solver):
 
         self.qpos = None
         self._ik_scratch: IKScratch | None = None
+        # Staging buffers of the DLPack write path, allocated on its first use (see 'DlpackStager')
+        self._stager: DlpackStager | None = None
 
         self._is_forward_pos_updated: bool = False
         self._is_forward_vel_updated: bool = False
@@ -309,7 +326,11 @@ class KinematicSolver(Solver):
         if HAS_TORCH:
             self._base_links_idx = torch.tensor(base_links_idx, dtype=gs.tc_int, device=gs.device)
         else:
-            self._base_links_idx = device_tensor_from_numpy(np.array(base_links_idx, dtype=gs.np_int), gs.tc_int)
+            # Quadrants has no zero-length buffer, and a solver holding no base link is inactive, so its index set ends
+            # up one padding slot wide, which no kernel reads
+            self._base_links_idx = device_tensor_from_numpy(
+                np.array(base_links_idx or [0], dtype=gs.np_int), gs.tc_int
+            )
 
         # World<-authored pose offset, applied by the relative get/set methods. Links carry the morph offset composed
         # with the base-link inertial alignment (identity for non-base links); geoms and visual geoms carry only the
@@ -925,6 +946,16 @@ class KinematicSolver(Solver):
             return qd_to_torch(field, envs_idx, idx, transpose=True, copy=True)
         return read_view(field, envs_idx, idx)
 
+    def _read_state(self, field, envs_idx=None, idx=None):
+        """Read one buffer of the state in the layout of the getters, as a getter returning by value does.
+
+        A torch scene reads through '_read_data', which records the query in the autograd graph while the solver tracks
+        gradients; a torch-free scene has no graph to record it in, and reads the zero-copy device view of the region.
+        """
+        if HAS_TORCH:
+            return self._read_data(field, envs_idx, idx, copy=True)
+        return self._read_single(field, envs_idx, idx)
+
     def get_state(self, f=None):
         if self.is_active:
             state = KinematicSolverState(self._scene, self.sim.cur_step_global)
@@ -988,6 +1019,18 @@ class KinematicSolver(Solver):
     # ------------------------------------------------------------------------------------
     # ------------------------------------ control ---------------------------------------
     # ------------------------------------------------------------------------------------
+
+    def _stage_dlpack(self, src, num_values, envs_idx):
+        """Copy the DLPack producer `src` into the staging buffer the staged write kernels read.
+
+        A Quadrants field is contiguous along its first axis, so its batch-last view is not contiguous and the bridge of
+        'genesis.utils.device_buffer' cannot write into it: the values are staged in a contiguous buffer instead, device
+        to device, which the kernels of 'rigid.abd.torch_free_kernels' then scatter into the state (see 'DlpackStager').
+        The staging buffers are allocated once and reused, and the environment selection is the one of the write.
+        """
+        if self._stager is None:
+            self._stager = DlpackStager()
+        return self._stager.stage(src, num_values, self._B or self._scene.n_envs, envs_idx=envs_idx)
 
     @mutates(StateChange.GEOMETRY, links="links_idx")
     def set_base_links_pos(self, pos, links_idx=None, envs_idx=None, *, relative=False, skip_forward=False):
@@ -1088,8 +1131,15 @@ class KinematicSolver(Solver):
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_qpos(self, qpos, qs_idx=None, envs_idx=None, *, skip_forward=False):
         if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(qpos):
-            # A compiled graph hands its output over as a DLPack capsule, which the state takes device to device
-            write_from_dlpack(self.rigid_info.qpos, qpos, envs_idx=envs_idx, idx=qs_idx)
+            # A compiled graph hands its output over as a DLPack capsule, which the state takes device to device: the
+            # values are staged in a contiguous buffer, then scattered into the qpos of the given environments
+            kernel_set_qpos_staged(
+                index_field(qs_idx, self.n_qs, "qs_idx"),
+                index_field(envs_idx, self._B, "envs_idx"),
+                self._stage_dlpack(qpos, self.n_qs, envs_idx),
+                self.rigid_info,
+                self.rigid_config,
+            )
         elif gs.use_zerocopy and HAS_TORCH:
             data = qd_to_torch(self.rigid_info.qpos, transpose=True, copy=False)
             qs_mask = indices_to_mask(qs_idx)
@@ -1147,8 +1197,15 @@ class KinematicSolver(Solver):
     @mutates(StateChange.DYNAMICS, links=MutatedLinks.ARTICULATED)
     def set_dofs_velocity(self, velocity, dofs_idx=None, envs_idx=None, *, skip_forward=False):
         if gs.use_zerocopy and not HAS_TORCH and velocity is not None and is_dlpack_source(velocity):
-            # A compiled graph hands its output over as a DLPack capsule, which the state takes device to device
-            write_from_dlpack(self.dyn_state.dofs.vel, velocity, envs_idx=envs_idx, idx=dofs_idx)
+            # A compiled graph hands its output over as a DLPack capsule, which the state takes device to device: the
+            # values are staged in a contiguous buffer, then scattered into the velocity of the given environments
+            kernel_set_dofs_velocity_staged(
+                index_field(dofs_idx, self.n_dofs, "dofs_idx"),
+                index_field(envs_idx, self._B, "envs_idx"),
+                self._stage_dlpack(velocity, self.n_dofs, envs_idx),
+                self.dyn_state,
+                self.rigid_config,
+            )
         elif gs.use_zerocopy and HAS_TORCH:
             vel = qd_to_torch(self.dyn_state.dofs.vel, transpose=True, copy=False)
             dofs_mask = indices_to_mask(dofs_idx)
@@ -1220,31 +1277,48 @@ class KinematicSolver(Solver):
 
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_dofs_position(self, position, dofs_idx=None, envs_idx=None):
-        position, dofs_idx, envs_idx = self._sanitize_io_variables(
-            position, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
-        )
-        if HAS_TORCH:
-            if self.n_envs == 0:
-                position = position[None]
-            # The positions of the other dofs are read from the state, so that the gradient of a recorded write reaches
-            # both the positions given and the state the others are read from (see 'kernel_set_dofs_position')
-            positions = self._read_data(self.dyn_state.dofs.pos, envs_idx, None, copy=True)
-            positions[:, dofs_idx] = position
-            is_dof_set = torch.zeros((self.n_dofs,), dtype=gs.tc_bool, device=gs.device)
-            is_dof_set[dofs_idx] = True
-            write_envs_idx = envs_idx
-        else:
-            # Without a tensor view to patch, the whole row of dof positions is rebuilt on the device: the copy kernel
-            # reads it out of the state, the scatter overwrites the dofs the call names, and the write kernel is handed
-            # the whole batch, the environments it does not select getting the positions they already hold back (the
-            # configuration of a free or spherical joint is then derived again from those same dof positions)
+        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(position):
+            # A compiled graph hands its output over as a DLPack capsule, which the state takes device to device: the
+            # values are staged in a contiguous buffer, then scattered into the row of dof positions of each environment
+            dofs_idx = index_field(dofs_idx, self.n_dofs, "dofs_idx")
+            envs_idx = index_field(envs_idx, self._B, "envs_idx")
             positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
             kernel_copy_dofs_pos(positions, self.dyn_state)
-            kernel_scatter_dofs_pos(positions, dofs_idx, envs_idx, _batch_last_values(position, self.n_envs))
+            kernel_set_dofs_position_staged(
+                positions, dofs_idx, envs_idx, self._stage_dlpack(position, self.n_dofs, envs_idx)
+            )
             is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
             is_dof_set[to_numpy_values(dofs_idx)] = 1
             is_dof_set = device_tensor_from_numpy(is_dof_set, gs.tc_int)
             write_envs_idx = index_field(None, self._B, "envs_idx")
+        else:
+            position, dofs_idx, envs_idx = self._sanitize_io_variables(
+                position, dofs_idx, self.n_dofs, "dofs_idx", envs_idx, skip_allocation=True
+            )
+            if HAS_TORCH:
+                if self.n_envs == 0:
+                    position = position[None]
+                # The positions of the other dofs are read from the state, so that the gradient of a recorded write
+                # reaches both the positions given and the state the others are read from (see
+                # 'kernel_set_dofs_position')
+                positions = self._read_data(self.dyn_state.dofs.pos, envs_idx, None, copy=True)
+                positions[:, dofs_idx] = position
+                is_dof_set = torch.zeros((self.n_dofs,), dtype=gs.tc_bool, device=gs.device)
+                is_dof_set[dofs_idx] = True
+                write_envs_idx = envs_idx
+            else:
+                # Without a tensor view to patch, the whole row of dof positions is rebuilt on the device: the copy
+                # kernel reads it out of the state, the scatter overwrites the dofs the call names, and the write kernel
+                # is handed the whole batch, the environments it does not select getting the positions they already
+                # hold back (the configuration of a free or spherical joint is then derived again from those same dof
+                # positions)
+                positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
+                kernel_copy_dofs_pos(positions, self.dyn_state)
+                kernel_scatter_dofs_pos(positions, dofs_idx, envs_idx, _batch_last_values(position, self.n_envs))
+                is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
+                is_dof_set[to_numpy_values(dofs_idx)] = 1
+                is_dof_set = device_tensor_from_numpy(is_dof_set, gs.tc_int)
+                write_envs_idx = index_field(None, self._B, "envs_idx")
         kernel_set_dofs_position(
             is_dof_set, write_envs_idx, positions, self.dyn_info, self.rigid_info, self.rigid_config
         )
@@ -1300,7 +1374,7 @@ class KinematicSolver(Solver):
             _, links_idx, envs_idx = self._sanitize_io_variables(
                 None, links_idx, self.n_links, "links_idx", envs_idx, (3,), skip_allocation=True
             )
-        tensor = self._read_data(self.dyn_state.links.pos, envs_idx, links_idx, copy=True)
+        tensor = self._read_state(self.dyn_state.links.pos, envs_idx, links_idx)
         if relative and not self._links_offset_pos_is_identity[idx].all():
             # Stripping a body-frame offset is device tensor arithmetic, which a torch-free scene only skips because a
             # default morph leaves every offset of a link identity, the path its getters return the view on
@@ -1312,7 +1386,7 @@ class KinematicSolver(Solver):
         return tensor[0] if self.n_envs == 0 else tensor
 
     def get_links_quat(self, links_idx=None, envs_idx=None, *, relative=False):
-        tensor = self._read_data(self.dyn_state.links.quat, envs_idx, links_idx, copy=True)
+        tensor = self._read_state(self.dyn_state.links.quat, envs_idx, links_idx)
         idx = links_idx if isinstance(links_idx, int) else slice(None)
         if relative and not self._links_offset_quat_is_identity[idx].all():
             require_torch("relative link pose with a non-identity morph offset")
@@ -1395,7 +1469,7 @@ class KinematicSolver(Solver):
         return view_of(_tensor, transpose=False)
 
     def get_links_ang(self, links_idx=None, envs_idx=None):
-        tensor = self._read_data(self.dyn_state.links.cd_ang, envs_idx, links_idx, copy=True)
+        tensor = self._read_state(self.dyn_state.links.cd_ang, envs_idx, links_idx)
         return tensor[0] if self.n_envs == 0 else tensor
 
     def get_qpos(self, qs_idx=None, envs_idx=None):
