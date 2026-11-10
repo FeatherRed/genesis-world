@@ -68,6 +68,11 @@ Residency
 ``go2_device_rollout.py``) and therefore needs a non-CPU ``--evoxc-device``; both residencies run the
 same graphs on the same values and are expected to agree bit-for-bit.
 
+``--torch-free`` is the device residency with the Torch claim enforced: it refuses any configuration
+that would import Torch (a viewer, a host rollout, an XLA ``tell``) and, because device residency is
+single-backend, leaves ``tell()`` on the environment's own backend/device (``iree@rocm:0``) instead
+of forwarding ``--tell-backend`` / ``--pjrt-plugin``.
+
 Under ``PYTEST_VERSION`` the run shrinks to one generation of 20 steps unless the matching
 flags are given explicitly, so a smoke test cannot hang.
 """
@@ -170,7 +175,8 @@ def _parse_args(argv=None):
         choices=("numpy", "iree", "xla"),
         help=(
             "Evolution backend override. Defaults to the rollout backend and device, except on "
-            "ROCm where it defaults to xla. numpy = CPU; iree = IREE; xla = PJRT/XLA."
+            "ROCm where it defaults to xla. numpy = CPU; iree = IREE; xla = PJRT/XLA. Under "
+            "--torch-free evolution always runs on the rollout backend/device, so xla is rejected."
         ),
     )
     parser.add_argument(
@@ -189,8 +195,8 @@ def _parse_args(argv=None):
         action="store_true",
         help=(
             "Run the whole training loop without Torch: implies --residency device and defaults the "
-            "rollout graphs to IREE on rocm:0 (CUDA: cuda:0). Refuses a configuration that would "
-            "import torch, and reports whether torch reached the process."
+            "rollout graphs to IREE on rocm:0 (CUDA: cuda:0), with evolution on the same "
+            "backend/device. Refuses a configuration that would import torch."
         ),
     )
     parser.add_argument("-v", "--vis", action="store_true", help="Open the Genesis viewer.")
@@ -201,6 +207,21 @@ def _parse_args(argv=None):
 def _torch_in_process():
     """Whether ``torch`` has been imported in this process (the torch-free claim, reported only)."""
     return "torch" in sys.modules
+
+
+def _refuse_torch_import(torch_free, stage):
+    """Fail a ``--torch-free`` run as soon as Torch reaches the process.
+
+    A configuration that imports Torch is not the configuration the flag promises (the
+    device-resident loop creates no Torch tensor itself, so an import means an imported module
+    pulled it in), so it is refused here instead of being reported after the work is done.
+    """
+    if torch_free and _torch_in_process():
+        raise RuntimeError(
+            f"--torch-free was requested, but 'torch' reached the process {stage}; the device-resident "
+            "loop never imports it, so an imported module did -- refusing to continue with a claim that "
+            "is no longer true (report the module that pulled it in, or drop --torch-free)"
+        )
 
 
 # --- Main ---------------------------------------------------------------------------
@@ -234,8 +255,8 @@ def main(argv=None):
     )
     torch_free = bool(args.torch_free)
     if torch_free and args.residency != "device":
-        if args.residency != "numpy":
-            raise ValueError(f"--torch-free implies --residency device, got {args.residency!r}")
+        # Device residency is the only mode in which no host/Torch tensor is created at a graph
+        # boundary, so it is the only one a Torch-free process can run.
         args.residency = "device"
     backend = args.evoxc_backend or ("iree" if (args.gpu or torch_free) else "numpy")
     device = args.evoxc_device or ("cuda:0" if args.gpu and backend != "numpy" else None)
@@ -252,18 +273,36 @@ def main(argv=None):
             "--torch-free runs without Torch, but the built-in viewer is a Torch consumer; drop "
             "-v/--vis or drop --torch-free"
         )
-    if torch_free and args.tell_backend not in (None, "iree", "xla"):
+    if torch_free and args.tell_backend == "xla":
+        raise ValueError(
+            "--torch-free keeps the rollout and the evolution on one backend/device, and an XLA "
+            "payload cannot enter the IREE executables that run the rollout (there is no "
+            "device-to-device transfer between the two runtimes), so --tell-backend xla is not "
+            "available here; drop --tell-backend xla, evolution then runs on the env's own "
+            "backend/device (iree on the rollout device), or drop --torch-free"
+        )
+    if torch_free and args.tell_backend == "numpy":
         raise ValueError(
             "device residency runs every graph on one backend/device, so --torch-free cannot use "
-            f"--tell-backend {args.tell_backend!r}; use iree/xla on the same device as the rollout, "
-            "or drop --torch-free"
+            f"--tell-backend {args.tell_backend!r}; evolution runs on the rollout backend/device "
+            "(iree on the rollout device), or drop --torch-free"
         )
+    if torch_free and args.pjrt_plugin:
+        raise ValueError(
+            "--pjrt-plugin is an XLA compile option and --torch-free never compiles an XLA graph "
+            "(evolution runs on the IREE rollout backend); drop --pjrt-plugin or drop --torch-free"
+        )
+    # ``--torch-free`` is single-backend: ``tell_backend=None`` resolves to the env's own
+    # backend/device inside ``NeuroevolutionTrainer`` (iree on the rollout device), the trainer
+    # rejects any other pair, and no PJRT plugin is forwarded.
+    tell_backend = None if torch_free else args.tell_backend
+    plugin_path = None if torch_free else args.pjrt_plugin
     show_viewer = bool(args.vis) and not pytest_mode
 
-    if args.pjrt_plugin:
+    if plugin_path:
         # `Tensor.to` passes no options, so the option-less PJRT discovery used
         # for device staging must see the same plugin as the xla tell build.
-        os.environ.setdefault("EVOXC_PJRT_PLUGIN", str(args.pjrt_plugin))
+        os.environ.setdefault("EVOXC_PJRT_PLUGIN", str(plugin_path))
 
     if not gs._initialized:
         if args.gpu or torch_free:
@@ -296,6 +335,7 @@ def main(argv=None):
         seed_table=seed_table,
         residency=args.residency,
     )
+    _refuse_torch_import(torch_free, "while building the scene and the compiled graphs")
     trainer = NeuroevolutionTrainer(
         env,
         pop_size=args.pop_size,
@@ -306,8 +346,8 @@ def main(argv=None):
         max_nodes=MAX_NODES,
         max_conns=MAX_CONNS,
         species_size=SPECIES_SIZE,
-        tell_backend=args.tell_backend,
-        plugin_path=args.pjrt_plugin,
+        tell_backend=tell_backend,
+        plugin_path=plugin_path,
         output_dir=output_dir,
         seed_table=seed_table,
     )
@@ -324,6 +364,7 @@ def main(argv=None):
         )
 
     trainer.setup()
+    _refuse_torch_import(torch_free, "while building the evolution graph")
     summary = trainer.run()
 
     # The trainer owns the task-agnostic config keys; the Go2 run detail is merged into

@@ -136,7 +136,7 @@ from go2_evox_kernels import resolve_backend_device
 # ``go2_neat_kernels`` installs ``examples/neuroevolution`` on ``sys.path`` as its first
 # import-time action, so the shared layer below imports by bare module name and this module
 # needs no sys.path shim of its own.
-from go2_device_kernels import build_control, build_state
+from go2_device_kernels import build_control, build_episode_returns, build_state
 from go2_neat_kernels import (
     CLIP_ACTIONS,
     DEFAULT_COMMANDS,
@@ -386,7 +386,7 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         episodes_per_policy (int): ``seeding.EPISODES_PER_POLICY``, the row tiling factor.
         max_episode_length (int): ``ceil(episode_length_s / dt)``, baked into the advance graph.
         cache (ExecutableCache): The one cache the executables are built and looked up in.
-        executables (callable): Return the four env-side executables (six under the device
+        executables (callable): Return the four env-side executables (seven under the device
             residency), compiling only the missing ones; call it once per generation as the
             compile-once proof (every call after ``__init__`` is a hit).
     """
@@ -534,7 +534,7 @@ class Go2NeatEnv(BatchedEpisodeEnv):
             "actions": np.zeros((self.rows, NUM_ACTIONS), dtype=np.float32),
         }
 
-        # The four (device residency: six) executables are compiled once, here, and every
+        # The four (device residency: seven) executables are compiled once, here, and every
         # generation afterwards reuses them through the same cache (that is what ``cache_hits``
         # counts).
         self.cache = ExecutableCache()
@@ -542,9 +542,9 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         self._pop_shapes = tuple(np.shape(leaf) for leaf in self._trace_pop)
         executables = self.executables()
         self.obs_executable, self.policy_executable, self.advance_executable, self.fitness_executable = executables[:4]
-        # Only the device residency drives the two device-side graphs (see ``executables``).
-        self.control_executable, self.state_executable = (
-            executables[4:] if self.residency == "device" else (None, None)
+        # Only the device residency drives the three device-side graphs (see ``executables``).
+        self.control_executable, self.state_executable, self.episode_returns_executable = (
+            executables[4:] if self.residency == "device" else (None, None, None)
         )
         logger.info(
             "Go2NeatEnv: pop_size=%d rows=%d horizon=%d max_episode_length=%d backend=%s device=%s",
@@ -584,10 +584,11 @@ class Go2NeatEnv(BatchedEpisodeEnv):
         """Return the env-side executables, compiling only the ones the cache does not hold yet.
 
         The numpy residency drives the four graphs ``go2_neat_kernels`` owns (obs, policy, advance,
-        fitness). The device residency additionally drives the two graphs of
-        ``go2_device_kernels`` -- control (raw action -> PD targets) and state (live solver buffers
-        -> graph operands) -- which is why the tuple grows to six there: those two replace the host
-        array work the numpy path does around every graph call.
+        fitness). The device residency additionally drives the three graphs of
+        ``go2_device_kernels`` -- control (raw action -> PD targets), state (live solver buffers
+        -> graph operands) and episode-returns (the ``(rows,)`` -> ``(pop_size, episodes)`` reshape,
+        which cannot be a host-side ``reshape`` without leaving the device) -- which is why the
+        tuple grows to seven there.
         """
         cache = self.cache
         obs = cache.get(
@@ -633,17 +634,31 @@ class Go2NeatEnv(BatchedEpisodeEnv):
                 device=self.device,
             ),
         )
+        # ``get_error_envs_mask`` is a bool tensor with Torch and the zero-copy view of an int32
+        # buffer without it, and a compiled graph has one input dtype, so the state graph is built
+        # for the mask this scene hands out.
+        mask_is_bool = self._error_mask_is_bool()
         state = cache.get(
-            ("state", self.rows, NUM_ACTIONS, self.backend, self.device_name),
+            ("state", self.rows, NUM_ACTIONS, mask_is_bool, self.backend, self.device_name),
             lambda: build_state(
                 self.rows,
                 num_dof=NUM_ACTIONS,
                 qpos_dof_slot=self._qpos_dof_slot,
+                mask_is_bool=mask_is_bool,
                 backend=self.backend,
                 device=self.device,
             ),
         )
-        return obs, policy, advance, fitness, control, state
+        episode_returns = cache.get(
+            ("episode_returns", self.pop_size, EPISODES_PER_POLICY, self.backend, self.device_name),
+            lambda: build_episode_returns(self.pop_size, backend=self.backend, device=self.device),
+        )
+        return obs, policy, advance, fitness, control, state, episode_returns
+
+    def _error_mask_is_bool(self):
+        """Whether this scene hands out a boolean error mask (Torch present) instead of an int32 view."""
+        mask = self.scene.get_error_envs_mask()
+        return str(getattr(mask, "dtype", "")).rsplit(".", 1)[-1] == "bool"
 
     def _seeds_for(self, generation):
         """Return the ``(EPISODES_PER_POLICY,)`` int64 seeds of one generation."""
@@ -765,6 +780,7 @@ class Go2NeatEnv(BatchedEpisodeEnv):
                     self.fitness_executable,
                     self.control_executable,
                     self.state_executable,
+                    self.episode_returns_executable,
                 ),
                 pop_arrays=pop_arrays,
                 seeds=seeds,

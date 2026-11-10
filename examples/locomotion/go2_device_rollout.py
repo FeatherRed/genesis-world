@@ -29,14 +29,18 @@ buffers over, through DLPack in both directions:
 * graph output -> setter: the control graph's ``(rows, 12)`` targets go straight into
   ``robot.control_dofs_position(targets, _control_dof_slice)``, whose ``_stage_values`` copies them
   device to device with ``hipMemcpy2DAsync``; the per-generation ``(rows, 19)`` init-qpos tile goes
-  the same way into ``robot.set_qpos``, so an auto-reset copies nothing from the host.
+  the same way into ``robot.set_qpos``, so an auto-reset copies nothing from the host.  Those two
+  setter contracts are the staged torch-free one (whole tile + ``envs_idx``) and the torch one
+  (the selected rows), which ``_reset_rows`` adapts to.
 * graph output -> graph input: an executable's output is passed straight to the next one (the
   observation to the policy graph, the action to the control graph, the state blocks to the advance
   graph, ``returns`` / ``alive`` / ``episode_length`` back into the advance graph); ``IreeExecutable.
   run`` passes a same-device ``IreeDevicePayload`` through with no staging, so those values never
   leave the device.
-* ``episode_returns`` is a metadata-only reshape of the ``returns`` buffer
-  (``DeviceArray.reshape``), not a graph and not a copy.
+* ``episode_returns`` is the compiled ``(rows,)`` -> ``(pop_size, episodes)`` reshape graph
+  (``go2_device_kernels.run_episode_returns``), not a host copy: ``DeviceArray.reshape`` / any numpy
+  function on a device array returns a HOST ``numpy.ndarray``, so nothing in this module reshapes,
+  slices or ``np.*``-es a device value.
 * ``HalDevice``: taken from the first device payload this module sees
   (``tensor.data.device_array._device``), i.e. from the operands staged at the start of a generation;
   the adapter keeps one HAL device per ``core.Device``, so it is the executables' runtime device.
@@ -94,8 +98,9 @@ import quadrants as qd
 
 from genesis.utils.device_buffer import DeviceView
 from genesis.utils.geom import inv_quat, quat_to_xyz
+from genesis.utils.torch_compat import HAS_TORCH
 
-from go2_device_kernels import default_targets_tile, run_control, run_state
+from go2_device_kernels import default_targets_tile, run_control, run_episode_returns, run_state
 from go2_neat_kernels import (
     CLIP_ACTIONS,
     DEFAULT_COMMANDS,
@@ -112,7 +117,8 @@ def evaluate_device(env, *, executables, pop_arrays, seeds, init_qpos, row_init_
 
     Args:
         env (Go2NeatEnv): The environment whose scene, executables and static metadata are used.
-        executables (tuple): ``(obs, policy, advance, fitness, control, state)`` executables, all on
+        executables (tuple): ``(obs, policy, advance, fitness, control, state, episode_returns)``
+            executables, all on
             one device.
         pop_arrays (tuple): The four genome payload leaves of the generation, device-resident under
             the trainer (host arrays are staged, for a direct call).
@@ -156,6 +162,7 @@ class _DeviceRollout:
             self.fitness_executable,
             self.control_executable,
             self.state_executable,
+            self.episode_returns_executable,
         ) = executables
         self.rows = int(env.rows)
         self.device = self.policy_executable.device
@@ -237,25 +244,27 @@ class _DeviceRollout:
         """Materialize one output on the host (the payload owns an explicit readback)."""
         return tensor.data.to_host()
 
-    def _reshape(self, tensor, shape):
-        """Reinterpret one device buffer in another shape (metadata only: no copy, no graph).
-
-        ``evoxc.reshape`` is a trace-only op, and the ``(pop_size, episodes)`` view of the ``(rows,)``
-        returns is exactly the same memory laid out policy-major, so the HAL buffer view is reshaped
-        instead of copied.
-        """
-        import evoxc.core
-        from evoxc.backends.adapters.iree import IreeDevicePayload
-
-        array = tensor.data.device_array.reshape(tuple(int(dim) for dim in shape))
-        return evoxc.core.Tensor(IreeDevicePayload(array, self.device))
-
     @staticmethod
     def _sync():
         """Drain Quadrants' stream so the graphs (on IREE's queue) see the finished state."""
         qd.sync()
 
     # --- state ----------------------------------------------------------------------
+
+    def _reset_rows(self, envs_idx):
+        """Teleport the ended rows back to the generation's init pose (device to device).
+
+        The torch-free staged setter takes the whole ``(rows, n_qs)`` tile and applies ``envs_idx``
+        in its own kernel, while the torch setter scatters the rows it is given, so the tile is
+        handed over whole only when the scene has the staged setter.
+        """
+        if HAS_TORCH:
+            envs_idx = np.asarray(envs_idx, dtype=np.int32)
+            self.env.robot.set_qpos(
+                self._host_tile[envs_idx], envs_idx=envs_idx, zero_velocity=True, skip_forward=True
+            )
+            return
+        self.env.robot.set_qpos(self._tile, envs_idx=envs_idx, zero_velocity=True, skip_forward=True)
 
     def _block(self, field):
         """Contiguous batch-last ``(12, rows)`` slice of a live ``(n_dofs, rows)`` solver buffer."""
@@ -363,11 +372,22 @@ class _DeviceRollout:
         executable = self.fitness_executable
         return _outputs(evoxc.run(executable, returns, executable.n_policies, executable.episodes_per_policy))[0]
 
+    def _episode_returns(self, returns):
+        """The policy-major ``(pop_size, episodes)`` view of ``returns``, as a graph.
+
+        ``DeviceArray.reshape`` and every other numpy function on a device array return a HOST
+        copy, so the shape is changed by the compiled ``episode_returns`` graph instead (see
+        ``go2_device_kernels``); the result stays on the device.
+        """
+        return run_episode_returns(self.episode_returns_executable, returns)
+
     # --- generation -----------------------------------------------------------------
 
     def _stage_generation(self, row_init_qpos):
         """Stage the per-generation metadata tiles and write the reset pose of every row."""
         tile = np.ascontiguousarray(np.asarray(row_init_qpos, dtype=np.float32))
+        # The host tile is kept because a mid-loop reset writes selected rows only (see ``_reset_rows``).
+        self._host_tile = tile
         init_quat = np.ascontiguousarray(tile[:, 3:7])
         self._inv_init_quat = self._stage(inv_quat(init_quat))
         # The reset observation's joint block is metadata (the perturbed init qpos), so it is staged
@@ -399,19 +419,17 @@ class _DeviceRollout:
         alive = self._stage(np.ones(rows, dtype=bool))
         episode_length = self._stage(np.zeros(rows, dtype=np.int32))
         last_actions = self._stage(np.zeros((rows, NUM_ACTIONS), dtype=np.float32))
+        # The action a step executes is the one the policy emitted on the *previous* step
+        # (``go2_env``'s ``simulate_action_latency``: the numpy path writes ``last_actions`` of the
+        # previous iteration), so the targets of step 0 are the default pose and the control graph
+        # runs at the END of an iteration, producing the targets of the next one.
+        targets = self._default_targets_op
         ending = np.full(rows, END_REASONS["unfinished"], dtype=np.int8)
         host_alive = np.ones(rows, dtype=bool)
 
         steps = 0
         while steps < horizon:
             actions = self._run_policy(pop_operands, obs)
-            targets, last_actions = run_control(
-                self.control_executable,
-                raw_actions=actions,
-                done=done,
-                default_targets=self._default_targets_op,
-                clip_actions=CLIP_ACTIONS,
-            )
             env.robot.control_dofs_position(targets, env._control_dof_slice)
             env.scene.step()
             steps += 1
@@ -420,6 +438,15 @@ class _DeviceRollout:
             base_quat, dof_pos, dof_vel, error_flag = self._read_state()
             obs, returns, alive, done, episode_length = self._run_advance(
                 base_quat, dof_pos, dof_vel, actions, last_actions, returns, alive, episode_length, error_flag
+            )
+            # The targets and the ``action_rate`` reference of the NEXT step, exactly where the numpy
+            # path clips the action and zeroes the rows that just ended (``last_actions[reset] = 0``).
+            targets, last_actions = run_control(
+                self.control_executable,
+                raw_actions=actions,
+                done=done,
+                default_targets=self._default_targets_op,
+                clip_actions=CLIP_ACTIONS,
             )
             done_host = np.asarray(self._host(done), dtype=bool)
             if done_host.any():
@@ -430,7 +457,7 @@ class _DeviceRollout:
                 flags = np.asarray(self._host(error_flag), dtype=bool)
                 rpy_deg = quat_to_xyz(np.asarray(self._host(base_quat), dtype=np.float32), rpy=True, degrees=True)
                 ending = env._classify_endings(ending, done_host, rpy_deg, flags)
-                env.robot.set_qpos(self._tile, envs_idx=reset_idx, zero_velocity=True, skip_forward=True)
+                self._reset_rows(reset_idx)
                 if flags.any():
                     # The graph already latched the error into ``alive``/``returns``, and a row that is
                     # dead is never reset again, so the flag has to be dropped here or the next
@@ -448,7 +475,7 @@ class _DeviceRollout:
         env_steps = steps * rows
         return {
             "seeds": self._stage(np.ascontiguousarray(seeds, dtype=np.int64)),
-            "episode_returns": self._reshape(returns, (env.pop_size, env.episodes_per_policy)),
+            "episode_returns": self._episode_returns(returns),
             "returns": returns,
             "fitness": fitness,
             "steps": steps,
