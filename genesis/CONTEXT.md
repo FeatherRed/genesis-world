@@ -8,6 +8,7 @@ This node documents the package root (top-level modules + `logging/` + `assets/`
 ## API Surface (top-level modules)
 - `__init__.py` — the public namespace and lifecycle: `gs.init(...)` / `gs.destroy()`, `gs.register_external_module(init_fun, destroy_fun)` / `unregister_external_module`, `gs.GenesisException`.
   It configures Quadrants + torch, sets backend-dependent dtypes (`gs.qd_float`/`gs.np_float`/`gs.tc_float`, `gs.qd_vec3`, `gs.qd_mat3`, int/bool equivalents), zero-copy mode, and precision (32/64).
+  PyTorch is optional: it is imported through `utils/torch_compat.py` (`gs.HAS_TORCH`, `gs.require_torch`, the annotation-safe `gs.torch` placeholder), and torch-free mode sets `gs.tc_*` to their Quadrants counterparts and enables zero-copy on every backend but Metal (see the PyTorch note below).
   It re-exports: `gs.Scene`, `gs.Mesh`, `gs.states`, `gs.materials`, `gs.force_fields`, `gs.morphs`, `gs.sensors`, `gs.renderers`, `gs.surfaces`, `gs.textures`, `gs.recorders`, `gs.tools`, `gs.UID`, `gs.List`, `gs.utils.geom.*`, misc helpers (`raise_exception`, `assert_built`, ...), and the constants enums (`gs.JOINT_TYPE`, `gs.GEOM_TYPE`, `gs.CTRL_MODE`, `gs.integrator`, `gs.constraint_solver`, `gs.friction_cone`, `gs.contact_resolution`, `gs.broadphase_traversal`, `gs.link_ref_frame`, `gs.backend` with members `cpu/gpu/cuda/amdgpu/metal`).
   It also re-exports the ROCm HSA runtime helpers `gs.ensure_system_hsa_runtime` / `gs.inspect_hsa_runtime`, `gs.init` calling the former before any GPU work (see `gs.utils.HsaRuntimeStatus` and the ROCm HSA note below).
 - `_main.py` — the `gs` CLI (pyproject `[project.scripts] gs = "genesis._main:main"`): `gs launch` / `gs view` (deprecated alias) to inspect an asset in the viewer, `gs play` (ImGui joint controls), `gs replay` (`.gstraj` trajectory), `gs animate` (images → video).
@@ -15,7 +16,7 @@ This node documents the package root (top-level modules + `logging/` + `assets/`
 - `datatypes.py` — `gs.List[T]`: a pydantic-compatible, richly-repr'd list used everywhere for entity/link/geom collections.
 - `repr_base.py` — `RBC` (REPR Base Class): every Genesis class inherits it to get the colorized, property-listing `__repr__` and `__repr_name__` (`<gs.engine.entities.RigidEntity>` style).
 - `styles.py` — log theming: `THEME` (`dark`/`light`/`raw`), the `~kind<...>~` log markup parser, `COLORS`/`FORMATS`, and the module-level `style`/`colors`/`formats` singletons.
-- `typing.py` — pydantic `Annotated` type aliases used by `options/` (`Vec3FType`, `UnitVec3FType`, `RotationMatrixType`, `FrozenDictType`, ...) with strict validators (vector normalization, int coercion rejecting bool/float).
+- `typing.py` — pydantic `Annotated` type aliases used by `options/` (`Vec3FType`, `UnitVec3FType`, `RotationMatrixType`, `FrozenDictType`, ...) with strict validators (vector normalization, int coercion rejecting bool/float); `_to_float_grid` accepts a nested sequence, an array, a torch tensor or a `DeviceView`, so the grid aliases work torch-free.
 - `version.py` — `__version__ = "1.4.6"`.
 - `logging/` → `Logger`, `GenesisFormatter`, `TimeElapser` (see its CONTEXT.md).
 
@@ -56,6 +57,11 @@ Run `pytest -m required` (minimal merge set); default addopts exclude `benchmark
 `assets/` is ~hundreds of binary files (meshes/textures/robot models) — treat as static data; do not refactor or split it.
 Each child directory's CONTEXT.md holds the detailed per-module API; drill down before re-investigating.
 
+### PyTorch is optional
+`import genesis` and `gs.init`/`gs.destroy` work with no PyTorch installed; every module imports PyTorch through `genesis/utils/torch_compat.py` (`HAS_TORCH`, `torch`, `require_torch`, `no_grad`, `is_torch_tensor`) instead of `import torch`.
+Torch-free, `gs.device` is a `genesis.utils.device_buffer.DeviceInfo` (`type`/`index`) rather than a `torch.device`, the accessors return zero-copy `DeviceView`s instead of torch tensors, and `gs.tc_float`/`gs.tc_int`/`gs.tc_bool` are the Quadrants dtypes (`gs.qd_float`/`gs.qd_int`/`gs.qd_bool`).
+Zero-copy is enabled by default on `cpu`/`cuda`/`amdgpu` because the DLPack device views exist there, and `gs.init` raises a GenesisException on `metal`, unless `GS_ENABLE_ZEROCOPY=0` disables it.
+What stays torch-only: debug mode (`torch.use_deterministic_algorithms`, asked for with `require_torch("deterministic algorithms in debug mode")`), the `GS_TORCH_FORCE_CPU_DEVICE` fallback, the `torch<2.8`/`torch<2.9.1` version warnings (their flags `_IS_OLD_TORCH`/`_TORCH_MPS_SUPPORT_DLPACK_FIELD` default to `False`), and the gfx12 HIP mempool check, which queries `torch.cuda.get_device_properties()`.
 ### Device-memory interop (Quadrants ↔ torch)
 Solver state lives in Quadrants device buffers and reaches torch only through DLPack; there is no `__cuda_array_interface__` and no Python-level `data_ptr` on `qd.Tensor`.
 `genesis.utils.misc.qd_to_torch(field, copy=False)` returns a torch tensor that aliases the Quadrants buffer and caches it on the qd impl as `_tc`/`_T_tc`; entity/scene getters call it with `copy=True` (a fresh device clone — never a host copy).
