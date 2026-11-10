@@ -90,14 +90,33 @@ A same-backend device-resident loop is possible: `evoxc.run(tell_exe, ..., fitne
 The same xla tell through `run_tell`'s host staging costs 5.6 ms per generation, so at 24-32 rows the staging roundtrip, not the graph, is most of the wall time.
 The mixed design (rollout iree + tell xla) therefore cannot stay on the device: the fitness vector and every pop/species leaf cross the host each generation.
 
+## Residency contract v2 (`residency="numpy" | "device"`)
+A task env declares `residency` (`"numpy"` default, `"device"`), `backend` (the `evoxc` backend serving its device) and `device` (an `evoxc.Device`); `NeuroevolutionTrainer(..., residency=None)` inherits `env.residency`, so a device env is driven device-resident without a second switch.
+`residency="numpy"` is the reference path and is unchanged: host payload, host species leaves, host key, host fitness, `run_tell` staging every operand and every result.
+Under `residency="device"`, `evaluate(pop_arrays, generation)` receives the four payload leaves (`node_keys` int32 `(P,N)`, `node_attrs` float32 `(P,N,A)`, `conn_keys` int32 `(P,E,CK)`, `conn_attrs` float32 `(P,E,CA)`) as device tensors on `env.device` -- never a host array -- and returns `episode_returns` `(P,3)` float32, `returns` `(rows,)` float32, `fitness` `(P,)` float32 and `seeds` `(3,)` int64 as device tensors on that same device.
+Host values stay allowed in a device result only for `steps`, `env_steps`, `wall_time_s`, `steps_per_s`, `env_steps_per_s`, `cache_hits`, `cache_misses`, `end_reasons` and task diagnostics: those are logging, never training data.
+Device mode is single-backend: the trainer builds the fitness-rule, verification and tell graphs on `env.backend`@`env.device`, and an explicit `tell_backend`/`tell_device` that differs raises `ValueError` naming `evoxc`'s payload non-interchangeability (measured: an `IreeDevicePayload` input to an xla executable raises `DeviceError ... Got a tensor carrying IreeDevicePayload`, and the mirror case the same, because each adapter accepts only its own payload class on a device-resident run).
+No device-to-device transfer exists to bridge that: `np.from_dlpack(iree_tensor)` raises `BufferError: Unsupported device in DLTensor`, `evoxc.from_dlpack` rejects both device tensors and raw capsules, `XlaDevicePayload` exposes no `__dlpack__`, and `Tensor.to` refuses a payload source for a non-cpu target.
+Population initialization is device-first: `device_runtime.device_setup(...)` registers a device-resident `randkey` plus `backend`/`device`/`compile_options` and the host formulation triple (`"single"`/`"merge"`/`"host"`, taken from a numpy `Pipeline`) on a bare state, then calls `NEAT.setup`, so TensorNEAT's own initialization graph compiles and runs on the device; the CPU equivalent is bitwise identical to `Pipeline.setup()` (integer leaves, `randkey`, `generation` and all float leaves).
+The trainer verifies the device fitness against the rule in-graph: `evolution_graphs.build_verification` computes returns-vs-episode-returns tiling and fitness-vs-`nan_to_num(mean)` agreement on the device and returns two 0-d bools plus one 0-d max-abs-diff, the only values read back per generation besides the metrics.
+The fitness rule keeps one host owner (`env_base._fitness_from_episode_returns`) and one device transcription (`evolution_graphs.fitness_rule_graph`: `evoxc.nan_to_num(..., nan=0, posinf=0, neginf=0)` + `evoxc.reduce_mean`, float32), guarded against each other by `selfcheck.py`; device verification uses `atol=1e-5` because the xla fitness graph deviates up to 7.6e-6 from the host rule while iree is bitwise equal, and the numpy path keeps `atol=1e-6`.
+The trainer copies to the host only the per-generation metrics the record needs (`fitness`, `episode_returns`, `returns`, `seeds`), after the tell graph consumed the device tensors; `history.jsonl`/`summary.json` therefore stay byte-comparable with the numpy path.
+`env_base.validate_evaluation_device(result, pop_size, episodes, device=None)` checks the device result's keys, dtypes, shapes and device placement from tensor metadata only (no host materialization) and leaves the arithmetic to the verification graph.
+`device_runtime.assert_device_resident(value, device, name)`, `assert_host_value(value, name)` and `placement_map(values)` are the reusable placement assertions the tests node imports.
+`device_env.SyntheticDeviceEnv` is the simulator-free device env (deterministic genome -> returns graph, device fitness, host metrics) used by `selfcheck.py` and the `verify_device.py` measurement CLI; a cpu-kind device is accepted as a plumbing-only mode, and the pilots' envs refuse it.
+`verify_device.py` is the hardware verification CLI: it asserts placement at initialization, fitness, tell and the next generation's payload, prints compile time and steady per-generation wall time/throughput for pop 8 and pop 32, compares `fitness_history` against the numpy residency, and exits 0 with `SKIP` lines when no non-CPU `evoxc` device exists.
+
 ## Routing Table
 - `seeding.py` -> seed streams, seed table, reset perturbation draws (no simulator, no evoxc).
-- `env_base.py` -> the environment contract, its validator and the single fitness rule.
-- `evox_runtime.py` -> backend/device resolution, operand staging, payload specs.
-- `evolution_graphs.py` -> fitness + tell graphs, `ExecutableCache`.
+- `env_base.py` -> the environment contract, its host + device validators and the single fitness rule.
+- `evox_runtime.py` -> backend/device resolution, operand staging, payload specs (tensor- or ndarray-backed).
+- `evolution_graphs.py` -> fitness, fitness-rule, verification and tell graphs, `ExecutableCache`.
 - `policy_graphs.py` -> the one width-generic genome -> action graph.
-- `trainer.py` -> ask/rollout/fitness/tell loop, artifacts, logging.
-- `selfcheck.py` -> the node's own executable test suite.
+- `device_runtime.py` -> placement assertions, device key, device-first initialization, payload helpers.
+- `device_env.py` -> the simulator-free device-resident env used by the self-check and the hardware CLI.
+- `verify_device.py` -> the MI300X verification/measurement CLI for the device residency.
+- `trainer.py` -> ask/rollout/fitness/tell loop for both residencies, artifacts, logging.
+- `selfcheck.py` -> the node's own executable test suite (numpy, the device contract, and the accelerator check when present).
 - `benchmarks/` -> the Stage-3 measurement harness (`replay`/`throughput`/`residency-parity`/`train`/probes), its committed raw records under `results/` and `RESULTS.md`.
 - `../locomotion/go2_neat_env.py`, `../locomotion/go2_neat_kernels.py`, `../locomotion/go2_neat_train.py`, `../locomotion/go2_device_rollout.py` -> the Go2 walking pilot (siblings — read-only, escalate writes to parent).
 - `../drone/hover_neat_env.py`, `../drone/hover_kernels.py`, `../drone/hover_neat_train.py`, `../drone/hover_device_rollout.py`, `../drone/hover_neat_check.py` -> the drone hover pilot plus its smoke/parity CLI (siblings — read-only, escalate writes to parent).
