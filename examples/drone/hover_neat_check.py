@@ -221,6 +221,33 @@ def _perturbation(args):
     return Perturbation(*amplitudes)
 
 
+def _refuse_cpu_genesis_over_device_graphs(args):
+    """Refuse device-resident graphs over a CPU Genesis.
+
+    The device residency exports the graphs' output as a DLPack source on the graph's device and
+    writes it straight into the scene, so a CPU Genesis refuses it deep inside the simulator
+    (``Only a host DLPack source can be copied into a CPU buffer``); ``-g/--gpu`` puts Genesis on the
+    graph's device and is the way out.  Every mode that builds a scene reaches that path --
+    ``--residency device`` in the default scoring or ``--parity``, and ``--residency-parity``'s
+    second half, which is always the device residency -- while the numpy residency is host-staged
+    at both graph boundaries and therefore runs over a CPU Genesis in any mode.  ``--imports``
+    builds neither graph nor scene, so it is exempt.
+    """
+    if args.imports or not (args.residency_parity or args.residency == "device"):
+        return
+    backend, device = _resolve_targets(args)
+    kind = str(device).partition(":")[0].strip()
+    if args.gpu or not kind or kind == "cpu":
+        return
+    mode = "--residency-parity" if args.residency_parity else "--residency device"
+    raise SystemExit(
+        f"{mode} with graphs on {device} ({backend}) needs Genesis on the same device, but -g/--gpu was "
+        f"not given, so Genesis would stay on the CPU and refuse the device DLPack source the rollout "
+        f'exports ("Only a host DLPack source can be copied into a CPU buffer"); add -g/--gpu to put '
+        f"Genesis on the graphs' device, or drop --evoxc-device {device} to keep both on the CPU"
+    )
+
+
 def _print_rows(values):
     """Print ``name<TAB>max_abs_diff`` lines; return the names that exceed their tolerance."""
     for name, value in values.items():
@@ -232,13 +259,19 @@ def _leaf(result, name):
     """One training leaf of an evaluation result as a host array.
 
     ``residency="numpy"`` hands the four training leaves back as numpy arrays, while
-    ``residency="device"`` hands device tensors back, which the reporting of this script
-    materializes here (``Tensor.numpy`` is the explicit download, so nothing else in the script has
-    to know which residency produced the result).
+    ``residency="device"`` hands device tensors back.  A device tensor is materialized through its
+    payload's explicit readback (``data.to_host()``, the same call the device rollout's ``_host``
+    makes), because ``Tensor.numpy()`` needs host memory and raises ``DeviceError`` on a tensor that
+    lives on a GPU (``iree@rocm:0``); the ``numpy``/``np.asarray`` fallbacks stay for a value that
+    carries no such readback, so nothing else in the script has to know which residency produced
+    the result.
     """
     value = result[name]
     if isinstance(value, np.ndarray):
         return value
+    to_host = getattr(getattr(value, "data", None), "to_host", None)
+    if callable(to_host):
+        return np.asarray(to_host())
     numpy = getattr(value, "numpy", None)
     if callable(numpy) and not isinstance(value, (list, tuple)):
         return np.asarray(numpy())
@@ -720,6 +753,7 @@ def run_default(args):
 def main(argv=None):
     args = _parse_args(argv)
     _resolve_torch_free(args)
+    _refuse_cpu_genesis_over_device_graphs(args)
     if args.imports:
         code = run_imports()
     elif args.residency_parity:
