@@ -2400,7 +2400,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # device: the values are staged batch-last, in the layout the write kernel reads them in
             qs_idx_ = index_field(qs_idx, self.n_qs, "qs_idx")
             envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
-            values = self._stage_values(qpos, qs_idx_.shape[0], envs_idx_)
+            values = self._stage_values(qpos, qs_idx_.shape[0], envs_idx)
             # Teleporting a sleeping body must revive it, otherwise the new pose is silently dropped. Nothing can be
             # hibernated while the scene is still being built.
             if self._use_hibernation and self.is_built:
@@ -2758,7 +2758,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
                 envs_idx, self._B, "envs_idx"
             )
-            values = self._stage_values(force, dofs_idx_.shape[0], envs_idx_)
+            values = self._stage_values(force, dofs_idx_.shape[0], envs_idx)
             kernel_control_dofs_staged(
                 int(gs.CTRL_MODE.FORCE), dofs_idx_, envs_idx_, values, self.dyn_state, self.rigid_config
             )
@@ -2790,7 +2790,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
                 envs_idx, self._B, "envs_idx"
             )
-            values = self._stage_values(velocity, dofs_idx_.shape[0], envs_idx_)
+            values = self._stage_values(velocity, dofs_idx_.shape[0], envs_idx)
             kernel_control_dofs_staged(
                 int(gs.CTRL_MODE.VELOCITY), dofs_idx_, envs_idx_, values, self.dyn_state, self.rigid_config
             )
@@ -2823,7 +2823,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
                 envs_idx, self._B, "envs_idx"
             )
-            values = self._stage_values(position, dofs_idx_.shape[0], envs_idx_)
+            values = self._stage_values(position, dofs_idx_.shape[0], envs_idx)
             kernel_control_dofs_staged(
                 int(gs.CTRL_MODE.POSITION), dofs_idx_, envs_idx_, values, self.dyn_state, self.rigid_config
             )
@@ -2863,8 +2863,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             kernel_control_dofs_position_velocity_staged(
                 dofs_idx_,
                 envs_idx_,
-                self._stage_values(position, num_values, envs_idx_),
-                self._stage_values(velocity, num_values, envs_idx_),
+                self._stage_values(position, num_values, envs_idx),
+                self._stage_values(velocity, num_values, envs_idx),
                 self.dyn_state,
                 self.rigid_config,
             )
