@@ -7,7 +7,7 @@ This module holds what replaces it on the torch-free path, so that no solver rep
 - 'broadcast_values' and 'broadcast_tensor', the numpy and device counterparts of 'genesis.utils.misc.broadcast_tensor'.
 - 'sanitize_index_values' and 'sanitize_io_variables', the numpy counterpart of the index sanitizing of a getter.
 - 'device_tensor_from_numpy', 'index_field' and 'qd_field', the allocation of a kernel argument and of a solver buffer.
-- 'read_view', 'write_from_dlpack' and 'is_dlpack_source', the device-buffer bridge of 'genesis.utils.device_buffer'.
+- 'read_view', 'is_dlpack_source' and 'DlpackStager', the device-buffer bridge of 'genesis.utils.device_buffer'.
 - 'envs_selection' and 'mps_synchronize', which read the environments of a call and flush the stream after a write.
 
 Nothing here imports PyTorch except through 'torch_compat', and only 'mps_synchronize' touches it at all.
@@ -27,6 +27,7 @@ from genesis.utils.device_buffer import DeviceView, copy_from_dlpack, view_of
 from genesis.utils.torch_compat import HAS_TORCH, torch
 
 __all__ = [
+    "DlpackStager",
     "broadcast_tensor",
     "broadcast_values",
     "device_tensor_from_numpy",
@@ -456,10 +457,58 @@ def is_dlpack_source(value) -> bool:
 
 
 def read_view(field, envs_idx=None, idx=None):
-    """Zero-copy device view of `field`, with the batch axis leading and the given selections applied."""
-    return view_of(field, transpose=True, row_mask=envs_idx, col_mask=idx)
+    """Zero-copy device view of `field`, with the batch axis leading and the given selections applied.
+
+    The batch axis is the last one of the shape the field declares, which precedes the dimensions of a vector element, so
+    a buffer of vectors is transposed on that axis rather than on its last physical one, as 'qd_to_torch' does.
+    'envs_idx' selects the batch axis and 'idx' the element axis, both after the transposition.
+    """
+    view = view_of(field, row_mask=idx, col_mask=envs_idx)
+    if len(field.shape) > 1:
+        view = view.movedim(len(field.shape) - 1, 0)
+    return view
+
+
+class DlpackStager:
+    """Staging buffers that turn a DLPack producer into the contiguous batch-last values a kernel scatters into a field.
+
+    A Quadrants field is contiguous along its first axis, so its batch-last view is not contiguous, and the bridge of
+    'genesis.utils.device_buffer' refuses to write into it.
+    The stager copies the producer into a contiguous ndarray instead, device to device, which the staged kernels of
+    'genesis.engine.solvers.rigid.abd.torch_free_kernels' then scatter into the state.
+    """
+
+    def __init__(self) -> None:
+        self._buffers: dict[tuple[int, int], "qd.Ndarray"] = {}
+
+    def stage(self, src, num_values: int, num_envs: int, *, envs_idx=None) -> "qd.Ndarray":
+        """Write the DLPack producer `src` of shape (num_envs, num_values) into the staging buffer of that shape.
+
+        The buffer is allocated on first use and cached per shape, so a setter stages on every step without allocating.
+        `src` holds one row per environment of the solver, in environment order, and `envs_idx` only selects the columns
+        of the buffer that receive the values of those environments, in place, as the write into a state leaves them.
+        The columns `envs_idx` does not select hold whatever the buffer held before, and must never be read.
+        The copy runs device to device and synchronizes the HIP device, which costs one device synchronize per write
+        because the producer may still have writes pending on its own queue, and it moves no data to the host.
+        The dtype of `src` must be that of the buffer, 'gs.qd_float' for a float state, since the bridge casts nothing
+        and reports a mismatch with its own message.
+        """
+        buffer = self._buffers.get((num_values, num_envs))
+        if buffer is None:
+            buffer = qd.ndarray(gs.qd_float, shape=(num_values, num_envs))
+            self._buffers[(num_values, num_envs)] = buffer
+        # The bridge needs the selection on the host, where it splits the copy into contiguous runs
+        selection = envs_idx
+        if isinstance(selection, (qd.Tensor, qd.Field, qd.Ndarray)):
+            selection = to_numpy_values(selection)
+        copy_from_dlpack(buffer, src, transpose=True, envs_idx=selection)
+        return buffer
 
 
 def write_from_dlpack(dst, src, *, envs_idx=None, idx=None) -> None:
-    """Write the DLPack producer `src` into the batch-last buffer `dst`, over the given selections."""
+    """Write the DLPack producer `src` into `dst`, which must be a visibly contiguous batch-last buffer.
+
+    A Quadrants field is never one, so a write into the state goes through 'DlpackStager' and the staged kernels
+    instead; the bridge reports the non-contiguity of a field with its own message.
+    """
     copy_from_dlpack(dst, src, transpose=True, envs_idx=envs_idx, idx=idx)
