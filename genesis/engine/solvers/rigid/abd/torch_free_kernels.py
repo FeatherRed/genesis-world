@@ -12,6 +12,9 @@ batch-first ('values[i_b, i_d]') while the staged buffer holds the batch axis la
 entry for entry instead, and reproduce their result bit-exactly.
 A qpos write stages its producer batch-first instead, and 'kernel_set_qpos_rows_staged' picks the row of each
 environment, row 0, its row in the selection, or the row of the environment itself (see 'RigidSolver.set_qpos').
+A drone keeps the accumulated revolutions of its propellers in a device buffer in a torch-free scene, and its RPM values
+reach the device staged batch-first, so the two kernels below advance that accumulator and expand a single row of RPM to
+every environment (see 'RigidSolver.set_drone_propellers_rpm').
 Nothing here imports PyTorch: the buffers are plain kernel arguments, holding the environment axis first or last as each
 kernel states, and the state is the usual 'DynState' struct.
 """
@@ -23,6 +26,7 @@ from genesis.engine.solvers.rigid.data import DynState, RigidInfo
 from genesis.utils.data import eoa
 
 __all__ = [
+    "kernel_broadcast_drone_rpm",
     "kernel_control_dofs_position_velocity_staged",
     "kernel_control_dofs_staged",
     "kernel_copy_dofs_pos",
@@ -31,6 +35,7 @@ __all__ = [
     "kernel_set_dofs_velocity_staged",
     "kernel_set_qpos_rows_staged",
     "kernel_set_qpos_staged",
+    "kernel_update_drone_propeller_revs",
 ]
 
 
@@ -215,3 +220,47 @@ def kernel_control_dofs_position_velocity_staged(
         dyn_state.dofs.ctrl_mode[i_d, i_b] = gs.CTRL_MODE.POSITION
         dyn_state.dofs.ctrl_pos[i_d, i_b] = pos[i_d_, i_b]
         dyn_state.dofs.ctrl_vel[i_d, i_b] = vel[i_d_, i_b]
+
+
+# ------------------------------------------------------------------------------------------------
+# Drone propellers
+# ------------------------------------------------------------------------------------------------
+# A drone keeps the accumulated revolutions of its propellers in a buffer of its own, held batch-last like the state,
+# which a torch-free scene stores on the device rather than on the host: the kernels below advance it from the RPM
+# values a producer staged batch-first, and expand a single row of RPM to every environment of the scene.
+
+
+@qd.kernel(fastcache=True)
+def kernel_update_drone_propeller_revs(
+    propellers_revs: qd.types.ndarray(), propellers_rpm: qd.types.ndarray(), revs_limit: float
+):
+    """Advance the accumulated revolutions of every propeller of every environment by its RPM.
+
+    `propellers_revs` is the accumulator, batch-last of shape (n_propellers, n_envs), and `propellers_rpm` the RPM
+    values staged batch-first, of shape (n_envs, n_propellers), which is the layout 'kernel_set_drone_rpm' reads.
+    The value the accumulator wraps around to is `revs_limit`, the revolutions one full turn of a propeller takes,
+    as the torch path computes it on the host (`60 / dt`).
+    Every entry of the accumulator is read and written by exactly one thread, so the loop needs no serialization on top
+    of the memory-order axes.
+    """
+    for i_pp, i_b in qd.ndrange(
+        propellers_revs.shape[0], propellers_revs.shape[1], axes=qd.static(eoa(propellers_revs))
+    ):
+        propellers_revs[i_pp, i_b] = (propellers_revs[i_pp, i_b] + propellers_rpm[i_b, i_pp]) % revs_limit
+
+
+@qd.kernel(fastcache=True)
+def kernel_broadcast_drone_rpm(row: qd.types.ndarray(), out: qd.types.ndarray(), is_row: qd.template()):
+    """Write the RPM values of a single row to every environment of `out`, a batch-first buffer (n_envs, n_propellers).
+
+    The row is read as a bare row of `n_propellers` values when `is_row`, and as a single-row tile otherwise, which is
+    the shape a producer holding one row comes in: `(n_propellers,)` or `(1, n_propellers)` (see
+    'RigidSolver.set_drone_propellers_rpm').
+    Every entry of `out` is written once and read by one thread, so the loop needs no serialization on top of the
+    memory-order axes.
+    """
+    for i_b, i_pp in qd.ndrange(out.shape[0], out.shape[1], axes=qd.static(eoa(out))):
+        if qd.static(is_row):
+            out[i_b, i_pp] = row[i_pp]
+        else:
+            out[i_b, i_pp] = row[0, i_pp]
