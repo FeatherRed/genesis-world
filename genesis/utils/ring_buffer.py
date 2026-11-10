@@ -1,6 +1,5 @@
-import torch
-
 import genesis as gs
+from genesis.utils.torch_compat import require_torch, torch
 
 
 class TensorRingBuffer:
@@ -30,6 +29,9 @@ class TensorRingBuffer:
         buffer: torch.Tensor | None = None,
         idx: torch.Tensor | None = None,
     ):
+        # The buffer, its index and every access below are torch tensors, so the whole class is refused up front
+        # rather than failing on the first allocation, which would report a bare TypeError instead of the reason
+        require_torch("the tensor ring buffer")
         if buffer is None:
             self.buffer = torch.empty((N, *shape), dtype=dtype, device=gs.device)
         else:

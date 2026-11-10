@@ -12,7 +12,6 @@ from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
-import torch
 
 import filelock
 from pxr import Sdf, Usd, UsdGeom, UsdPhysics, UsdShade
@@ -21,6 +20,8 @@ import genesis as gs
 import genesis.utils.mesh as mu
 from genesis.constants import USD_FORMATS
 from genesis.utils.cache import get_usd_bake_path, get_usd_zip_path
+from genesis.utils.device_buffer import zero_copy_supported
+from genesis.utils.torch_compat import HAS_TORCH, torch
 
 from .usd_material import parse_material_preview_surface
 from .usd_utils import extract_scale
@@ -128,7 +129,14 @@ class UsdContext:
         # detect if baking is needed
         self._need_bake = HAS_OMNIVERSE_KIT_SUPPORT
         if HAS_OMNIVERSE_KIT_SUPPORT:
-            if not torch.cuda.is_available():
+            # Baking renders materials on a GPU that must be directly addressable from the simulation buffers, which
+            # is what 'zero_copy_supported' reports. Without PyTorch there is no torch device to probe, so the
+            # decision is taken from the Quadrants backend alone instead of querying torch.
+            if HAS_TORCH:
+                is_bake_gpu_available = torch.cuda.is_available()
+            else:
+                is_bake_gpu_available = gs.backend in (gs.cuda, gs.amdgpu) and zero_copy_supported()
+            if not is_bake_gpu_available:
                 gs.logger.warning("USD baking requires CUDA GPU. USD baking will be disabled.")
                 self._need_bake = False
         else:

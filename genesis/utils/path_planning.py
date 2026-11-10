@@ -2,15 +2,15 @@ import time
 from abc import ABC, abstractmethod
 from typing import TYPE_CHECKING
 
-import torch
-import torch.nn.functional as F
-
 import quadrants as qd
 
 import genesis as gs
 import genesis.utils.geom as gu
 from genesis.engine.solvers.rigid.collider.data import ColliderState
 from genesis.engine.solvers.rigid.data import DynInfo, DynState, RigidInfo
+from genesis.utils.torch_compat import require_torch, torch
+
+F = torch.nn.functional
 
 if TYPE_CHECKING:
     from genesis.engine.solvers.rigid.rigid_solver import RigidSolver
@@ -18,6 +18,9 @@ if TYPE_CHECKING:
 
 class PathPlanner(ABC):
     def __init__(self, entity):
+        # Sampling, collision checking and the returned paths are all torch tensors and interpolated with torch, so
+        # the planners are refused as soon as one is instantiated instead of deep inside a search
+        require_torch("the RRT path planner")
         self._entity = entity
         self._solver: "RigidSolver" = entity._solver
 
@@ -524,6 +527,7 @@ class RRT(PathPlanner):
         obj_entity=None,
         envs_idx=None,
     ):
+        require_torch("the RRT path planner")
         assert self._solver.n_envs > 0 or envs_idx is None
 
         qpos_cur, qpos_goal, qpos_start, envs_idx = self._sanitize_qposs(qpos_goal, qpos_start, envs_idx)
@@ -906,6 +910,7 @@ class RRTConnect(PathPlanner):
         obj_entity=None,
         envs_idx=None,
     ):
+        require_torch("the RRTConnect path planner")
         assert self._solver.n_envs > 0 or envs_idx is None
 
         qpos_cur, qpos_goal, qpos_start, envs_idx = self._sanitize_qposs(qpos_goal, qpos_start, envs_idx)
@@ -1084,6 +1089,7 @@ def align_waypoints_length(path: torch.Tensor, mask: torch.Tensor, num_points: i
     -------
         A new 2D PyTorch tensor [num_points, B, Dof]
     """
+    require_torch("waypoint alignment for the RRT path planner")
     t_path = path.permute(1, 2, 0)  # [B, Dof, N]
     res = torch.zeros(
         (num_points, t_path.shape[0], t_path.shape[1]), dtype=gs.tc_float, device=gs.device
@@ -1107,6 +1113,7 @@ def rrt_valid_mask(tensor: torch.Tensor) -> torch.Tensor:
     tensor: torch.Tensor
         path tensor in [N, B]
     """
+    require_torch("the RRT path planner")
     mask = (tensor > 0.0).to(gs.tc_float)  # N, B
     mask_float = mask.T[:, None]  # B 1, N
     kernel = torch.ones((1, 1, 3), device=tensor.device, dtype=gs.tc_float)
@@ -1124,6 +1131,7 @@ def rrt_connect_valid_mask(tensor: torch.Tensor) -> torch.Tensor:
     tensor: torch.Tensor
         path tensor in [N, B]
     """
+    require_torch("the RRTConnect path planner")
     mask = (tensor > 0.0).to(gs.tc_float)  # N, B
     mask_float = mask.T[:, None]  # B 1, N
     kernel = torch.ones(1, 1, 3, device=tensor.device, dtype=gs.tc_float)

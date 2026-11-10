@@ -3,12 +3,13 @@ from collections.abc import Iterable, Sequence
 from concurrent.futures import ThreadPoolExecutor, Executor
 from functools import partial
 
-import torch
 import numpy as np
 
 import genesis as gs
 from genesis.constants import IMAGE_TYPE
+from genesis.utils.device_buffer import DeviceView
 from genesis.utils.misc import tensor_to_array
+from genesis.utils.torch_compat import torch
 
 
 def as_grayscale_image(
@@ -195,6 +196,10 @@ class FrameImageExporter:
             # Convert data to numpy
             if isinstance(imgs_data, torch.Tensor):
                 imgs_data = tensor_to_array(imgs_data)
+            elif isinstance(imgs_data, DeviceView):
+                # A torch-free device view exposes no array protocol, so it must be converted explicitly, and this is
+                # the one place where copying the pixels back to the host is required anyway
+                imgs_data = imgs_data.to_numpy()
             else:
                 imgs_data = np.asarray(imgs_data)
 
