@@ -78,7 +78,9 @@ def numpy_dtype(dtype) -> np.dtype:
     try:
         return np.dtype(dtype)
     except TypeError:
-        if HAS_TORCH and isinstance(dtype, torch.dtype):
+        # The configured dtypes 'gs.tc_*' hold a torch dtype even on a torch-free path, so the class of the dtype
+        # decides, not the flag of this module, which an emulation switches off while PyTorch stays importable
+        if isinstance(dtype, torch.dtype):
             return np.dtype(str(dtype).rsplit(".", 1)[-1])
         return np.dtype(to_numpy_type(dtype))
 
