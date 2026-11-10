@@ -3,8 +3,6 @@ import weakref
 from collections.abc import Iterable, Iterator
 from typing import TYPE_CHECKING
 
-import torch
-
 import genesis as gs
 from genesis.engine.solvers.base_solver import BackwardErrorCode
 from genesis.grad.bridge import LaunchRecorder, Operation, RolloutGraph
@@ -12,8 +10,10 @@ from genesis.options.morphs import Morph
 from genesis.options.solvers import IPCCouplerOptions, LegacyCouplerOptions, SAPCouplerOptions
 from genesis.repr_base import RBC
 from genesis.utils.data import ArrayItem, DataItem, DataKind, iter_data
+from genesis.utils.device_buffer import DeviceView, view_of
 from genesis.utils.misc import indices_to_mask, qd_destroy_data, qd_to_numpy, qd_to_torch
 from genesis.utils.tools import StepTimer
+from genesis.utils.torch_compat import HAS_TORCH, no_grad, require_torch, torch
 
 from .couplers import IPCCoupler, LegacyCoupler, SAPCoupler
 from .couplers.rigid_mpm_hybrid import kernel_update_hybrid_soft_part
@@ -23,6 +23,19 @@ from .solvers import FEMSolver, KinematicSolver, MPMSolver, PBDSolver, RigidSolv
 from .solvers.base_solver import GravityMixin, Solver, TimeBasedMixin, merge_errno
 from .state_change import StateChange, Subscriber
 from .states.solvers import SimState, SimulatorCheckpoint, SolverCheckpoint
+from .torch_free import (
+    envs_index,
+    envs_index_field,
+    kernel_clear_counters,
+    kernel_increment_counters,
+    kernel_or_mask,
+    kernel_zero_mask,
+    mask_field,
+    mask_indices,
+    steps_field,
+    steps_from_values,
+    steps_values,
+)
 
 if TYPE_CHECKING:
     from genesis.engine.entities.base_entity import Entity, EntityDescription
@@ -39,7 +52,7 @@ def restore_checkpoints(solvers_checkpoints: Iterable[tuple["Solver", SolverChec
     Metal."""
     for solver, checkpoint in solvers_checkpoints:
         solver.load_checkpoint(checkpoint, boundary_only=True)
-    if gs.use_zerocopy.is_supported and gs.backend == gs.metal:
+    if HAS_TORCH and gs.use_zerocopy.is_supported and gs.backend == gs.metal:
         torch.mps.synchronize()
 
 
@@ -84,7 +97,7 @@ class Simulator(RBC):
                 solver.check_errno()
                 solver.reset_grad()
             # One flush for the zero-copy writes of every solver (see qd_zero_grad in misc.py)
-            if gs.use_zerocopy.is_supported and gs.backend == gs.metal:
+            if HAS_TORCH and gs.use_zerocopy.is_supported and gs.backend == gs.metal:
                 torch.mps.synchronize()
 
         def end_backward_pass():
@@ -224,7 +237,11 @@ class Simulator(RBC):
             solver._substep_dt = self._substep_dt
 
         # Counted per environment to support per-env reset, as steps rather than seconds to avoid drifting over time.
-        self._steps = torch.zeros((self._B,), dtype=gs.tc_int, device=gs.device)
+        # Without PyTorch the counters live in a Quadrants field, which the kernels of a step advance (see 'step').
+        if HAS_TORCH:
+            self._steps = torch.zeros((self._B,), dtype=gs.tc_int, device=gs.device)
+        else:
+            self._steps = steps_field(self._B)
 
         # solvers
         # IPCCoupler needs full substep flow for pre/post coupling phases
@@ -267,15 +284,19 @@ class Simulator(RBC):
                 solver.subscribe(Subscriber(frozenset((StateChange.MODEL,)), callback=self._rollout_graph.invalidate))
 
         # On CPU, the flags of the solvers are merged straight from their numpy views (see 'merge_errno'), and whether
-        # any env is flagged spares the calls of 'check_errno' at every step but those that raise
+        # any env is flagged spares the calls of 'check_errno' at every step but those that raise. A torch-free scene
+        # has no such view: its solvers merge the flags into their own device buffers, and the masks they keep are
+        # merged on the device on demand (see 'get_error_envs_mask').
         self._errno_views = None
         self._has_errno_flags = False
-        if gs.backend == gs.cpu and gs.use_zerocopy.is_supported:
+        if HAS_TORCH and gs.backend == gs.cpu and gs.use_zerocopy.is_supported:
             self._errno_views = [
                 (solver._errno_latched.numpy(), qd_to_numpy(solver._errno, copy=False))
                 for solver in self._active_solvers
                 if solver._errno is not None
             ]
+        elif not HAS_TORCH:
+            self._errno_mask = mask_field(self._B)
 
         self._step_timer.add_phases("physics", "sensors")
         self._sensor_manager.build()
@@ -300,10 +321,13 @@ class Simulator(RBC):
             if solver.n_entities > 0:
                 solver.set_state(0, solver_state, envs_idx)
 
-        if envs_idx is None:
-            self._steps.zero_()
+        if HAS_TORCH:
+            if envs_idx is None:
+                self._steps.zero_()
+            else:
+                self._steps[indices_to_mask(envs_idx)] = 0
         else:
-            self._steps[indices_to_mask(envs_idx)] = 0
+            kernel_clear_counters(self._steps, envs_index_field(envs_idx, self._B))
         self._restart(envs_idx)
 
     def _restart(self, envs_idx=None):
@@ -314,7 +338,7 @@ class Simulator(RBC):
         for solver in self._active_solvers:
             solver.reset_grad()
         # One flush for the zero-copy writes of every solver (see qd_zero_grad in misc.py)
-        if gs.use_zerocopy.is_supported and gs.backend == gs.metal:
+        if HAS_TORCH and gs.use_zerocopy.is_supported and gs.backend == gs.metal:
             torch.mps.synchronize()
         self._rollout_graph.restart()
         self._is_forward_ready = True
@@ -349,7 +373,8 @@ class Simulator(RBC):
                 "A scene coupled by IPC cannot be checkpointed yet: the IPC world holds state of its own."
             )
         return SimulatorCheckpoint(
-            steps=self._steps.clone(),
+            # A torch-free scene keeps its counters in a Quadrants field, which a record reads back to the host
+            steps=self._steps.clone() if HAS_TORCH else steps_values(self._steps),
             solvers={type(solver).__name__: solver.__getstate__() for solver in self._active_solvers},
         )
 
@@ -367,9 +392,12 @@ class Simulator(RBC):
         self._restart()
         for solver in self._active_solvers:
             solver.__setstate__(state.solvers[type(solver).__name__])
-        self._steps[:] = torch.as_tensor(state.steps, device=gs.device)
+        if HAS_TORCH:
+            self._steps[:] = torch.as_tensor(state.steps, device=gs.device)
+        else:
+            steps_from_values(self._steps, state.steps)
         # Flush the zero-copy writes of fill_data on Metal.
-        if gs.use_zerocopy.is_supported and gs.backend == gs.metal:
+        if HAS_TORCH and gs.use_zerocopy.is_supported and gs.backend == gs.metal:
             torch.mps.synchronize()
 
     def check_errno(self, blocking: bool = True):
@@ -377,15 +405,30 @@ class Simulator(RBC):
         for solver in self._active_solvers:
             solver.check_errno(blocking)
 
-    def get_error_envs_mask(self) -> torch.Tensor:
-        """Return whether each env flagged an error in any solver since its last reset."""
+    def get_error_envs_mask(self) -> "torch.Tensor | DeviceView":
+        """Return whether each env flagged an error in any solver since its last reset.
+
+        A torch-free scene merges the masks of the solvers into one device-resident buffer in a kernel and returns the
+        zero-copy view of it, which the next call rewrites, where the torch path returns a boolean tensor of its own.
+        """
+        if not HAS_TORCH:
+            kernel_zero_mask(self._errno_mask)
+            for solver in self._active_solvers:
+                kernel_or_mask(self._errno_mask, solver._errno_mask)
+            return view_of(self._errno_mask)
         envs_mask = torch.zeros((self._B,), dtype=torch.bool, device=gs.device)
         for solver in self._active_solvers:
             envs_mask |= solver.get_error_envs_mask()
         return envs_mask
 
     def clear_errno(self, envs_idx=None):
-        """Clear the errors every solver flagged for the given envs, all of them if None."""
+        """Clear the errors every solver flagged for the given envs, all of them if None.
+
+        `envs_idx` is an index selection, or the mask 'get_error_envs_mask' returned, which a torch-free scene reads
+        back to the host: a mask flags entries rather than naming them, as a boolean one does without PyTorch.
+        """
+        if isinstance(envs_idx, DeviceView):
+            envs_idx = mask_indices(envs_idx)
         for solver in self._active_solvers:
             solver.clear_errno(envs_idx)
 
@@ -405,7 +448,7 @@ class Simulator(RBC):
 
         with self._step_timer.phase("physics"):
             if self._rigid_only and not self._requires_grad:  # "Only Advance!" --Thomas Wade :P
-                self._steps += 1
+                self._increment_steps()
                 for _ in range(self._substeps):
                     self.rigid_solver.substep(self.cur_substep_local)
                     self._cur_substep_global += 1
@@ -428,12 +471,19 @@ class Simulator(RBC):
                 solver.update_errno()
 
         # The sensors read the state for themselves, outside of the autograd graph of a differentiable rollout
-        with self._step_timer.phase("sensors"), torch.no_grad():
+        with self._step_timer.phase("sensors"), no_grad():
             self._sensor_manager.step()
+
+    def _increment_steps(self):
+        """Add one step to the counter of every environment, in place on the device either way."""
+        if HAS_TORCH:
+            self._steps += 1
+        else:
+            kernel_increment_counters(self._steps)
 
     def _step(self):
         """Run the substeps of a step, rolling the frames the solvers hold over at the end of each window of them."""
-        self._steps += 1
+        self._increment_steps()
         for _ in range(self._substeps):
             self.substep(self.cur_substep_local)
             self._cur_substep_global += 1
@@ -491,6 +541,8 @@ class Simulator(RBC):
                         self.rigid_solver.clear_external_force()
             recorder.reverse()
         self._cur_substep_global = substep_start
+        # The counters of the environments are the tensor of the torch path, a differentiable rollout requiring PyTorch
+        require_torch("differentiable simulation")
         self._steps.copy_(steps_start)
 
     def substep(self, f):
@@ -553,9 +605,13 @@ class Simulator(RBC):
     # ------------------------------------------------------------------------------------
 
     @property
-    def steps(self) -> torch.Tensor:
-        """The number of steps each environment has run since its last reset, of shape [B]."""
-        return self._steps
+    def steps(self) -> "torch.Tensor | DeviceView":
+        """The number of steps each environment has run since its last reset, of shape [B].
+
+        A torch-free scene returns the zero-copy view of the Quadrants field holding them, in which a non-zero entry is
+        the number of steps the environment ran.
+        """
+        return self._steps if HAS_TORCH else view_of(self._steps)
 
     @property
     def dt(self) -> float:
@@ -632,7 +688,11 @@ class Simulator(RBC):
         Environments are stepped and reset independently, so simulated time is per environment, and this is where it
         is read from.
         """
-        time = self._steps[indices_to_mask(envs_idx)].to(dtype=gs.tc_float) * self._dt
+        if HAS_TORCH:
+            time = self._steps[indices_to_mask(envs_idx)].to(dtype=gs.tc_float) * self._dt
+        else:
+            # A read of the counters, which costs the host copy its caller asked for
+            time = steps_values(self._steps)[envs_index(envs_idx, self._B)].astype(gs.np_float) * self._dt
         return time[0] if self.n_envs == 0 else time
 
     @property
@@ -681,6 +741,8 @@ class StepOperation(Operation):
         return ()
 
     def backward(self) -> tuple[torch.Tensor | None, ...]:
+        # The grads of a differentiable rollout are read, compared and stacked as the tensors of the torch path
+        require_torch("differentiable simulation")
         self._sim._reverse(self._substep_start, self._steps_start, self._checkpoints)
         # The adjoint of every earlier step derives from this one, so an adjoint that is not finite raises during the
         # pass, naming the step a shorter horizon would have to stop before. It is read from every array of the state
