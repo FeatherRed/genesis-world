@@ -9,7 +9,7 @@ It does not define any physics: the solvers (see `../engine/solvers/`) implement
 
 ### bridge.py — the autograd graph and the launch recorder
 - `Operation` — abstract node body with `forward(*inputs) -> tuple` and `backward(*outputs_grad) -> tuple`; implemented by `StepOperation` (defined in `../engine/simulator.py`), and by `SegmentOperation` / `ReadOperation` here.
-- `OperationNode(torch.autograd.Function)` — the single torch node type wrapping every `Operation`.
+- `OperationNode` — the single torch node type wrapping every `Operation`: a `torch.autograd.Function` subclass when PyTorch is installed, a stub raising `require_torch("differentiable rollout")` otherwise.
   `forward` holds a weak reference to the graph and returns the next state handle plus the operation's outputs; `backward` is `@once_differentiable` and routes output grads into `operation.backward`.
 - `RolloutGraph` — the per-scene autograd graph.
   - `__init__(requires_grad, on_pass_start, on_pass_end)`, `restart()`, `is_recording` (property).
