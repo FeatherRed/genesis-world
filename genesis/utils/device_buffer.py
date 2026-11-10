@@ -60,7 +60,7 @@ _kDLROCM = 10
 _kDLINT = 0
 _kDLUINT = 1
 _kDLFLOAT = 2
-_kDLBOOL = 5
+_kDLBOOL = 6
 
 _DLPACK_CAPSULE_NAME = b"dltensor"
 _DLPACK_VERSIONED_CAPSULE_NAME = b"dltensor_versioned"
@@ -600,8 +600,11 @@ def _derive_layout(
             shape = argument
             strides = _contiguous_strides(shape)
         else:  # 'index'
+            # As in NumPy indexing, the axes left out of the selection keep all their elements, which is how the masks
+            # of a vector buffer leave the element axis untouched instead of dropping it.
+            selections = argument + (slice(None),) * (len(shape) - len(argument))
             next_shape, next_strides = [], []
-            for axis, selection in enumerate(argument):
+            for axis, selection in enumerate(selections):
                 if isinstance(selection, int):
                     index = selection + shape[axis] if selection < 0 else selection
                     if not 0 <= index < shape[axis]:
@@ -616,6 +619,17 @@ def _derive_layout(
                     offset += start * strides[axis]
             shape, strides = tuple(next_shape), tuple(next_strides)
     return offset, shape, strides
+
+
+def _element_ndim(value) -> int:
+    """Number of trailing axes of a Quadrants buffer holding the vector or matrix of one element, none otherwise.
+
+    The grid of a buffer and the element it holds are exported as one flat tuple of axes, so this count is what tells
+    the batch axis, the last one of the grid, from the element axes following it.
+    """
+    if isinstance(value, (qd.Field, qd.Ndarray)):
+        return len(_qd_element_shape(value))
+    return 0
 
 
 class _CapsuleOwner:
@@ -666,6 +680,7 @@ class DeviceView:
         info = dlpack_info(source)
         self._source = source
         self._base_info = info
+        self._element_ndim = _element_ndim(source)
         self._dtype = info.dtype
         self._device = _device_from_dlpack(info.device_type, info.device_id)
         self._operations: tuple[tuple[str, Any], ...] = ()
@@ -676,6 +691,7 @@ class DeviceView:
         view = cls.__new__(cls)
         view._source = base._source
         view._base_info = base._base_info
+        view._element_ndim = base._element_ndim
         view._dtype = base._dtype
         view._device = base._device
         view._operations = base._operations + operations
@@ -714,6 +730,16 @@ class DeviceView:
     @property
     def ndim(self) -> int:
         return len(self._shape)
+
+    @property
+    def element_ndim(self) -> int:
+        """Number of trailing axes holding the vector or matrix of one element, none for a plain buffer."""
+        return self._element_ndim
+
+    @property
+    def grid_ndim(self) -> int:
+        """Number of leading axes that index elements, i.e. every axis but the element ones."""
+        return len(self._shape) - self._element_ndim
 
     @property
     def nbytes(self) -> int:
@@ -896,10 +922,12 @@ def view_of(
 ) -> DeviceView:
     """Torch-free analogue of 'qd_to_torch', with the same layout semantics and no host roundtrip.
 
-    The batch axis is the last one: 'transpose=True' moves it to the front, exactly as 'qd_to_torch' does. The masks
-    are applied after the transposition, and an integer keeps its dimension as a length-1 slice when 'keepdim' is True.
-    Only slices and contiguous ascending index collections are supported: a strided selection would require a copy,
-    which this function refuses instead of silently materializing a buffer.
+    The batch axis is the last axis of the grid: 'transpose=True' moves it to the front, exactly as 'qd_to_torch' does,
+    so the element axes of a vector or matrix buffer stay the trailing ones ('(m, n)' grid of a vector buffer holding
+    '(n, m, 3)', never '(3, m, n)'). The masks are applied after the transposition, over the grid axes only, and an
+    integer keeps its dimension as a length-1 slice when 'keepdim' is True. Only slices and contiguous ascending index
+    collections are supported: a strided selection would require a copy, which this function refuses instead of
+    silently materializing a buffer.
 
     Args:
         value (qd.Tensor | qd.Field | qd.Ndarray | DeviceView): Buffer or view to select from.
@@ -912,11 +940,12 @@ def view_of(
         The zero-copy view.
     """
     view = value if isinstance(value, DeviceView) else DeviceView(value)
-    if transpose and view.ndim >= 2:
-        view = view.movedim(view.ndim - 1, 0)
+    grid_ndim = view.grid_ndim
+    if transpose and grid_ndim >= 2:
+        view = view.movedim(grid_ndim - 1, 0)
     if row_mask is None and col_mask is None:
         return view
-    if view.ndim < 2:
+    if grid_ndim < 2:
         if row_mask is not None and col_mask is not None:
             _raise_genesis_error("Cannot specify both row and column masks for a device view with 1D batch.")
         indices = (row_mask if col_mask is None else col_mask,)
@@ -931,9 +960,12 @@ def view_of(
 
 # The write direction lives in 'genesis.utils.hip_copy', which imports the read-side primitives defined here, so a
 # module-level import of it would be circular: importing 'hip_copy' first would find this module's last line while
-# 'hip_copy' is still only partially initialized. The two public entry points are therefore resolved on first access,
-# which works whichever of the two modules gets imported first.
-_LAZY_REEXPORTS = ("copy_from_dlpack", "qd_ptr")
+# 'hip_copy' is still only partially initialized. The entry points of the write direction are therefore resolved on
+# first access, which works whichever of the two modules gets imported first.
+# The selection helpers below are part of that write direction: they live in 'hip_copy' because a write selection may be
+# any collection of indices, unlike the contiguous runs the read direction requires, and they are re-exported here
+# because callers ask for them next to 'copy_from_dlpack'.
+_LAZY_REEXPORTS = ("_index_runs", "_selected_indices", "copy_from_dlpack", "qd_ptr")
 
 
 def __getattr__(name: str):
