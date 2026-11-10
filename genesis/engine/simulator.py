@@ -409,8 +409,11 @@ class Simulator(RBC):
         """Return whether each env flagged an error in any solver since its last reset.
 
         The result is boolean-valued and batch-shaped '(n_envs,)': a fresh 'torch.bool' tensor with PyTorch, and without
-        it the zero-copy view of one device-resident 'gs.qd_bool' buffer, which this call rewrites and 'clear_errno'
-        accepts back.
+        it the zero-copy live view of the one device-resident 'gs.qd_bool' buffer the masks of every solver are ORed
+        into, which the next call rewrites: consume it, or copy it, before the next call.
+        The snapshot available is the host one, 'mask.to_numpy()', since 'DeviceView.contiguous()' returns 'self' for
+        the already-contiguous 1-D mask and is therefore not a device snapshot.
+        'clear_errno' accepts either form, the live view or the host array.
         """
         if not HAS_TORCH:
             kernel_zero_mask(self._errno_mask)
