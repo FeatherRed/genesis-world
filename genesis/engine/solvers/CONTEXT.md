@@ -111,7 +111,6 @@ The `FIXME` in `GravityMixin._build_gravity`: Quadrants cannot resolve an ndarra
 ## Notes for Agents
 In this sandbox `rg` sometimes returns only one match per file and plain `git grep -n` prints nothing; use `git grep -o -n -E "pattern"` to list definitions with line numbers, and the `read` tool (raise `max_bytes` to 131072 for large files; long lines are clipped).
 Treat the `rigid/CONTEXT.md` (and its `abd/`, `collider/`, `constraint/` children) as authoritative for that subtree; keep this file a routing table plus cross-cutting lifecycle/layout/convention notes.
-Do not modify source code in this task; CONTEXT.md updates only.
 
 ## Test Strategy
 No unit tests live under `solvers/`; physics and differentiable-simulation correctness is exercised by end-to-end scene/example tests elsewhere in the repo.
