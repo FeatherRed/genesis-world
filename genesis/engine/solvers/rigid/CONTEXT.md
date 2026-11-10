@@ -86,6 +86,7 @@ Hibernation is disabled under `requires_grad`; MuJoCo-compat uses its own hibern
 `detect_collision` has `TODO: support batching` (returns only `env_idx=0` pairs).
 Constraints with unsupported contact pairs / NaN contacts / NaN forces / NaN acc raise per-env `ErrorCode`s registered in `build()`.
 A `set_qpos` source written through the torch boolean-mask fast path that holds more rows than the mask flags, but fewer than `n_envs`, cannot be told from a tile without reading the mask count back, so `masked_scatter_` writes its leading rows; a source of fewer rows than the mask flags raises the three-form message instead.
+The zero-copy fast path of `set_base_links_pos`/`set_base_links_quat` has the same reading: a `(n_envs, *element_shape)` tile under a host boolean mask is written with its leading rows, while the same tile under a device mask, and every tile of the torch-free path, is written with the row of each flagged environment.
 
 ## Routing Table
 - `abd/` -> articulated-body-dynamics numerics: forward kinematics/dynamics, mass matrix factor/solve, accessors, inverse kinematics, manual backward, misc/coupling helpers.
