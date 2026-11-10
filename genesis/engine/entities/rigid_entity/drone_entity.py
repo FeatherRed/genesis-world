@@ -1,10 +1,25 @@
 import numpy as np
 
 import genesis as gs
-from genesis.utils.torch_compat import HAS_TORCH, torch
+from genesis.utils.misc import qd_to_torch
+from genesis.utils.torch_compat import HAS_TORCH, is_torch_tensor, torch
 
 from .description import DroneEntityDescription
 from .rigid_entity import RigidEntity
+
+
+def _is_opaque_producer(value) -> bool:
+    """Whether `value` is an opaque DLPack producer a setter stages on the device instead of reading it on the host.
+
+    Such a producer exposes its 'shape', its 'dtype' and the DLPack protocol alone, without element access, length or
+    iteration, so it can neither be sanitized nor transposed the way a host array and a torch tensor are (see
+    'genesis.engine.solvers.torch_free.is_dlpack_source'). A host array and a torch tensor are DLPack sources as well,
+    and the setters of a scene with PyTorch keep their own path for both of them.
+    """
+    # Local import: the solvers import the entities, so importing them at module scope would close the cycle
+    from genesis.engine.solvers.torch_free import is_dlpack_source
+
+    return is_dlpack_source(value) and not is_torch_tensor(value)
 
 
 class DroneEntity(RigidEntity):
@@ -61,9 +76,11 @@ class DroneEntity(RigidEntity):
 
         Parameters
         ----------
-        propellers_rpm : array-like or torch.Tensor
+        propellers_rpm : array-like or torch.Tensor or DLPack producer
             A tensor or array of shape (n_propellers,) or (n_envs, n_propellers) specifying
             the desired RPM values for each propeller. Must be non-negative.
+            A DLPack producer, as the output of a compiled graph, is accepted as well, opaque or not: it is copied to
+            the device without leaving it and never indexed on the host.
 
         Raises
         ------
@@ -88,6 +105,18 @@ class DroneEntity(RigidEntity):
                 propellers_rpm,
                 self._propellers_spin,
                 self._model == "RACE",
+            )
+            return
+
+        if _is_opaque_producer(propellers_rpm):
+            # An opaque producer is opaque all the same with PyTorch installed, where indexing it on the host would
+            # raise: it takes the staged device path of a torch-free scene, and the solver expands a single row to
+            # every environment. The accumulator of a scene with PyTorch stays a torch tensor, which advances here on
+            # the staged values, in the layout they hold, exactly as it does on the host path below.
+            values = self.solver._stage_drone_rpm(propellers_rpm, self._n_propellers)
+            self._propellers_revs = (self._propellers_revs + qd_to_torch(values).T) % (60 / self.solver.dt)
+            self.solver.set_drone_rpm(
+                self._propellers_link_idx, self.KF, self.KM, values, self._propellers_spin, self._model == "RACE"
             )
             return
 
