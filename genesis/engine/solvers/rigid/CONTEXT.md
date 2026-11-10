@@ -89,8 +89,8 @@ Hibernation is disabled under `requires_grad`; MuJoCo-compat uses its own hibern
 `detect_collision` has `TODO: support batching` (returns only `env_idx=0` pairs).
 Constraints with unsupported contact pairs / NaN contacts / NaN forces / NaN acc raise per-env `ErrorCode`s registered in `build()`.
 A `set_qpos` source written through the torch boolean-mask fast path that holds more rows than the mask flags, but fewer than `n_envs`, cannot be told from a tile without reading the mask count back, so `masked_scatter_` writes its leading rows; a source of fewer rows than the mask flags raises the three-form message instead.
-The zero-copy fast path of `set_base_links_pos`/`set_base_links_quat` hands a host boolean mask to `indices_to_mask`, which casts its flags to the integers 0 and 1 instead of resolving the environments they flag, so only its device-mask branch (taken before that call) and the whole torch-free path write the row of each flagged environment.
-`_host_link_indices` converts a `qd.Tensor`/`qd.Ndarray` selection and nothing else, which covers every sanitized selection (a 1-D `qd.ScalarNdarray`, a subclass of `qd.Ndarray`) and leaves a `qd.Field` selection to `set_links_mass`'s mass-spread walk unread, no framework path producing one.
+The zero-copy fast path of `set_base_links_pos`/`set_base_links_quat` hands a host boolean mask to `indices_to_mask`, which casts its flags to the integers 0 and 1 instead of resolving the environments they flag; only its device-mask branch reads a mask as one, while the whole torch-free path writes the row of each flagged environment.
+`_host_link_indices` converts a `qd.Tensor`/`qd.Ndarray` selection and nothing else, which covers every sanitized selection (a 1-D `qd.ScalarNdarray`, a subclass of `qd.Ndarray`); a `qd.Field` selection is therefore left unconverted to the mass-spread walk of `set_links_mass`, which no framework path produces.
 
 ## Routing Table
 - `abd/` -> articulated-body-dynamics numerics: forward kinematics/dynamics, mass matrix factor/solve, accessors, inverse kinematics, manual backward, misc/coupling helpers.
