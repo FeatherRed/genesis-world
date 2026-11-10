@@ -71,6 +71,7 @@ from .torch_free import (
     DlpackStager,
     broadcast_values,
     device_tensor_from_numpy,
+    envs_kernel_index,
     index_field,
     index_tensor,
     is_dlpack_source,
@@ -929,7 +930,7 @@ class KinematicSolver(Solver):
     def substep_post_coupling(self, f):
         if not self._is_forward_pos_updated or not self._is_forward_vel_updated:
             kernel_forward_kinematics(
-                self.scene._envs_idx, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
+                envs_kernel_index(self.scene), self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
             )
             self._is_forward_pos_updated = True
             self._is_forward_vel_updated = True
@@ -1529,7 +1530,7 @@ class KinematicSolver(Solver):
         if self._is_forward_pos_updated:
             return
         kernel_forward_kinematics(
-            self.scene._envs_idx, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
+            envs_kernel_index(self.scene), self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
         )
         self._is_forward_pos_updated = True
 

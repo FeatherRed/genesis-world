@@ -57,6 +57,7 @@ from ..torch_free import (
     DlpackStager,
     broadcast_values,
     device_tensor_from_numpy,
+    envs_kernel_index,
     index_field,
     index_tensor,
     is_dlpack_source,
@@ -351,7 +352,7 @@ def _host_link_indices(links_idx):
     selection is read back, as '_set_links_info' reads a torch-free device selection back too. A PyTorch selection is
     handed over as it is, so no tensor living on a device is read back outside debug mode.
     """
-    if not HAS_TORCH and isinstance(links_idx, (qd.Tensor, qd.Ndarray)):
+    if not HAS_TORCH and isinstance(links_idx, (qd.Tensor, qd.Field, qd.Ndarray)):
         return to_numpy_values(links_idx)
     return links_idx
 
@@ -1458,14 +1459,14 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         collision (and any raycast deriving its vertices from geom poses) reading a one-step-stale pose.
         """
         if not self._is_forward_pos_updated:
-            self._update_forward_kinematics(self.scene._envs_idx)
+            self._update_forward_kinematics(None)
 
     def _update_forward_kinematics(self, envs_idx):
         """Update the cartesian space and the velocities of the links of the given environments from their state."""
         if not HAS_TORCH:
             # A torch-free selection is the int32 index set the kernel iterates over, whatever mask the caller gave
             if not isinstance(envs_idx, (qd.Tensor, qd.Ndarray)):
-                envs_idx = self._scene._sanitize_envs_idx(envs_idx)
+                envs_idx = envs_kernel_index(self._scene, envs_idx)
             fn = kernel_forward_kinematics_links_geoms
         else:
             if not is_torch_tensor(envs_idx):
@@ -2412,7 +2413,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         # The anchor check below reads the written indices as given, in any form the sanitizer accepts. A tensor on a
         # GPU device is read back in debug mode only, since that stalls the GPU.
         links_idx_ = None
-        if not HAS_TORCH and isinstance(links_idx, (qd.Tensor, qd.Ndarray)):
+        if not HAS_TORCH and isinstance(links_idx, (qd.Tensor, qd.Field, qd.Ndarray)):
             # The anchor check below walks the links on the host, so a torch-free device selection is read back here
             links_idx = to_numpy_values(links_idx)
         if links_idx is None:
@@ -2478,7 +2479,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     f"mass and principal axes of all its links. Set the mass of the whole entity instead. {remedy}"
                 )
 
-        envs_idx = envs_idx if self._options.batch_links_info else self._scene._envs_idx
+        envs_idx = envs_idx if self._options.batch_links_info else envs_kernel_index(self._scene)
         if not self._options.batch_links_info or self.n_envs == 0:
             if HAS_TORCH:
                 values = values[None]

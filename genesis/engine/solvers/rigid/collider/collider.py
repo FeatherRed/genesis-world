@@ -895,11 +895,15 @@ class Collider:
         """
         self._contact_data_cache.clear()
         # A kernel wipes the live contacts alone, while views over the contact buffers would wipe every slot of them
-        if not is_torch_tensor(envs_idx):
-            envs_idx = self._solver._scene._sanitize_envs_idx(envs_idx)
-        if is_torch_tensor(envs_idx) and envs_idx.dtype == torch.bool:
-            fn = kernel_masked_collider_clear
+        if HAS_TORCH:
+            if not is_torch_tensor(envs_idx):
+                envs_idx = self._solver._scene._sanitize_envs_idx(envs_idx)
+            fn = kernel_masked_collider_clear if envs_idx.dtype == torch.bool else kernel_collider_clear
         else:
+            # A torch-free setter hands over the int32 index set it already sanitized, which the caller-facing guard of
+            # the scene would refuse on a non-parallelized scene; a caller selection still goes through that guard
+            if not isinstance(envs_idx, (qd.Tensor, qd.Ndarray)):
+                envs_idx = self._solver._scene._sanitize_envs_idx(envs_idx)
             fn = kernel_collider_clear
         fn(
             envs_idx,
