@@ -7,6 +7,9 @@ Without it the row is rebuilt on the device instead, which the two kernels below
 A DLPack producer cannot be written into a field either, whose batch-last view is not contiguous, so the staged kernels
 below read the batch-last staging buffer of a 'DlpackStager' instead, one column per environment (see
 'KinematicSolver.set_qpos').
+The 'kernel_set_*'/'kernel_control_*' kernels of 'accessor.py' cannot read that buffer, since they index their values
+batch-first ('values[i_b, i_d]') while the staged buffer holds the batch axis last; the staged kernels below mirror them
+entry for entry instead, and reproduce their result bit-exactly.
 Nothing here imports PyTorch: the buffers are plain kernel arguments, holding the environment axis first or last as each
 kernel states, and the state is the usual 'DynState' struct.
 """
