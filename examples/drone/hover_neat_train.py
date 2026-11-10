@@ -389,9 +389,11 @@ def main(argv=None):
 
     if not gs._initialized:
         if args.gpu or torch_free:
-            # ``performance_mode=True`` hands the state to Quadrants ndarrays whose staged writes the
-            # torch-free setters cannot consume yet (and its build fails torch-free), so the
-            # torch-free path keeps the array mode off.
+            # ``performance_mode=True`` selects the static-array mode.  It builds and runs torch-free,
+            # but it is not bit-identical to the deterministic ndarray mode the torch-free rollout is
+            # validated in: the same fixed population through the device residency moves ``returns``
+            # by up to 1.12e-08 (1-10 float32 ulp over 30 steps) while ``fitness`` and ``seeds`` stay
+            # exact, so the torch-free path keeps the ndarray mode (``performance_mode=False``).
             gs.init(
                 backend=gs.gpu,
                 precision="32",

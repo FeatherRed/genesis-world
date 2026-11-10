@@ -34,6 +34,7 @@ The core split is description-vs-live-object: every live link/joint/geom/equalit
 - `rigid_equality.py` — `RigidEquality`: `eq_obj1id`/`eq_obj2id`, `eq_data`, `idx`/`idx_local`, `type`, `set/get_sol_params`.
 - `terrain_entity.py` — `TerrainEntity(RigidEntity)`: `terrain_hf`, `terrain_scale`, `get_terrain_height(positions, envs_idx)`.
 - `drone_entity.py` — `DroneEntity(RigidEntity)`: `set_propellers_rpm`, `update_propeller_vgeoms`, `KF`/`KM`, `n_propellers`, `propellers_idx`, `propellers_spin`, `model`, `COM_link_idx`.
+- `DroneEntity.set_propellers_rpm` keeps its once-per-step guard (`_prev_prop_t` vs `sim.cur_step_global`, re-armed by `RigidSolver._restart`) in both residencies: with PyTorch it sanitizes the values and advances a `torch` accumulator with `(revs + rpm.T) % (60 / dt)` before calling `set_drone_rpm`, and without it forwards the raw producer to `RigidSolver.set_drone_propellers_rpm`, which stages, advances and applies the thrust on the device.
 - `inertial.py` — `get_local_inertial_from_geom`, `compose_inertial_properties`, `compose_inertial_from_g_infos`, `finalize_inertial`, `GeomInertialInfo`, `LinkInertial`, `LinkInertialInfo`, and constants `RHO_OBJECT`/`RHO_ROBOT`/`RHO_MUJOCO`, `MASS_EPS`, `AABB_EPS`, `INERTIA_RATIO_MAX`.
 - `__init__.py` re-exports `DroneEntity`, `KinematicEntity`, `RigidEntity`, `RigidGeom`, `RigidVisGeom`, `RigidJoint`, `RigidLink`, `TerrainEntity`.
 
@@ -50,7 +51,7 @@ The `is_robot` flag selects a different convex-decomposition error threshold (`d
 Collision vs visual split: collision geoms (`RigidGeom`) drive contacts and are convexified/post-processed; visual geoms (`RigidVisGeom`) only render and use a lazily built low-res AABB mesh.
 
 # State accessor semantics (view vs copy)
-Every state getter here (`get_pos`/`get_quat`/`get_vel`/`get_ang`, `get_links_*`, `get_dofs_position`/`_velocity`/`_force`, link equivalents) forwards to the solver and returns a plain `torch.Tensor` on `gs.device` with dtype `gs.tc_float` — never a `qd.Tensor`, never numpy/host.
+Every state getter here (`get_pos`/`get_quat`/`get_vel`/`get_ang`, `get_links_*`, `get_dofs_position`/`_velocity`/`_force`, link equivalents) forwards to the solver and returns, with PyTorch, a plain `torch.Tensor` on `gs.device` with dtype `gs.tc_float` — never a `qd.Tensor`, never numpy/host (without PyTorch it returns the `DeviceView` of "Torch-free mode").
 The solver getters share one path, `Solver._read_data` → `qd_to_torch(..., copy=True)` (`genesis/utils/misc.py:885`): the cached DLPack view of the qd field is cloned contiguously and then masked, so each call returns a fresh device copy, not a live alias into solver memory.
 `get_links_vel` additionally composes `cd_vel + cd_ang × (pos − root_COM)` in torch (zero-copy/recording) or launches a gather kernel into a `torch.empty` output — a copy either way.
 `envs_idx`/`*_idx_local` selection goes through `indices_to_mask` (`range`→`slice`, int→length-1 slice), so the default "all items" selection is a basic view of that clone while a list/tensor index gathers.
@@ -68,6 +69,7 @@ Heterogeneous entities refuse `attach`, and `get_verts` raises on them; their ge
 Getters default to `relative=True`, which strips the morph `offset_pos`/`offset_quat` and the free-root inertial alignment so users read back the pose they authored.
 `RigidEntity.get_pos`/`get_quat` are base-link accessors; use `get_links_*` for whole-entity state.
 `set_friction` validates the range `[1e-2, 5.0]` for stability; per-geom `set_friction` only checks non-negativity.
+`DroneEntity.set_propellers_rpm` arms its once-per-step guard before it writes, so a call that raises (a value of `None`, an RPM layout neither form accepts, a producer the sanitizer rejects) still consumes the step and a retry in the same step hits the once-per-step error.
 
 # Dependencies / See Also
 `genesis.engine.mesh` — `Mesh` and `InertialProperties` (unit-density mesh mass properties) feed the inertial composition.
@@ -92,7 +94,9 @@ Sibling (read-only, escalate writes to parent): `../base_entity.py` (`Entity`, `
 Every module imports PyTorch as `from genesis.utils.torch_compat import HAS_TORCH, torch, require_torch`, so the subpackage imports with no PyTorch installed.
 Pose/DOF getters (`get_pos`/`get_quat`/`get_vel`/`get_ang`, `get_links_*`, `get_qpos`, `get_dofs_*`) forward to `RigidSolver` and return a zero-copy `DeviceView` when torch is absent; the base-link row is taken with `torch_free.first_row` instead of `[..., 0, :]`.
 Setters (`set_pos`/`set_quat`/`set_qpos`/`set_dofs_*`/`control_dofs_*`, link/geom friction and inertial setters) forward the user value untouched, so numpy arrays and DLPack producers both reach the device without a host roundtrip.
-Entity-local vertex indices (`_free_verts_idx_local`/`_fixed_verts_idx_local`) are `int32` host arrays via the `_empty_verts_idx`/`_verts_idx_range`/`_concat_verts_idx` helpers, and `RigidVisGeom._init_pos_tc`/`_init_quat_tc`, `TerrainEntity._terrain_height_field` and the drone propeller tables have `HAS_TORCH` NumPy branches.
+`DroneEntity._build` allocates `_propellers_revs`, the batch-last `(n_propellers, n_envs)` revolution accumulator, as a device buffer without PyTorch (`torch_free.device_tensor_from_numpy` of host zeros, imported locally to break the solvers↔entities cycle), where the torch path keeps a `torch.zeros` tensor.
+Without PyTorch, `DroneEntity.set_propellers_rpm` therefore does no host arithmetic at all, and `update_propeller_vgeoms` hands the device accumulator to `kernel_update_drone_propeller_vgeoms`.
+Entity-local vertex indices (`_free_verts_idx_local`/`_fixed_verts_idx_local`) are `int32` host arrays via the `_empty_verts_idx`/`_verts_idx_range`/`_concat_verts_idx` helpers, and `RigidVisGeom._init_pos_tc`/`_init_quat_tc`, `TerrainEntity._terrain_height_field` and the drone link/spin/vgeom tables have `HAS_TORCH` NumPy branches (numpy arrays without PyTorch, torch tensors with it), the revolution accumulator beside them staying device-resident in both residencies.
 Genuine device math raises `require_torch`: `entity visual AABB aggregation`, `entity visual vertex computation`, `entity link Jacobian at a local point`, `entity multi-link inverse kinematics`, `entity motion planning`, `entity AABB aggregation`, `entity vertex readout`, `entity total energy readout`, `entity contact queries`, `entity net contact force readout`, `entity friction ratio assignment`, `entity total mass assignment`, `entity total mass readout`, plus `RigidLink`/`RigidGeom`/`RigidVisGeom` vertex and AABB readouts.
 
 # Test Strategy

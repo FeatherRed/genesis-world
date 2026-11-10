@@ -333,6 +333,84 @@ def kernel_set_links_quat(
                 rigid_info.qpos[q_start + j + 3, i_b] = quat[i_b_, i_l_, j]
 
 
+@qd.kernel(fastcache=True)
+def kernel_set_links_pos_staged(
+    links_idx: qd.types.ndarray(),
+    envs_idx: qd.types.ndarray(),
+    pos: qd.types.ndarray(),
+    dyn_state: DynState,
+    dyn_info: DynInfo,
+    rigid_info: RigidInfo,
+    rigid_config: qd.template(),
+    is_broadcast: qd.template(),
+    is_tile: qd.template(),
+):
+    """Write the staged link positions into the given links of the given environments, `pos` being batch-first.
+
+    The kernel mirrors 'kernel_set_links_pos' for a batch-first buffer holding one run of three components per link of
+    the selection, in its order: the value written to the link `links_idx[i_l_]` of the environment `envs_idx[i_b_]` is
+    `pos[i_b_, i_l_ * 3 + j]` when the buffer holds one row per environment named by `envs_idx`, in its order.
+    A broadcast producer holds a single row, which every selected environment takes.
+    A whole-tile producer holds one row per environment of the solver, and each selected environment takes the row of
+    its own index, `pos[envs_idx[i_b_], i_l_ * 3 + j]`, the rows of the environments it leaves out being ignored.
+    """
+    qd.loop_config(serialize=rigid_config.para_level < gs.PARA_LEVEL.PARTIAL)
+    for i_l_, i_b_ in qd.ndrange(links_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(dyn_state.links.pos))):
+        i_b = envs_idx[i_b_]
+        i_l = links_idx[i_l_]
+        # The row a selected environment takes is its own row of the whole tile, row 0 of a broadcast producer, and its
+        # position in the selection otherwise
+        i_b_values = envs_idx[i_b_] if qd.static(is_tile) else (0 if qd.static(is_broadcast) else i_b_)
+        I_l = [i_l, i_b] if qd.static(rigid_config.batch_links_info) else i_l
+
+        if dyn_info.links.parent_idx[I_l] == -1 and dyn_info.links.is_fixed[I_l]:
+            for j in qd.static(range(3)):
+                dyn_state.links.pos[i_l, i_b][j] = pos[i_b_values, i_l_ * 3 + j]
+        else:
+            q_start = dyn_info.links.q_start[I_l]
+            for j in qd.static(range(3)):
+                rigid_info.qpos[q_start + j, i_b] = pos[i_b_values, i_l_ * 3 + j]
+
+
+@qd.kernel(fastcache=True)
+def kernel_set_links_quat_staged(
+    links_idx: qd.types.ndarray(),
+    envs_idx: qd.types.ndarray(),
+    quat: qd.types.ndarray(),
+    dyn_state: DynState,
+    dyn_info: DynInfo,
+    rigid_info: RigidInfo,
+    rigid_config: qd.template(),
+    is_broadcast: qd.template(),
+    is_tile: qd.template(),
+):
+    """Write the staged link orientations into the given links of the given environments, `quat` being batch-first.
+
+    The kernel mirrors 'kernel_set_links_quat' for a batch-first buffer holding one run of four components per link of
+    the selection, in its order: the value written to the link `links_idx[i_l_]` of the environment `envs_idx[i_b_]` is
+    `quat[i_b_, i_l_ * 4 + j]` when the buffer holds one row per environment named by `envs_idx`, in its order.
+    A broadcast producer holds a single row, which every selected environment takes.
+    A whole-tile producer holds one row per environment of the solver, and each selected environment takes the row of
+    its own index, `quat[envs_idx[i_b_], i_l_ * 4 + j]`, the rows of the environments it leaves out being ignored.
+    """
+    qd.loop_config(serialize=rigid_config.para_level < gs.PARA_LEVEL.PARTIAL)
+    for i_l_, i_b_ in qd.ndrange(links_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(dyn_state.links.quat))):
+        i_b = envs_idx[i_b_]
+        i_l = links_idx[i_l_]
+        # The row a selected environment takes is its own row of the whole tile, row 0 of a broadcast producer, and its
+        # position in the selection otherwise
+        i_b_values = envs_idx[i_b_] if qd.static(is_tile) else (0 if qd.static(is_broadcast) else i_b_)
+        I_l = [i_l, i_b] if qd.static(rigid_config.batch_links_info) else i_l
+
+        if dyn_info.links.parent_idx[I_l] == -1 and dyn_info.links.is_fixed[I_l]:
+            for j in qd.static(range(4)):
+                dyn_state.links.quat[i_l, i_b][j] = quat[i_b_values, i_l_ * 4 + j]
+        else:
+            q_start = dyn_info.links.q_start[I_l]
+            for j in qd.static(range(4)):
+                rigid_info.qpos[q_start + j + 3, i_b] = quat[i_b_values, i_l_ * 4 + j]
+
+
 @qd.func
 def func_set_link_mass(
     i_l: int,
