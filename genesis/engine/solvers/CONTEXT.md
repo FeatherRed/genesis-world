@@ -131,7 +131,7 @@ The `FIXME` in `GravityMixin._build_gravity`: Quadrants cannot resolve an ndarra
 - `../states/solvers.py` -> `*SolverState` classes returned by `get_state` (read-only reference).
 
 ## Notes for Agents
-In this sandbox `rg` sometimes returns only one match per file and plain `git grep -n` prints nothing; use `git grep -o -n -E "pattern"` to list definitions with line numbers, and the `read` tool (raise `max_bytes` to 131072 for large files; long lines are clipped).
+The `read` tool clips long lines, so raise its `max_bytes` (up to 131072) for the large files; `git grep -n -E "pattern"` lists definitions with line numbers.
 Treat the `rigid/CONTEXT.md` (and its `abd/`, `collider/`, `constraint/` children) as authoritative for that subtree; keep this file a routing table plus cross-cutting lifecycle/layout/convention notes.
 
 ## Test Strategy
