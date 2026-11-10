@@ -1133,10 +1133,11 @@ class KinematicSolver(Solver):
         if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(qpos):
             # A compiled graph hands its output over as a DLPack capsule, which the state takes device to device: the
             # values are staged in a contiguous buffer, then scattered into the qpos of the given environments
+            qs_idx_ = index_field(qs_idx, self.n_qs, "qs_idx")
             kernel_set_qpos_staged(
-                index_field(qs_idx, self.n_qs, "qs_idx"),
+                qs_idx_,
                 index_field(envs_idx, self._B, "envs_idx"),
-                self._stage_dlpack(qpos, self.n_qs, envs_idx),
+                self._stage_dlpack(qpos, qs_idx_.shape[0], envs_idx),
                 self.rigid_info,
                 self.rigid_config,
             )
@@ -1199,10 +1200,11 @@ class KinematicSolver(Solver):
         if gs.use_zerocopy and not HAS_TORCH and velocity is not None and is_dlpack_source(velocity):
             # A compiled graph hands its output over as a DLPack capsule, which the state takes device to device: the
             # values are staged in a contiguous buffer, then scattered into the velocity of the given environments
+            dofs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx")
             kernel_set_dofs_velocity_staged(
-                index_field(dofs_idx, self.n_dofs, "dofs_idx"),
+                dofs_idx_,
                 index_field(envs_idx, self._B, "envs_idx"),
-                self._stage_dlpack(velocity, self.n_dofs, envs_idx),
+                self._stage_dlpack(velocity, dofs_idx_.shape[0], envs_idx),
                 self.dyn_state,
                 self.rigid_config,
             )
@@ -1285,7 +1287,7 @@ class KinematicSolver(Solver):
             positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
             kernel_copy_dofs_pos(positions, self.dyn_state)
             kernel_set_dofs_position_staged(
-                positions, dofs_idx, envs_idx, self._stage_dlpack(position, self.n_dofs, envs_idx)
+                positions, dofs_idx, envs_idx, self._stage_dlpack(position, dofs_idx.shape[0], envs_idx)
             )
             is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
             is_dof_set[to_numpy_values(dofs_idx)] = 1

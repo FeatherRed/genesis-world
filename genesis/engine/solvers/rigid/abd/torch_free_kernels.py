@@ -67,7 +67,8 @@ def kernel_scatter_dofs_pos(
 # ------------------------------------------------------------------------------------------------
 # The kernels below exist only on the torch-free staged-write path: a DLPack producer is first copied, device to device,
 # into the batch-last staging buffer of a 'DlpackStager', which holds one column per environment of the solver, and the
-# value written to the entry `idx[i_]` of the environment `envs_idx[i_b_]` is then `values[idx[i_], envs_idx[i_b_]]`.
+# value written to the entry `idx[i_]` of the environment `envs_idx[i_b_]` is then `values[i_, envs_idx[i_b_]]`, the
+# index being the position of the entry in the selection rather than the entry itself, as a host write reads it.
 # The staged buffer is not a field, so these kernels take it as the plain ndarray it is.
 
 
@@ -82,11 +83,11 @@ def kernel_set_qpos_staged(
     """Write the staged qpos values into the given qpos of the given environments.
 
     The kernel is the counterpart of 'kernel_set_qpos' for a staged buffer, which holds one column per environment of
-    the solver rather than one row of the values written.
+    the solver rather than one row of the values written, and one row per qpos of the selection rather than per qpos.
     """
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_q_, i_b_ in qd.ndrange(qs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(rigid_info.qpos))):
-        rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[qs_idx[i_q_], envs_idx[i_b_]]
+        rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[i_q_, envs_idx[i_b_]]
 
 
 @qd.kernel(fastcache=True)
@@ -100,12 +101,13 @@ def kernel_set_dofs_velocity_staged(
     """Write the staged dof velocities into the given dofs of the given environments.
 
     The kernel is the counterpart of 'kernel_set_dofs_velocity' for a staged buffer, which holds one column per
-    environment of the solver rather than one row of the values written.
+    environment of the solver rather than one row of the values written, and one row per dof of the selection rather than
+    per dof.
     """
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_d_, i_b_ in qd.ndrange(dofs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(dyn_state.dofs.vel))):
         i_b = envs_idx[i_b_]
-        dyn_state.dofs.vel[dofs_idx[i_d_], i_b] = values[dofs_idx[i_d_], i_b]
+        dyn_state.dofs.vel[dofs_idx[i_d_], i_b] = values[i_d_, i_b]
 
 
 @qd.kernel(fastcache=True)
@@ -121,7 +123,7 @@ def kernel_set_dofs_position_staged(
     positions, before 'kernel_set_dofs_position' derives the configuration of the joints from it.
     """
     for i_d_, i_b_ in qd.ndrange(dofs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(values))):
-        out[envs_idx[i_b_], dofs_idx[i_d_]] = values[dofs_idx[i_d_], envs_idx[i_b_]]
+        out[envs_idx[i_b_], dofs_idx[i_d_]] = values[i_d_, envs_idx[i_b_]]
 
 
 @qd.kernel(fastcache=True)
@@ -136,7 +138,8 @@ def kernel_control_dofs_staged(
     """Write the staged control value of the given dofs of the given environments, in the given control mode.
 
     The kernel mirrors 'kernel_control_dofs_force', 'kernel_control_dofs_velocity' and
-    'kernel_control_dofs_position' for a staged buffer, which holds one column per environment of the solver.
+    'kernel_control_dofs_position' for a staged buffer, which holds one column per environment of the solver and one
+    row per dof of the selection rather than per dof.
     """
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_d_, i_b_ in qd.ndrange(dofs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(dyn_state.dofs.ctrl_mode))):
@@ -145,13 +148,13 @@ def kernel_control_dofs_staged(
 
         if qd.static(mode == gs.CTRL_MODE.FORCE):
             dyn_state.dofs.ctrl_mode[i_d, i_b] = gs.CTRL_MODE.FORCE
-            dyn_state.dofs.ctrl_force[i_d, i_b] = values[i_d, i_b]
+            dyn_state.dofs.ctrl_force[i_d, i_b] = values[i_d_, i_b]
         if qd.static(mode == gs.CTRL_MODE.VELOCITY):
             dyn_state.dofs.ctrl_mode[i_d, i_b] = gs.CTRL_MODE.VELOCITY
-            dyn_state.dofs.ctrl_vel[i_d, i_b] = values[i_d, i_b]
+            dyn_state.dofs.ctrl_vel[i_d, i_b] = values[i_d_, i_b]
         if qd.static(mode == gs.CTRL_MODE.POSITION):
             dyn_state.dofs.ctrl_mode[i_d, i_b] = gs.CTRL_MODE.POSITION
-            dyn_state.dofs.ctrl_pos[i_d, i_b] = values[i_d, i_b]
+            dyn_state.dofs.ctrl_pos[i_d, i_b] = values[i_d_, i_b]
             dyn_state.dofs.ctrl_vel[i_d, i_b] = 0.0
 
 
@@ -167,7 +170,7 @@ def kernel_control_dofs_position_velocity_staged(
     """Write the staged control position and velocity of the given dofs of the given environments.
 
     The kernel mirrors 'kernel_control_dofs_position_velocity' for two staged buffers, which each hold one column per
-    environment of the solver.
+    environment of the solver and one row per dof of the selection rather than per dof.
     """
     qd.loop_config(serialize=qd.static(rigid_config.para_level < gs.PARA_LEVEL.PARTIAL))
     for i_d_, i_b_ in qd.ndrange(dofs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(dyn_state.dofs.ctrl_mode))):
@@ -175,5 +178,5 @@ def kernel_control_dofs_position_velocity_staged(
         i_b = envs_idx[i_b_]
 
         dyn_state.dofs.ctrl_mode[i_d, i_b] = gs.CTRL_MODE.POSITION
-        dyn_state.dofs.ctrl_pos[i_d, i_b] = pos[i_d, i_b]
-        dyn_state.dofs.ctrl_vel[i_d, i_b] = vel[i_d, i_b]
+        dyn_state.dofs.ctrl_pos[i_d, i_b] = pos[i_d_, i_b]
+        dyn_state.dofs.ctrl_vel[i_d, i_b] = vel[i_d_, i_b]

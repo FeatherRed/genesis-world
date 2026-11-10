@@ -23,7 +23,7 @@ import quadrants as qd
 from quadrants.lang.util import to_numpy_type
 
 import genesis as gs
-from genesis.utils.device_buffer import DeviceView, copy_from_dlpack, view_of
+from genesis.utils.device_buffer import DeviceView, _normalize_mask, copy_from_dlpack, view_of
 from genesis.utils.torch_compat import HAS_TORCH, torch
 
 __all__ = [
@@ -462,11 +462,14 @@ def read_view(field, envs_idx=None, idx=None):
     The batch axis is the last one of the shape the field declares, which precedes the dimensions of a vector element, so
     a buffer of vectors is transposed on that axis rather than on its last physical one, as 'qd_to_torch' does.
     'envs_idx' selects the batch axis and 'idx' the element axis, both after the transposition.
+    The selection names every axis of the transposed view, since a partial one would drop the axes it leaves out of the
+    shape and the strides of the view, which a DLPack consumer reads.
     """
-    view = view_of(field, row_mask=idx, col_mask=envs_idx)
-    if len(field.shape) > 1:
-        view = view.movedim(len(field.shape) - 1, 0)
-    return view
+    if len(field.shape) <= 1:
+        return view_of(field, row_mask=idx, col_mask=envs_idx)
+    view = DeviceView(field).movedim(len(field.shape) - 1, 0)
+    selection = _normalize_mask((envs_idx, idx), True)
+    return view[selection + (slice(None),) * (view.ndim - len(selection))]
 
 
 class DlpackStager:
