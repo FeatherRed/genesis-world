@@ -5,8 +5,8 @@ It defines the common `Solver` base class (lifecycle, state I/O, error/errno han
 `rigid/` is the project's REFERENCE implementation: the largest, most mature solver, whose `func_*`/`kernel_*` naming and Quadrants kernel structure the other solvers follow.
 
 ## File Map
-- `base_solver.py` (923 lines) — `TimeBasedMixin`, `merge_errno`, `BoundaryItems`, `GravityMixin`, `Solver`, `kernel_set_gravity`, the errno kernels and `ERRNO_CHECK_INTERVAL`.
-- `torch_free.py` (797 lines) — the shared read/sanitize helpers every solver uses (`numpy_dtype`, `to_numpy_values`, `qd_field`, `device_tensor_from_numpy`, `broadcast_values`, masks, `sanitize_*`, `index_field`, `index_tensor`, `envs_*`, `read_view`, `owned_view`, `owned_copy`, `is_dlpack_source`, `write_from_dlpack`, ...), plus the re-export of `dlpck_stage.py`; see "Torch-free mode" below.
+- `base_solver.py` (965 lines) — `TimeBasedMixin`, `merge_errno`, `BoundaryItems`, `GravityMixin`, `Solver`, `kernel_set_gravity`, the errno kernels and `ERRNO_CHECK_INTERVAL`.
+- `torch_free.py` (798 lines) — the shared read/sanitize helpers every solver uses (`numpy_dtype`, `to_numpy_values`, `qd_field`, `device_tensor_from_numpy`, `broadcast_values`, masks, `sanitize_*`, `index_field`, `index_tensor`, `envs_*`, `read_view`, `owned_view`, `owned_copy`, `is_dlpack_source`, `write_from_dlpack`, ...), plus the re-export of `dlpck_stage.py`; see "Torch-free mode" below.
 - `dlpck_stage.py` (397 lines) — the DLPack staging machinery: `DlpackStager`, `stage_kernel_values` and the stream-ordered HIP copies and layout queries they issue (`_copy_after_pending_work`, `_copy_transposed_after_pending_work`, `_device_copy_plan`, `_HipAsyncCopies`, `_read_selection`, `_is_copyable_on_device`, `_host_values`, `_contiguous_strides`).
 - `kinematic_solver.py` — `KinematicSolver`: forward kinematics, rendering, state get/set, Jacobians/IK for articulated entities; base of `RigidSolver`.
 - `particle_solver.py` — `ParticleSolver`: base of MPM/SPH/PBD; particle state accessors + the `add_vverts` render-skinning kernel. NOT exported from `__init__.py`.
