@@ -2,7 +2,6 @@ from functools import wraps
 from pathlib import Path
 
 import numpy as np
-import torch
 
 import trimesh
 
@@ -16,6 +15,7 @@ from genesis.engine.entities.rigid_entity import RigidLink
 from genesis.engine.states.entities import FEMEntityState
 from genesis.repr_base import RBC
 from genesis.utils.misc import broadcast_tensor, tensor_to_array, unique_rows
+from genesis.utils.torch_compat import HAS_TORCH, require_torch, torch
 
 from .base_entity import Entity
 
@@ -237,6 +237,7 @@ class FEMEntity(Entity):
         # A value without one entry per vertex places the center of mass, each vertex keeping its initial offset
         shape = np.shape(pos)
         if len(shape) == 1 or (len(shape) == 2 and shape[0] != self.n_vertices):
+            require_torch("FEMEntity.set_position")
             pos = self.init_positions_COM_offset + broadcast_tensor(pos, gs.tc_float, (*shape[:-1], 1, 3))
         self.set_verts_pos(pos)
 
@@ -279,6 +280,7 @@ class FEMEntity(Entity):
             If the tensor shape is not supported or per-element actuation is attempted.
         """
         elements_idx = self._get_global_idx(None, self.n_elements, self._el_start, unsafe=True)
+        require_torch("FEMEntity.set_actuation")
         actu = broadcast_tensor(actu, gs.tc_float, (self._sim._B, self.material.n_groups), ("envs_idx", "groups"))
         # Every element of the entity takes the actuation of its muscle group
         actu = actu[:, None] if self._scene.n_envs > 0 else actu[0]
@@ -302,6 +304,7 @@ class FEMEntity(Entity):
             If tensor shapes are incorrect or normalization fails.
         """
         n_groups = self.material.n_groups
+        require_torch("FEMEntity.set_muscle")
         max_group_id = muscle_group.max().item()
 
         muscle_group = broadcast_tensor(muscle_group, gs.tc_int, (self.n_elements,), ("elements_idx",))
@@ -364,10 +367,15 @@ class FEMEntity(Entity):
         if not init_positions.shape[0] > 0:
             gs.raise_exception("Entity has zero vertices.")
 
-        self.init_positions = torch.tensor(init_positions, dtype=gs.tc_float, device=gs.device)
-        self.init_positions_COM_offset = torch.tensor(
-            init_positions - (verts_COM + offset_shift), dtype=gs.tc_float, device=gs.device
-        )
+        # The initial positions are kept as the tensor the getters and the solver hand out, or as their host array
+        if HAS_TORCH:
+            self.init_positions = torch.tensor(init_positions, dtype=gs.tc_float, device=gs.device)
+            self.init_positions_COM_offset = torch.tensor(
+                init_positions - (verts_COM + offset_shift), dtype=gs.tc_float, device=gs.device
+            )
+        else:
+            self.init_positions = np.asarray(init_positions, dtype=gs.np_float)
+            self.init_positions_COM_offset = np.asarray(init_positions - (verts_COM + offset_shift), dtype=gs.np_float)
 
         self.elems = elems
 
@@ -582,6 +590,8 @@ class FEMEntity(Entity):
             Tensor of shape (n_elements, 4) mapping each element to its local vertex indices.
         """
         elements_idx = self._get_global_idx(None, self.n_elements, self._el_start, unsafe=True)
+        # Shifting the vertex indices of every element needs a subtraction over the device buffer
+        require_torch("FEMEntity.get_el2v")
         return self._solver.get_elements_el2v(elements_idx) - self._v_start
 
     # ------------------------------------------------------------------------------------
