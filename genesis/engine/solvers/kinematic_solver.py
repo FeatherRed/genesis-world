@@ -980,12 +980,21 @@ class KinematicSolver(Solver):
 
         envs_idx = self._scene._sanitize_envs_idx(envs_idx)
 
+        # A torch-free scene holds the state of a getter in zero-copy device views, which the kernel of a setter takes
+        # only as the device buffers it stages them into (see 'Solver._stage_kernel_values')
+        if HAS_TORCH:
+            qpos, dofs_vel, links_pos, links_quat = state.qpos, state.dofs_vel, state.links_pos, state.links_quat
+        else:
+            qpos, dofs_vel, links_pos, links_quat = [
+                self._stage_kernel_values(value)
+                for value in (state.qpos, state.dofs_vel, state.links_pos, state.links_quat)
+            ]
         kernel_set_kinematic_state(
             envs_idx,
-            state.qpos,
-            state.dofs_vel,
-            state.links_pos,
-            state.links_quat,
+            qpos,
+            dofs_vel,
+            links_pos,
+            links_quat,
             self.dyn_state,
             self.rigid_info,
             self.rigid_config,

@@ -896,7 +896,14 @@ class PBDSolver(ParticleSolver):
 
     def set_state(self, f, state, envs_idx=None):
         if self.is_active:
-            self._kernel_set_state(f, state.pos, state.vel, state.free)
+            # See 'Solver._stage_kernel_values': a torch-free getter reads zero-copy device views, which the kernel takes
+            # only as the device buffers a setter stages them into
+            if HAS_TORCH:
+                pos, vel, free = state.pos, state.vel, state.free
+            else:
+                pos, vel = [self._stage_kernel_values(value) for value in (state.pos, state.vel)]
+                free = self._stage_kernel_values(state.free, gs.qd_bool)
+            self._kernel_set_state(f, pos, vel, free)
 
     @qd.kernel
     def _kernel_set_state(

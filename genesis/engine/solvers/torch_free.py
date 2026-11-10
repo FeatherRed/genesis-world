@@ -7,7 +7,8 @@ This module holds what replaces it on the torch-free path, so that no solver rep
 - 'broadcast_values' and 'broadcast_tensor', the numpy and device counterparts of 'genesis.utils.misc.broadcast_tensor'.
 - 'sanitize_index_values' and 'sanitize_io_variables', the numpy counterpart of the index sanitizing of a getter.
 - 'device_tensor_from_numpy', 'index_field' and 'qd_field', the allocation of a kernel argument and of a solver buffer.
-- 'read_view', 'is_dlpack_source' and 'DlpackStager', the device-buffer bridge of 'genesis.utils.device_buffer'.
+- 'read_view', 'is_dlpack_source', 'stage_kernel_values' and 'DlpackStager', the device-buffer bridge of
+  'genesis.utils.device_buffer'.
 - 'envs_selection' and 'mps_synchronize', which read the environments of a call and flush the stream after a write.
 
 Nothing here imports PyTorch except through 'torch_compat', and only 'mps_synchronize' touches it at all.
@@ -51,6 +52,7 @@ __all__ = [
     "read_view",
     "sanitize_index_values",
     "sanitize_io_variables",
+    "stage_kernel_values",
     "to_numpy_values",
     "write_from_dlpack",
 ]
@@ -515,6 +517,87 @@ def read_view(field, envs_idx=None, idx=None):
     view = DeviceView(field).movedim(len(field.shape) - 1, 0)
     selection = _normalize_mask((envs_idx, idx), True)
     return view[selection + (slice(None),) * (view.ndim - len(selection))]
+
+
+def _contiguous_strides(shape) -> tuple[int, ...]:
+    """Row-major strides, in elements, of a contiguous buffer of the given shape."""
+    strides = [1] * len(shape)
+    for axis in range(len(shape) - 2, -1, -1):
+        strides[axis] = strides[axis + 1] * shape[axis + 1]
+    return tuple(strides)
+
+
+def _is_copyable_on_device(value, dtype) -> bool:
+    """Whether the bridge can copy `value` into a device buffer of `dtype` without a host roundtrip.
+
+    It writes a buffer of at most two dimensions only, which is why the third dimension of a state layout, the
+    components of a vector, takes the host path ('stage_kernel_values').
+    Both sides share a dtype and no cast is performed, the source must be contiguous, and a Metal backend has no device
+    copy at all.
+    A producer exposing no layout of its own, as a raw DLPack capsule does, is left to the host path as well.
+    """
+    shape = getattr(value, "shape", None)
+    strides = getattr(value, "strides", None)
+    value_dtype = getattr(value, "dtype", None)
+    if not isinstance(shape, (tuple, list)) or not isinstance(strides, (tuple, list)) or len(shape) > 2:
+        return False
+    if value_dtype is None or gs.backend == gs.metal:
+        return False
+    return numpy_dtype(value_dtype) == numpy_dtype(dtype) and tuple(strides) == _contiguous_strides(tuple(shape))
+
+
+def _host_values(value) -> np.ndarray:
+    """Host values of `value`, a DLPack producer that no device copy takes, laid out as the kernel reads them.
+
+    A zero-copy device view reads itself back through its own 'to_numpy', which is a single device-to-host transfer.
+    Anything else is a DLPack capsule of some runtime, which only NumPy can read, and which a device-resident producer
+    refuses: the error then names the forms the setter accepts.
+    """
+    to_numpy = getattr(value, "to_numpy", None)
+    if to_numpy is not None:
+        return np.asarray(to_numpy())
+    try:
+        return np.from_dlpack(value)
+    except (BufferError, RuntimeError, TypeError, ValueError) as err:
+        gs.raise_exception_from(
+            "The values come from a device-resident DLPack producer, which a state setter can only take in the two "
+            "layouts it copies on the device, the batch axis leading and at most two dimensions. Pass them as a NumPy "
+            "array, a Quadrants buffer or a zero-copy device view instead.",
+            err,
+        )
+
+
+def stage_kernel_values(value, dtype):
+    """Return `value` as the contiguous device buffer of `dtype` that a kernel takes as an ndarray argument.
+
+    A state setter writes the arrays of a state, which a torch-free getter returns as zero-copy device views
+    ('read_view'), and the kernels writing the state take 'qd.types.ndarray()' arguments, which a device view is not.
+    Every array therefore reaches those kernels as the device buffer of the dtype and shape the kernel reads:
+
+    - a Quadrants buffer of that dtype already is one, and passes through untouched;
+    - a NumPy array, a plain sequence and a 'qd.Field' hold their values on the host, and are uploaded from there (the
+      field through 'read_view', its batch axis being the last one);
+    - a zero-copy device view and any other DLPack producer are copied device to device when the bridge of
+      'genesis.utils.device_buffer' can write them, which it does for at most two dimensions and without casting, and
+      through the host otherwise, the state layouts holding the components of a vector as a third dimension.
+
+    Every call stages into a buffer of its own rather than into a cached one, because the arrays of one state share their
+    shapes: the velocities and the accelerations of a solver have the same shape and dtype, and a buffer cached per shape
+    would make the kernel write the accelerations into the velocities as well.
+    """
+    if isinstance(value, (qd.Tensor, qd.Ndarray)):
+        if numpy_dtype(value.dtype) == numpy_dtype(dtype):
+            return value
+        return device_tensor_from_numpy(value.to_numpy(), dtype)
+    if isinstance(value, qd.Field):
+        return device_tensor_from_numpy(to_numpy_values(read_view(value)), dtype)
+    if is_dlpack_source(value):
+        if _is_copyable_on_device(value, dtype):
+            buffer = qd.ndarray(_qd_type(dtype), shape=tuple(value.shape))
+            copy_from_dlpack(buffer, value, transpose=False)
+            return buffer
+        return device_tensor_from_numpy(_host_values(value), dtype)
+    return device_tensor_from_numpy(to_numpy_values(value), dtype)
 
 
 class DlpackStager:

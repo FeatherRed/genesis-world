@@ -38,7 +38,9 @@ from .torch_free import (
     index_field,
     mps_synchronize,
     qd_field,
+    read_view,
     sanitize_io_variables,
+    stage_kernel_values,
 )
 
 
@@ -483,6 +485,17 @@ class Solver(RBC):
         """
         return broadcast_values(values, dtype, shape, dim_names)
 
+    @staticmethod
+    def _stage_kernel_values(value, dtype=None):
+        """Return `value` as the device buffer the kernel of a state setter takes, for a torch-free scene.
+
+        The state a setter writes is the one a getter read, which is a zero-copy device view in a torch-free scene, and
+        the kernels writing the state take 'qd.types.ndarray()' arguments, which a device view is not. A NumPy array, a
+        Quadrants buffer and a DLPack producer are taken as well, as the torch path takes a tensor (see
+        'torch_free.stage_kernel_values'). The setter of the torch path keeps its own handling, and stages nothing.
+        """
+        return stage_kernel_values(value, gs.qd_float if dtype is None else dtype)
+
     def _sanitize_io_variables(
         self,
         tensor,
@@ -668,7 +681,9 @@ class Solver(RBC):
         is_single = isinstance(data, (qd.Tensor, qd.Field, qd.Ndarray))
         fields = (data,) if is_single else tuple(data)
         if not HAS_TORCH:
-            views = [view_of(field, transpose=True, row_mask=envs_idx, col_mask=idx) for field in fields]
+            # 'read_view' transposes a buffer of vectors on its batch axis rather than on the components its element
+            # holds, which is the axis 'view_of' would move to the front of the view
+            views = [read_view(field, envs_idx, idx) for field in fields]
             return views[0] if is_single else views
         copy = True if self.is_recording else copy
         if self.has_frames:

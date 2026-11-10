@@ -1844,14 +1844,32 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             mps_synchronize()
         else:
             envs_idx = self._scene._sanitize_envs_idx(envs_idx)
+            # A torch-free scene holds the state of a getter in zero-copy device views, which the kernel of a setter
+            # takes only as the device buffers it stages them into (see 'Solver._stage_kernel_values')
+            if HAS_TORCH:
+                qpos, dofs_vel, dofs_acc = state.qpos, state.dofs_vel, state.dofs_acc
+                links_pos, links_quat = state.links_pos, state.links_quat
+                friction_ratio = state.friction_ratio
+            else:
+                qpos, dofs_vel, dofs_acc, links_pos, links_quat, friction_ratio = [
+                    self._stage_kernel_values(value)
+                    for value in (
+                        state.qpos,
+                        state.dofs_vel,
+                        state.dofs_acc,
+                        state.links_pos,
+                        state.links_quat,
+                        state.friction_ratio,
+                    )
+                ]
             kernel_set_state(
                 envs_idx,
-                state.qpos,
-                state.dofs_vel,
-                state.dofs_acc,
-                state.links_pos,
-                state.links_quat,
-                state.friction_ratio,
+                qpos,
+                dofs_vel,
+                dofs_acc,
+                links_pos,
+                links_quat,
+                friction_ratio,
                 self.dyn_state,
                 self.rigid_info,
                 self.rigid_config,

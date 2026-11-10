@@ -697,7 +697,25 @@ class MPMSolver(ParticleSolver):
     @mutates()
     def set_state(self, f, state, envs_idx=None):
         if self.is_active:
-            self._kernel_set_state(f, state.pos, state.vel, state.C, state.F, state.Jp, state.actu, state.active)
+            # See 'Solver._stage_kernel_values': a torch-free getter reads zero-copy device views, which the kernel
+            # takes only as the device buffers a setter stages them into
+            if HAS_TORCH:
+                pos, vel, C, F, Jp, actu, active = (
+                    state.pos,
+                    state.vel,
+                    state.C,
+                    state.F,
+                    state.Jp,
+                    state.actu,
+                    state.active,
+                )
+            else:
+                pos, vel, C, F, Jp, actu = [
+                    self._stage_kernel_values(value)
+                    for value in (state.pos, state.vel, state.C, state.F, state.Jp, state.actu)
+                ]
+                active = self._stage_kernel_values(state.active, gs.qd_bool)
+            self._kernel_set_state(f, pos, vel, C, F, Jp, actu, active)
             self.clear_errno(envs_idx)
 
     @qd.kernel

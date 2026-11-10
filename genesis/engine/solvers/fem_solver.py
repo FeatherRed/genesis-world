@@ -1383,7 +1383,12 @@ class FEMSolver(GravityMixin, TimeBasedMixin, Solver):
     @mutates()
     def set_state(self, f, state, envs_idx=None):
         if self.is_active:
-            self._kernel_set_state(f, state.pos, state.vel)
+            # See 'Solver._stage_kernel_values': a torch-free getter reads zero-copy device views, which the kernel takes
+            # only as the device buffers a setter stages them into
+            pos, vel = state.pos, state.vel
+            if not HAS_TORCH:
+                pos, vel = [self._stage_kernel_values(value) for value in (pos, vel)]
+            self._kernel_set_state(f, pos, vel)
             self.clear_errno(envs_idx)
 
     def get_state(self, f):
