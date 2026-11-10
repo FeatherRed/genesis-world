@@ -15,6 +15,8 @@ Nothing here imports PyTorch except through 'torch_compat', and only 'mps_synchr
 The batch (environment) dimension is the LAST one of a Quadrants buffer, as everywhere in the engine.
 """
 
+import ctypes
+import functools
 from itertools import combinations
 
 import numpy as np
@@ -28,9 +30,12 @@ from genesis.utils.device_buffer import (
     _DLPACK_CAPSULE_NAME,
     _DLPACK_VERSIONED_CAPSULE_NAME,
     DeviceView,
+    _index_runs,
     _normalize_mask,
     _py_capsule_is_valid,
+    _selected_indices,
     copy_from_dlpack,
+    dlpack_info,
     view_of,
 )
 from genesis.utils.torch_compat import HAS_TORCH, torch
@@ -71,6 +76,13 @@ _QD_TYPES = {
     np.dtype(np.int64): qd.i64,
     np.dtype(np.bool_): qd.u1,
 }
+
+# HIP copy kind of a transfer whose two sides are device pointers.
+_HIP_MEMCPY_DEVICE_TO_DEVICE = 3
+
+# The stream Quadrants launches its kernels on: the default stream of the process, which is what its runtime is given
+# when a kernel is launched without an explicit stream, as every kernel of the engine is.
+_QUADRANTS_STREAM = None
 
 
 # ------------------------------------------------------------------------------------------------
@@ -801,6 +813,128 @@ def stage_kernel_values(value, dtype):
     return device_tensor_from_numpy(to_numpy_values(value), dtype)
 
 
+class _HipAsyncCopies:
+    """The asynchronous device-to-device HIP transfers a stream-ordered staging copy issues.
+
+    'genesis.utils.device_buffer' owns the synchronous transfers of a write into a device buffer, and this class binds
+    the two asynchronous counterparts, with the same conventions: the library is loaded on first use only, so no HIP
+    runtime is touched on a backend that has none, and every call is checked.
+    """
+
+    def __init__(self) -> None:
+        try:
+            self._library = ctypes.CDLL("libamdhip64.so")
+        except OSError as e:
+            gs.raise_exception_from(
+                "The HIP runtime 'libamdhip64.so' is required to stage the values of a DLPack producer on the device, "
+                "but it could not be loaded.",
+                e,
+            )
+        self._library.hipMemcpyAsync.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        ]
+        self._library.hipMemcpyAsync.restype = ctypes.c_int
+        self._library.hipMemcpy2DAsync.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_void_p,
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.c_size_t,
+            ctypes.c_int,
+            ctypes.c_void_p,
+        ]
+        self._library.hipMemcpy2DAsync.restype = ctypes.c_int
+
+    @staticmethod
+    def _check(status: int, function_name: str) -> None:
+        if status != 0:
+            gs.raise_exception(f"The HIP call '{function_name}' failed with the error code {status}.")
+
+    def copy(self, dst_ptr: int, src_ptr: int, nbytes: int) -> None:
+        self._check(
+            self._library.hipMemcpyAsync(dst_ptr, src_ptr, nbytes, _HIP_MEMCPY_DEVICE_TO_DEVICE, _QUADRANTS_STREAM),
+            "hipMemcpyAsync",
+        )
+
+    def copy_2d(
+        self, dst_ptr: int, dst_pitch: int, src_ptr: int, src_pitch: int, width: int, height: int
+    ) -> None:
+        self._check(
+            self._library.hipMemcpy2DAsync(
+                dst_ptr,
+                dst_pitch,
+                src_ptr,
+                src_pitch,
+                width,
+                height,
+                _HIP_MEMCPY_DEVICE_TO_DEVICE,
+                _QUADRANTS_STREAM,
+            ),
+            "hipMemcpy2DAsync",
+        )
+
+
+@functools.lru_cache(maxsize=1)
+def _hip_async_copies() -> _HipAsyncCopies:
+    """Asynchronous HIP transfers of the process, bound on first use so that a CPU backend never loads a HIP library."""
+    return _HipAsyncCopies()
+
+
+def _copy_transposed_after_pending_work(src, dst, envs_idx) -> bool:
+    """Copy the DLPack producer `src` of shape (num_envs, num_values) into the batch-last `dst`, without any host wait.
+
+    The producer holds one row per environment and one column per value written, the batch axis first as a
+    machine-learning runtime emits it, and `dst` is the contiguous '(num_values, num_envs)' staging buffer a staged
+    write kernel reads; `envs_idx` selects the environments to write, and the environments it does not name are left
+    untouched. Each destination row is one 'hipMemcpy2DAsync' transfer, so the copy stays on the device and no host
+    roundtrip of the payload takes place.
+
+    The transfers are issued on the stream Quadrants launches its kernels on, which is the default stream of the
+    process: 'Kernel.__call__' passes no stream to the runtime unless the caller gives one, and no caller in Genesis
+    ever does. A transfer of that stream is ordered after every Quadrants kernel launched before it, and every kernel
+    launched after it is ordered after the transfer, so the kernels reading the staging buffer see the values without
+    any device synchronization, and the transfer of the previous step no longer drains the stream.
+
+    Returns False, having issued nothing, when the copy cannot be taken this way: another backend, a producer the
+    bridge does not copy device to device (a layout, a dtype or a device mismatch), so that the caller falls back on
+    'copy_from_dlpack', which reports a producer it refuses with its own message.
+    """
+    if gs.backend != gs.amdgpu:
+        return False
+    dst_view = view_of(dst)
+    if not dst_view.is_contiguous or dst_view.ndim != 2:
+        return False
+    num_values, num_envs = dst_view.shape
+    src_info = dlpack_info(src)
+    if src_info.shape != (num_envs, num_values) or src_info.dtype != dst_view.dtype:
+        return False
+    if src_info.strides != _contiguous_strides(src_info.shape):
+        return False
+    device = dst_view.device
+    if (src_info.device_type, src_info.device_id) != (device.dlpack_device_type, device.index):
+        return False
+    copies = _hip_async_copies()
+    dst_ptr = dst_view.data_ptr
+    src_ptr = src_info.data_ptr + src_info.byte_offset
+    itemsize = dst_view.itemsize
+    for i_v in range(num_values):
+        for env_start, env_count in _index_runs(_selected_indices(envs_idx, num_envs), num_envs):
+            copies.copy_2d(
+                dst_ptr + (i_v * num_envs + env_start) * itemsize,
+                itemsize,
+                src_ptr + (env_start * num_values + i_v) * itemsize,
+                num_values * itemsize,
+                itemsize,
+                env_count,
+            )
+    return True
+
+
 class DlpackStager:
     """Staging buffers that turn a DLPack producer into the contiguous batch-last values a kernel scatters into a field.
 
@@ -820,15 +954,16 @@ class DlpackStager:
         `src` holds one row per environment of the solver, in environment order, and `envs_idx` only selects the columns
         of the buffer that receive the values of those environments, in place, as the write into a state leaves them.
         The columns `envs_idx` does not select hold whatever the buffer held before, and must never be read.
-        The copy runs device to device and synchronizes the HIP device, which costs one device synchronize per write
-        because the producer may still have writes pending on its own queue, and it moves no data to the host.
+        The copy runs device to device and is stream-ordered: it is issued on the stream Quadrants launches its kernels
+        on, so the staged write kernel that reads the buffer sees the values without any synchronization, and a write
+        costs no host wait at all (see '_copy_transposed_after_pending_work'). It moves no data to the host.
         The dtype of `src` must be that of the buffer, 'gs.qd_float' for a float state, since the bridge casts nothing
         and reports a mismatch with its own message.
         A selection covering every environment in order is dropped, so that the copy takes the whole buffer and no
         selection reaches the host.
-        A masked write still needs its selection on the host, where the bridge splits the copy into contiguous runs, so
-        a selection given on the device costs one host read of its indices, and a backend without a device copy, as the
-        CPU one, reads the buffer back once more to patch it. A device-resident selection holding one 0/1 flag per
+        A masked write still needs its selection on the host, where the copy splits into contiguous runs, so a selection
+        given on the device costs one host read of its indices, and a backend without a stream-ordered device copy, as
+        the CPU one, reads the buffer back once more to patch it. A device-resident selection holding one 0/1 flag per
         environment is the mask form of a torch-free scene, which becomes the indices it flags (see
         'sanitize_index_values').
         """
@@ -841,7 +976,8 @@ class DlpackStager:
             selection = _resolve_flag_mask(to_numpy_values(selection), num_envs)
         if is_full_env_selection(selection, num_envs):
             selection = None
-        copy_from_dlpack(buffer, src, transpose=True, envs_idx=selection)
+        if not _copy_transposed_after_pending_work(src, buffer, selection):
+            copy_from_dlpack(buffer, src, transpose=True, envs_idx=selection)
         return buffer
 
 
