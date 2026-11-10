@@ -23,6 +23,10 @@ Conventions
 * :func:`reachable_device_or_skip` never trusts an enumeration: ``evoxc.devices()`` lists every
   runtime the wheel was built with, so a ROCm-only host also enumerates ``cuda:0``.  The only honest
   reachability test is moving one float32 element there through the backend's placement provider.
+* :func:`skip_if_unsafe_hsa_runtime` is the gate every *in-process* Genesis GPU scene needs: on a
+  host where ``gs.init``'s HSA repair is warn-only under pytest, the worker keeps PyTorch's bundled
+  runtime and can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``.  Child-process scenarios
+  (``tests/torch_block.py``) do not need it.
 """
 
 from __future__ import annotations
@@ -40,9 +44,11 @@ __all__ = [
     "max_abs_diff",
     "max_rel_diff",
     "reachable_device_or_skip",
+    "skip_if_unsafe_hsa_runtime",
     "skip_unless_torch_free",
     "torch_import_offenders",
     "torch_imports",
+    "unsafe_hsa_runtime_reason",
 ]
 
 #: Environment variable an explicit device request comes from (``"rocm:0"``, ``"cuda:1"``, ...).
@@ -200,6 +206,51 @@ def reachable_device_or_skip(backend="iree"):
         + (f" (requested through {DEVICE_ENV_VAR}={requested!r})" if requested else "")
         + f"; probed {', '.join(unusable) or 'no non-CPU device'}"
     )
+
+
+def unsafe_hsa_runtime_reason() -> str | None:
+    """Why a Genesis GPU scene must not run in this process, or ``None`` when it may.
+
+    On a ROCm host ``gs.init`` repairs PyTorch's bundled ``libhsa-runtime64.so`` -- which corrupts AQL
+    packets and aborts a Genesis GPU rollout with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT`` -- by
+    re-executing the interpreter with the system runtime preloaded (``genesis.utils.hsa``).  Under
+    ``pytest`` that repair is warn-only (a re-exec would restart the session), so a worker that keeps
+    torch's copy can die mid-scene.  Only exactly that configuration is unsafe: the repair applies, a
+    differing system runtime exists, and the process has not preloaded it.  The check is cheap and has
+    no side effect (no ``gs.init``, no ``ctypes``, no file access beyond the runtime paths
+    ``inspect_hsa_runtime`` already resolves), and a status object without those attributes -- an
+    older or incompatible ``genesis.utils.hsa`` -- reads as safe.
+
+    Returns:
+        str | None: The single-line skip reason naming the remedy, or ``None`` when running a Genesis
+        GPU scene in this process is safe.
+    """
+    try:
+        from genesis.utils.hsa import inspect_hsa_runtime
+    except ImportError:
+        return None
+    status = inspect_hsa_runtime()
+    if not getattr(status, "applicable", False):
+        return None
+    system_path = getattr(status, "system_path", None)
+    if system_path is None or getattr(status, "preload_names_system", False):
+        return None
+    return (
+        "the process maps PyTorch's bundled HSA runtime (Genesis' re-exec repair is warn-only under "
+        f"pytest); run with LD_PRELOAD={system_path} to run this test in-process"
+    )
+
+
+def skip_if_unsafe_hsa_runtime() -> None:
+    """Skip the calling test where :func:`unsafe_hsa_runtime_reason` reports an unsafe HSA runtime.
+
+    Every in-process Genesis GPU scene has to call this before it initializes Genesis: the alternative
+    is an intermittent ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT`` abort of the whole pytest worker (see
+    the module docstring of ``tests/test_go2_device_parity.py``).
+    """
+    reason = unsafe_hsa_runtime_reason()
+    if reason is not None:
+        pytest.skip(reason)
 
 
 def torch_imports(path) -> list[str]:

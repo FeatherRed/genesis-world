@@ -92,7 +92,11 @@ and undeclared in ``pyproject.toml``); ``gpu_genesis`` skips it on a CPU-only ho
 (``tests.torch_block.has_gpu``, which falls back to the ``/dev/kfd`` device node where NVML/AMD SMI are
 not installed); ``device_placement`` skips it when no non-CPU ``evoxc`` device accepts a write
 (``tests.device_pilot.reachable_device_or_skip``, which can be pointed at a device through
-``EVOXC_DEVICE``).
+``EVOXC_DEVICE``).  The in-process tier -- every test that builds a Genesis GPU scene here, i.e. both
+campaign fixtures -- additionally skips where ``tests.device_pilot.unsafe_hsa_runtime_reason`` reports
+that the worker maps PyTorch's bundled HSA runtime, with a reason naming the ``LD_PRELOAD`` remedy (see
+the HSA section below); the torch-blocked child test is not gated, because its child repairs the
+runtime itself.
 
 One process, one module
 -----------------------
@@ -113,13 +117,18 @@ GPU work can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT`` ("The AQL pac
 surfacing as ``Queue ... aborting`` and as the ``qd_destroy_data`` abort seen here).  That is a
 process-wide constraint, not a scene-count one: bare ``pytest`` aborted the *first* in-process Go2 scene
 of a whole-module run, both while another job was training on the same GPU and again after that load had
-lightened, and every such run passes once the process preloads the runtime the repair would pick.  Run
-this module -- or the suite -- that way::
+lightened, and every such run passes once the process preloads the runtime the repair would pick.  The
+in-process tier therefore requires the system HSA runtime to be preloaded on a ROCm host; this is the
+exact command::
 
     LD_PRELOAD=/opt/rocm/lib/libhsa-runtime64.so.1 \\
         PYTHONPATH=$PWD:/tmp/gs-pytest-libs /root/evox-robotics/.venv/bin/python -m pytest \\
         tests/test_go2_device_parity.py -q -n 0 --durations=15
 
+Without it the campaign tests skip with a reason naming that ``LD_PRELOAD`` path, instead of aborting
+the worker.  ``tests.device_pilot.unsafe_hsa_runtime_reason`` decides, and it only gates the known-bad
+case: a process that already preloaded the system runtime, and one whose PyTorch bundles no ROCm HSA
+runtime (a CUDA host), run the tier as before.
 The 1000-step case does not depend on that: it runs in a torch-blocked child through
 ``tests.torch_block.run_python_checked``, where torch is not importable at all, so the system runtime is
 the one that gets loaded.  Every in-process rollout is short (13 / 6 / 21 steps).
@@ -165,6 +174,7 @@ from tests.device_pilot import (  # noqa: E402
     as_host,
     assert_allclose,
     reachable_device_or_skip,
+    skip_if_unsafe_hsa_runtime,
 )
 from tests.torch_block import has_gpu, run_python_checked  # noqa: E402
 
@@ -278,6 +288,16 @@ def gpu_genesis():
         yield gs
     finally:
         gs.destroy()
+
+
+@pytest.fixture(scope="module")
+def safe_hsa_runtime():
+    """Skip the in-process tier where Genesis' HSA re-exec repair cannot run (see the module docstring).
+
+    It has to be resolved before ``gpu_genesis`` initializes Genesis and before a scene is built, which
+    is why the two campaign fixtures request it first; the torch-blocked child test does not use it.
+    """
+    skip_if_unsafe_hsa_runtime()
 
 
 @pytest.fixture(scope="module")
@@ -563,12 +583,14 @@ def _assert_leaf_parity(numpy_leaves, device_leaves, *, label, atol=LEAF_ATOL) -
 
 
 @pytest.fixture(scope="module")
-def default_campaign(gpu_genesis, device_placement):
+def default_campaign(safe_hsa_runtime, gpu_genesis, device_placement):
     """Each residency's recorded generation and two trainer runs, one scene at a time.
 
-    ``gpu_genesis`` is requested first so Genesis is initialized before the first scene is built; each
-    residency's scene is built, used for all of its work and closed before the other residency's scene
-    is built, so a serial run creates two scenes here (and two in ``timeout_campaign``).
+    ``safe_hsa_runtime`` runs before ``gpu_genesis`` so an unsafe HSA runtime skips the tier before
+    Genesis is initialized; ``gpu_genesis`` is requested next so Genesis is initialized before the
+    first scene is built; each residency's scene is built, used for all of its work and closed before
+    the other residency's scene is built, so a serial run creates two scenes here (and two in
+    ``timeout_campaign``).
     """
     backend, device = device_placement
     campaign = {}
@@ -580,7 +602,7 @@ def default_campaign(gpu_genesis, device_placement):
 
 
 @pytest.fixture(scope="module")
-def timeout_campaign(gpu_genesis, device_placement):
+def timeout_campaign(safe_hsa_runtime, gpu_genesis, device_placement):
     """Each residency's recorded timeout generation, one scene at a time.
 
     ``episode_length_s=0.1`` fixes ``max_episode_length`` at 5 inside the advance graph, so the timeout

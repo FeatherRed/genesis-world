@@ -97,7 +97,9 @@ Under pytest the HSA repair in ``gs.init`` is warn-only, so this process keeps t
 and a long torch-present Genesis rollout can abort with ``HSA_STATUS_ERROR_INVALID_PACKET_FORMAT``.  Every
 in-process rollout here is therefore short (25 and 15 steps), and the two full-length (160 + 58 step)
 training cases are delegated to child interpreters where PyTorch is blocked and the system runtime is the
-one that gets loaded.
+one that gets loaded.  Independence of the rollout length is not assumed: ``gpu_genesis`` skips the
+in-process tier where ``tests.device_pilot.unsafe_hsa_runtime_reason`` reports that the worker maps
+PyTorch's bundled runtime, naming the ``LD_PRELOAD`` remedy; the child scenarios are not gated.
 
 Two scenes are never alive at the same time
 -------------------------------------------
@@ -152,6 +154,7 @@ from tests.device_pilot import (  # noqa: E402
     as_host,
     assert_allclose,
     reachable_device_or_skip,
+    skip_if_unsafe_hsa_runtime,
     torch_import_offenders,
 )
 from tests.torch_block import REPO_ROOT, has_gpu, run_python_checked  # noqa: E402
@@ -376,12 +379,19 @@ def gpu_only(torch_free_pilot):
 
 
 @pytest.fixture(scope="module")
-def gpu_genesis(gpu_only):
+def safe_hsa_runtime():
+    """Skip the in-process tier where Genesis' HSA re-exec repair cannot run (see the module docstring)."""
+    skip_if_unsafe_hsa_runtime()
+
+
+@pytest.fixture(scope="module")
+def gpu_genesis(gpu_only, safe_hsa_runtime):
     """Initialize Genesis on its GPU backend once, and destroy it once at module teardown.
 
     ``pytestmark``'s ``parametrize("backend", [None])`` disables the suite's autouse ``initialize_genesis``
     fixture; this module needs its own, module-scoped one because the envs here outlive a single test and
-    ``gs.destroy()`` between tests would invalidate their solver state.
+    ``gs.destroy()`` between tests would invalidate their solver state.  Only the in-process tests request
+    it, so they alone are gated on the HSA runtime being safe to use.
     """
     import genesis as gs
 
