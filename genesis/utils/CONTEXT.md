@@ -18,6 +18,10 @@ It provides the canonical tensor/array conversion helpers, geometry math in thre
 
 Canonical helpers & misc:
 - `misc.py` — the canonical helpers every module must use: `tensor_to_array`, `tensor_to_cpu`, `data_to_array` (torch→numpy without `detach().cpu().numpy()`), `qd_to_torch`/`qd_to_numpy`/`qd_from_torch`/`qd_destroy_data` (Quadrants↔torch/numpy zero-copy), `raise_exception`/`raise_exception_from`, `redirect_libc_stderr`, `ZeroCopyMode`, `set_environ`, `assert_initialized`/`assert_built`/`assert_unbuilt`/`with_lock`, `set_random_seed`, `get_device`, `get_assets_dir`/`get_src_dir`/`get_gen_log_dir`/`get_entry_point_name`, `unique_rows` (numba), `make_tensor_field`/`concat_with_tensor`, `indices_to_mask`, `geometric_mean`/`harmonic_mean`, screen helpers (`get_default_screen`, `has_display`), Quadrants monkey-patches (`_stringify_obj_type_with_grad`, `_kernel_impl_with_adjoint_callable`, `_try_load_fastcache_by_autodiff_mode`, `_kernel_reset_with_template_args`, `_release_dispatcher_args`, `_perf_dispatcher_init_released_on_reset`), and the indexed-tensor helpers (`sanitize_index`, `get_last_occurrence`, `sanitize_indices`, `broadcast_tensor`, `sanitize_indexed_tensor`, `get_indexed_shape`, `assign_indexed_tensor`).
+  `misc` also re-exports the device-buffer bridge (`DeviceView`, `view_of`, `copy_from_dlpack`, `DeviceInfo`, `device_of`, `dlpack_info`, `qd_ptr`, `zero_copy_supported`), which `genesis/utils/__init__.py` (`from .misc import *`, no `__all__`) turns into `gs.utils.*`.
+- `torch_compat.py` — the single import site for PyTorch: `HAS_TORCH`, `torch` (module-like placeholder whose attributes are `_Unavailable` sentinel types, so annotations, unions, subscriptions and `isinstance` keep working while calling one raises an actionable Genesis error), `require_torch(feature)`, `no_grad()` (context manager and decorator), `is_torch_tensor(x)`.
+- `device_buffer.py` — the read half of the torch-free zero-copy bridge: `DLTensorInfo`/`dlpack_info`, `DeviceInfo`/`device_of`, `DeviceView`/`view_of`, `zero_copy_supported`, and re-exported `copy_from_dlpack`/`qd_ptr`.
+- `hip_copy.py` — the write half: `copy_from_dlpack`, `qd_ptr`, the HIP runtime shim (`hipMemcpy`/`hipMemcpy2D`, device synchronize) and the NumPy host fallback (see the write-path notes below).
 - `warnings.py` — `warn_once` (deduplicated logger warning).
 - `emoji.py` — `random_scene`, `get_clock` (CLI/progress decoration).
 - `deprecated_module_wrapper.py` — `_DeprecatedModuleWrapper` / `create_virtual_deprecated_module` to alias renamed modules with a warning.
@@ -25,14 +29,14 @@ Canonical helpers & misc:
 - `tools.py` — `animate` (moviepy video), `save_img_arr`, and timing utilities `Timer`/`create_timer`/`Rate`/`RunningMean`/`StepTimer`.
 
 Math & geometry:
-- `geom.py` — the canonical geometry module, with three parallel families: `qd_*` (`@qd.func`, device kernels incl. gradients), numpy `_np_*` / torch `_tc_*` backends, and dispatchers (`xyz_to_quat`, `quat_to_R`, `transform_by_quat`, `slerp`, `polar`, etc.). Also `SpatialHasher`, `qd_hash01` (deterministic counter hash), `cubic_spline_1d`, `orthogonals`, `default_solver_params`, `default_friction*`, `default_dofs_kp/kv`, `GeomConstants`/`_tc_geom_constants` (precomputed torch constant tensors per device/dtype).
+- `geom.py` — the canonical geometry module, with three parallel families: `qd_*` (`@qd.func`, device kernels incl. gradients), numpy `_np_*` / torch `_tc_*` backends, and dispatchers (`xyz_to_quat`, `quat_to_R`, `transform_by_quat`, `slerp`, `polar`, etc.) that accept a `DeviceView` on their numpy path. Also `SpatialHasher`, `qd_hash01` (deterministic counter hash), `cubic_spline_1d`, `orthogonals`, `default_solver_params`, `default_friction*`, `default_dofs_kp/kv`, `GeomConstants`/`_tc_geom_constants` (precomputed torch constant tensors per device/dtype).
 - `linalg.py` — `@qd.func` small-matrix kernels: `mat_mul`, `mat_mul_vec`, `mat_inverse` (LU), `mat_add`, `mat_transpose`, `mat_add_eye`, `mat_mask`.
 - `simt.py` — `@qd.func` SIMT block/segment primitives (`qd_block_sum/scan/min/max/shuffle/ballot/all/any`, lane-slot ops, `qd_segmented_sum/min`, `qd_segment_add/min`).
 
 Declarative solver data:
 - `data.py` — the declarative struct layer: `Data`, `StaticConfig`, `DataKind`/`CHECKPOINT_KINDS`, `field`, `opt_in`/`is_opted_in`, `Size`/`SizeExpr`/`_SizeArithmetic`, `FieldRef`, `Namespace`/`namespace`, `V` (qd.tensor allocator honoring `gs.use_ndarray`), `eoa` (env-major axis order), `ENVS`/`WORKERS`, `iter_data`/`iter_state_arrays`/`check_data`/`fill_data`, `ArrayItem`/`ScalarItem`/`ConfigItem`/`DataItem`.
 - There is no `array_class.py`: the concrete solver structs (`RigidInfo`/`RigidData`, `DynInfo`/`DynState`, `DofsInfo`/`DofsState`, `LinksInfo`/`LinksState`, `ErrorCode` subclasses, collider/constraint structs) live with their components under `../engine/solvers/rigid/`.
-- `ring_buffer.py` — `TensorRingBuffer` (preallocated circular buffer of tensors, view-returning `at`, `set`/`rotate`/`get`/`__getitem__`, host-resident index for perf).
+- `ring_buffer.py` — `TensorRingBuffer` (preallocated circular buffer of torch tensors, view-returning `at`, `set`/`rotate`/`get`/`__getitem__`, host-resident index for perf); refusing without PyTorch.
 
 Caching:
 - `cache.py` — cache-directory layout under `~/.cache/genesis` (override via `GS_CACHE_FILE_PATH` / `XDG_CACHE_HOME`); per-domain `get_*_cache_dir`/`get_*_cache`/`get_*_path` helpers (gsd/gnd/cvx/ptc/fps_pc/tet/gel/rm/wt/wth/exr/usd); in-memory `SizeCappedCache` (byte-bounded LRU), `OwnedCache` (entries live while owners do), `MeshCache` (hash-keyed pickle files), `register_cache_clear`/`clear_caches` teardown hooks, `xxh64`/`get_hashkey`, cache-version constants (`WT_CACHE_VERSION`, etc.).
@@ -62,25 +66,36 @@ Serialization & media:
 - `video_encoder.py` — threaded `VideoEncoder` with `_probe_h264_codec` (hardware-first codec selection: videotoolbox/nvenc/vaapi/qsv/libx264) and a bounded frame queue.
 
 Other:
-- `path_planning.py` — `PathPlanner` (ABC), `RRT`, `RRTConnect`, `align_waypoints_length`, `rrt_valid_mask`, `rrt_connect_valid_mask` (Quadrants-based planners; FREE/SPHERICAL joints unsupported).
+- `path_planning.py` — `PathPlanner` (ABC), `RRT`, `RRTConnect`, `align_waypoints_length`, `rrt_valid_mask`, `rrt_connect_valid_mask` (Quadrants kernels driven from torch tensors, so they refuse without PyTorch; FREE/SPHERICAL joints unsupported).
 - `uid.py` — `UID` (`full`/`short`/`match`, uuid4-hex based).
 - `hsa.py` — ROCm HSA runtime repair: `HsaRuntimeStatus`, `inspect_hsa_runtime` / `system_hsa_runtime_path` (pure detection of torch's bundled `libhsa-runtime64.so` vs. a differing system `libhsa-runtime64.so.1.*`, with versions, sha256 candidates from `$ROCM_PATH`/`$ROCM_HOME`/`/opt/rocm`/`/opt/rocm-*`), and `ensure_system_hsa_runtime` (one-shot `os.execve` with `LD_PRELOAD`, gated by `GS_HSA_REEXEC` opt-out and the `GS_HSA_REEXEC_DONE` one-shot sentinel).
-- `torch_compat.py` — optional-PyTorch layer, the single import site for PyTorch: `HAS_TORCH`, `torch` (a module-like placeholder yielding sentinel types when PyTorch is missing, so `torch.Tensor`, `torch.Tensor | None` and `isinstance(x, torch.Tensor)` keep working while calling one raises), `require_torch(feature)`, `no_grad()` (context manager and decorator), `is_torch_tensor(x)`.
-- `device_buffer.py` — torch-free zero-copy device-buffer bridge: ctypes DLPack v0 structs, `DLTensorInfo`/`dlpack_info(capsule_or_producer)`, `DeviceInfo`/`device_of`, `DeviceView` (`shape`/`strides`/`dtype`/`device`/`to_dlpack`/`__dlpack__`/`__dlpack_device__`/`to_numpy`/`to_torch`/`reshape`/`transpose`/`__getitem__`), `view_of(value, transpose=, row_mask=, col_mask=, keepdim=)` mirroring `qd_to_torch` layout, `copy_from_dlpack(dst, src, transpose=, envs_idx=, idx=, sync=)` (HIP device-to-device write-back, NumPy on CPU), `qd_ptr(value)`, `zero_copy_supported()`.
 
 ### Torch-free mode
-`torch_compat` and `device_buffer` are the foundation of running Genesis without PyTorch: neither imports torch nor `genesis` at module scope.
+`torch_compat`, `device_buffer` and `hip_copy` are the foundation of running Genesis without PyTorch: none of them imports torch or `genesis` at module scope.
+Torch-free mode is `HAS_TORCH is False`: `gs.use_zerocopy` is then `ZeroCopyMode(True)`, `gs.tc_float`/`gs.tc_int`/`gs.tc_bool` are Quadrants primitive types, `gs.device` is a `DeviceInfo` and `gs.use_ndarray` is True.
 `torch_compat.torch` is the real module when PyTorch is installed, and a placeholder whose attributes are `_Unavailable` sentinel classes otherwise.
+Every module of this node imports PyTorch through `torch_compat`; `torch` is never imported directly, so a module-level `import` costs nothing when PyTorch is absent and annotations/isinstance checks stay legal.
+A helper either has a torch-free implementation (`qd_to_numpy`, `tensor_to_array`, `tensor_to_cpu`, `data_to_array` without `to_torch`, `make_tensor_field` (a `qd.field`), `set_random_seed` (python/numpy only), `indices_to_mask(to_torch=False)`, `data.fill_data`, `geom` dispatchers given numpy or a `DeviceView`, `get_device`, `get_gpu_cores_per_unit`/`get_gpu_core_count`/`get_gpu_shared_tile_sizes`) or refuses with `require_torch("<feature>")`: `qd_to_torch`, `qd_from_torch`, `qd_add_grad`, `concat_with_tensor`, `broadcast_tensor`, `sanitize_index`/`sanitize_indices`/`get_last_occurrence`, `sanitize_indexed_tensor`/`get_indexed_shape`/`assign_indexed_tensor`, `TensorRingBuffer`, the RRT planner, `DeviceView.to_torch`, and `data_to_array(..., to_torch=True)`.
+`get_device` keeps returning a `torch.device` when PyTorch is present; torch-free it returns a `DeviceInfo` for `gs.cpu` and for `gs.amdgpu`/`gs.gpu` (name from `hipDeviceGetName`, total memory from `hipMemGetInfo`, sysfs and then `0.0` with one warning), and raises for `gs.cuda`/`gs.metal`.
+The torch-free GPU helpers query HIP through `hipDeviceGetAttribute` (compute unit count, threads per unit, warp size, shared memory per unit and per opt-in block) with plausibility bounds and the documented fallbacks (64 cores per AMD compute unit, 256 compute units), which only feed tile-size heuristics.
 `device_buffer` reads Quadrants buffers through DLPack capsules (`dlpack_info`/`DeviceView`) and writes them through the HIP runtime or NumPy, since Quadrants has no DLPack importer.
 `DeviceInfo` reports type `"cuda"` for both CUDA and ROCm, and `dlpack_device_type` distinguishes them (`2` vs `10`) by resolving the active backend from `gs.backend`, falling back to the Quadrants architecture when `genesis` is not importable.
 `_raise_genesis_error` raises `gs.GenesisException` whenever `genesis` is importable and an `ImportError` carrying the same message otherwise, because `genesis/__init__.py` still imports PyTorch eagerly.
 `DeviceView.to_numpy()` is an explicit host copy for logging and diagnostics only; solver getters must use `DeviceView`/`view_of` on the hot path.
 `copy_from_dlpack` refuses dtype, device, shape and non-contiguous mismatches with a `gs.GenesisException` instead of converting or gathering silently.
+The write path lives in `hip_copy.py`: `copy_from_dlpack(dst, src, *, transpose=False, envs_idx=None, idx=None, sync=True)` takes a batch-last Quadrants destination and a DLPack producer (or NumPy array), uses one `hipMemcpy` for a contiguous same-layout copy, `min(num_values, num_envs)` `hipMemcpy2D` calls for a transposed copy and one contiguous transfer per selected outer index for a masked copy, with no host roundtrip on a GPU backend; on the CPU backend the same selection semantics run through NumPy and are written back with `from_numpy`.
+`sync=True` (the default) drains the Quadrants stream with `qd.sync()` and the HIP device before the copy, because the producer may still have writes pending on its own queue, and synchronizes the HIP device once more after it so the next Quadrants kernel sees the data; `sync=False` leaves that ordering to the caller.
+A `DeviceView` carries the element offset, shape and strides of its region (never the data), so `view_of(value, transpose=, row_mask=, col_mask=, keepdim=)` mirrors the `qd_to_torch` layout semantics without a copy; selections are limited to slices and contiguous ascending index runs, and anything else is refused rather than silently materialized.
+Torch-free `geom` dispatchers accept a `DeviceView` and take their numpy path through `to_numpy()`, since a `DeviceView` is a host-side helper argument, not a hot-path buffer.
+`data.fill_data` writes numpy/`DeviceView`/Quadrants values through `from_numpy` or `copy_from_dlpack` (device-resident contiguous views matching the destination dtype) and refuses an unknown value type with a `GenesisException`; the torch branch keeps its `to_torch`/`from_torch` zero-copy path.
 `dlpack_info` describes a Quadrants buffer whose own DLPack export requires PyTorch, which the C++ layer demands for every buffer at a nonzero byte offset, from the buffer itself: the base address of its SNode tree comes from the zero-offset leading node of that tree, plus the SNode byte offset, the canonical shape and strides, the dtype and the device.
 `DeviceView.to_dlpack()` builds its own v0 capsule for such a buffer, so `copy_from_dlpack`, `DeviceView.to_torch` and `np.from_dlpack` keep working torch-free, while a v1 export request is refused.
 
 # Constraints
 
+- Never import `torch` directly in this node: import `HAS_TORCH`, `torch` and `require_torch` from `genesis.utils.torch_compat`, and give every executed torch call an `HAS_TORCH` branch or a `require_torch` refusal.
+- `torch_compat`, `device_buffer` and `hip_copy` must import with torch blocked: no module-scope torch import, and no module-scope `genesis` import beyond the deferred error path.
+- The device-buffer bridge must never convert, gather or cast silently: dtype, device, shape and contiguity mismatches raise a `GenesisException`.
 - Never use `tensor.detach().cpu().numpy()` in Genesis code — use `misc.tensor_to_array`/`tensor_to_cpu`/`data_to_array`.
 - Torch/Quadrants conversions go through `misc.qd_to_torch`/`qd_to_numpy` (zero-copy) and `qd_from_torch`; `qd_destroy_data` pairs with them.
 - Flat modules here are one level: only `usd/` is a child subdirectory; do not add subpackages to this node without routing them here.
@@ -95,6 +110,9 @@ Other:
 - Caches are two-tier: content-addressed on-disk caches (hash-keyed, version-bumped on algorithm change) plus owner/byte-bounded in-memory caches released on teardown via `register_cache_clear`.
 - Parsers converge on a common rigid-entity output tuple rather than a shared IR, keeping each format's quirks local.
 - `misc.py` re-exported via `__init__.py` makes conversion helpers available everywhere as `gs.utils.*`.
+- PyTorch is optional, not required: every module of this node reaches it through `torch_compat`, and the simulation core plus the device-buffer bridge need only Quadrants and NumPy, so a helper is either given a torch-free implementation or a `require_torch` refusal, never an implicit dependency.
+- The device bridge splits by direction: `device_buffer.py` reads (DLPack `DeviceView`, no copy) and `hip_copy.py` writes (HIP runtime on a GPU backend, NumPy on the CPU), which keeps each half small and lets the read path stay usable without any runtime to load.
+- Quadrants has no DLPack importer, so the write path goes through a HIP copy or `from_numpy`, and the read path exports a view rather than materializing a buffer.
 
 # Known Issues
 
@@ -106,6 +124,11 @@ Other:
 - Heavy optional dependencies are imported lazily inside functions (e.g. `pygel3d` in `hybrid.py`, `moviepy` in `tools.animate`), so module import stays cheap but the deps are still required at call time.
 - `hsa.py` must re-exec the interpreter rather than preload with `ctypes.CDLL(..., RTLD_GLOBAL)`, because `LD_PRELOAD` has to be in place before the dynamic loader maps torch's HIP/HSA libraries; a runtime `ctypes` preload is provably insufficient.
 - `ensure_system_hsa_runtime` may only run once from a fresh interpreter before any torch/quadrants GPU work; `GS_HSA_REEXEC=0` is the opt-out and `GS_HSA_REEXEC_DONE=1` is the one-shot sentinel that stops the child from looping.
+- `misc.py` is deliberately one large module (~1900 lines) because `genesis/utils/__init__.py` exposes it wholesale as `gs.utils`, and its Quadrants monkey-patches, torch-free GPU queries and conversion helpers are imported by everything; split it only with a re-export plan that keeps `gs.utils.*` stable.
+- Quadrants' own `field.to_dlpack`/`ndarray.to_dlpack` runs a C++ `import torch` whenever the buffer sits at a nonzero byte offset, so every buffer after the first of a process needs the torch-free description fallback in `dlpack_info`; that is why the fallback exists and must not be removed.
+- This node is not yet reachable torch-free through the package entry point: `genesis/typing.py` and `genesis/engine/solvers/fem_solver.py` still import torch at module scope (sibling nodes), so `genesis.utils.data`, `geom`, `path_planning`, `raycast_qd`, `sdf` and the parsers import only once those are fixed; the modules themselves are clean.
+- `device_buffer._kDLBOOL` is `5`, while the DLPack `kDLBool` Quadrants emits for `u1` buffers is `6`, so a `u1` buffer fails `dlpack_info` on the DLPack path; Genesis uses `i8` for booleans, so no solver state is affected.
+- `utils/serialization.py` and `utils/sdf.py` take part in pre-existing, torch-independent import cycles with `../options/textures.py` and `../engine/solvers/rigid/collider/`, so importing them before `genesis.options`/`genesis.engine.solvers` fails; a normal `import genesis` order avoids it.
 
 # Dependencies (beyond the package manager)
 
@@ -119,3 +142,4 @@ Other:
 - Tests live outside this node under `../../tests/`; parser parity/behaviour is covered in `tests/parsers/` (URDF/MJCF/glTF/USD) with format-availability skips (e.g. `pxr` for USD, `SKIP_NO_OMNIVERSE_KIT` for Omniverse material baking).
 - Geometry/math helpers are indirectly covered by solver and scene tests; there is no dedicated unit suite for `geom.py`/`misc.py` in this node.
 - On-disk cache correctness depends on the version constants in `cache.py`; bump them whenever an algorithm's output changes.
+- There is no automated torch-free test in the repository: the torch-free path is checked by running an interpreter where `import torch` raises (a `sitecustomize.py` on `PYTHONPATH` that blocks `torch`), importing every module of this node and exercising `get_device`, `qd_to_numpy`/`copy_from_dlpack`/`make_tensor_field` on both the CPU and the ROCm backend.
