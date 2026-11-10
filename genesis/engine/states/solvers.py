@@ -1,11 +1,36 @@
 import dataclasses
 
 import numpy as np
-import torch
 
 import genesis as gs
 from genesis.repr_base import RBC
 from genesis.utils.data import DataKind
+from genesis.utils.torch_compat import HAS_TORCH, torch
+
+__all__ = [
+    "FEMSolverState",
+    "KinematicSolverState",
+    "MPMSolverState",
+    "PBDSolverState",
+    "RigidSolverState",
+    "SPHSolverState",
+    "SimState",
+    "SimulatorCheckpoint",
+    "SolverCheckpoint",
+]
+
+
+def _device_zeros(shape, dtype):
+    """Zero-initialized device buffer of a state, which the kernel of the solver writes its fields into.
+
+    The buffer is a PyTorch tensor on 'gs.device' when PyTorch is installed. Otherwise it is the Quadrants ndarray that a
+    kernel takes as 'qd.types.ndarray()', uploaded from the host zeros once, as 'torch.zeros' zeroes a fresh allocation.
+    """
+    if HAS_TORCH:
+        return torch.zeros(shape, dtype=dtype, device=gs.device)
+    from genesis.engine.solvers.torch_free import device_tensor_from_numpy  # local: the solvers import this module
+
+    return device_tensor_from_numpy(np.zeros(shape), dtype)
 
 
 @dataclasses.dataclass
@@ -83,10 +108,10 @@ class KinematicSolverState:
         self._s_global = s_global
 
         _B = scene.sim.kinematic_solver._B
-        self.qpos = torch.zeros((_B, scene.sim.kinematic_solver.n_qs), dtype=gs.tc_float, device=gs.device)
-        self.dofs_vel = torch.zeros((_B, scene.sim.kinematic_solver.n_dofs), dtype=gs.tc_float, device=gs.device)
-        self.links_pos = torch.zeros((_B, scene.sim.kinematic_solver.n_links, 3), dtype=gs.tc_float, device=gs.device)
-        self.links_quat = torch.zeros((_B, scene.sim.kinematic_solver.n_links, 4), dtype=gs.tc_float, device=gs.device)
+        self.qpos = _device_zeros((_B, scene.sim.kinematic_solver.n_qs), gs.tc_float)
+        self.dofs_vel = _device_zeros((_B, scene.sim.kinematic_solver.n_dofs), gs.tc_float)
+        self.links_pos = _device_zeros((_B, scene.sim.kinematic_solver.n_links, 3), gs.tc_float)
+        self.links_quat = _device_zeros((_B, scene.sim.kinematic_solver.n_links, 4), gs.tc_float)
 
     @property
     def s_global(self):
@@ -168,18 +193,12 @@ class SPHSolverState:
 
     def __init__(self, scene):
         self._scene = scene
-        self._pos = torch.zeros(
-            (scene.sim._B, scene.sim.sph_solver.n_particles, 3), dtype=gs.tc_float, device=gs.device
-        )
-        self._vel = torch.zeros(
-            (scene.sim._B, scene.sim.sph_solver.n_particles, 3), dtype=gs.tc_float, device=gs.device
-        )
-        self._active = torch.zeros((scene.sim._B, scene.sim.sph_solver.n_particles), dtype=gs.tc_bool, device=gs.device)
+        self._pos = _device_zeros((scene.sim._B, scene.sim.sph_solver.n_particles, 3), gs.tc_float)
+        self._vel = _device_zeros((scene.sim._B, scene.sim.sph_solver.n_particles, 3), gs.tc_float)
+        self._active = _device_zeros((scene.sim._B, scene.sim.sph_solver.n_particles), gs.tc_bool)
         self._pressure = None
         if scene.sim.sph_solver.pressure_solver == "DFSPH":
-            self._pressure = torch.zeros(
-                (scene.sim._B, scene.sim.sph_solver.n_particles), dtype=gs.tc_float, device=gs.device
-            )
+            self._pressure = _device_zeros((scene.sim._B, scene.sim.sph_solver.n_particles), gs.tc_float)
 
     @property
     def scene(self):
@@ -210,13 +229,9 @@ class PBDSolverState:
 
     def __init__(self, scene):
         self._scene = scene
-        self._pos = torch.zeros(
-            (scene.sim._B, scene.sim.pbd_solver.n_particles, 3), dtype=gs.tc_float, device=gs.device
-        )
-        self._vel = torch.zeros(
-            (scene.sim._B, scene.sim.pbd_solver.n_particles, 3), dtype=gs.tc_float, device=gs.device
-        )
-        self._free = torch.zeros((scene.sim._B, scene.sim.pbd_solver.n_particles), dtype=gs.tc_bool, device=gs.device)
+        self._pos = _device_zeros((scene.sim._B, scene.sim.pbd_solver.n_particles, 3), gs.tc_float)
+        self._vel = _device_zeros((scene.sim._B, scene.sim.pbd_solver.n_particles, 3), gs.tc_float)
+        self._free = _device_zeros((scene.sim._B, scene.sim.pbd_solver.n_particles), gs.tc_bool)
 
     @property
     def scene(self):

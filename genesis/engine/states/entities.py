@@ -1,4 +1,21 @@
+import numpy as np
+
 from genesis.repr_base import RBC
+from genesis.utils.torch_compat import is_torch_tensor
+
+
+def _copy_of(value):
+    """Copy of the buffer 'value' holds, so that editing this state leaves the solver state it was read from untouched.
+
+    A PyTorch tensor is cloned where it lives and a NumPy array copied on the host. Without PyTorch the buffer is a
+    read-only zero-copy device view of the solver state, which nothing can be written back through, so it is kept as it
+    is rather than materialized on the host, a roundtrip the PyTorch path does not pay either.
+    """
+    if is_torch_tensor(value):
+        return value.clone()
+    if isinstance(value, np.ndarray):
+        return np.array(value, copy=True)
+    return value
 
 
 class MPMEntityState(RBC):
@@ -114,8 +131,8 @@ class RigidEntityState(RBC):
         self._entity = entity
         self._s_global = s_global
         # Copies, so that editing this state leaves the solver state it was read from untouched
-        self._pos = pos.clone()
-        self._quat = quat.clone()
+        self._pos = _copy_of(pos)
+        self._quat = _copy_of(quat)
 
     @property
     def entity(self):
