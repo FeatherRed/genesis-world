@@ -88,6 +88,13 @@ Sibling (read-only, escalate writes to parent): `../base_entity.py` (`Entity`, `
 - `terrain_entity.py` → `TerrainEntity` height-field entity.
 - `drone_entity.py` → `DroneEntity` propeller-thrust entity.
 
+# Torch-free mode
+Every module imports PyTorch as `from genesis.utils.torch_compat import HAS_TORCH, torch, require_torch`, so the subpackage imports with no PyTorch installed.
+Pose/DOF getters (`get_pos`/`get_quat`/`get_vel`/`get_ang`, `get_links_*`, `get_qpos`, `get_dofs_*`) forward to `RigidSolver` and return a zero-copy `DeviceView` when torch is absent; the base-link row is taken with `torch_free.first_row` instead of `[..., 0, :]`.
+Setters (`set_pos`/`set_quat`/`set_qpos`/`set_dofs_*`/`control_dofs_*`, link/geom friction and inertial setters) forward the user value untouched, so numpy arrays and DLPack producers both reach the device without a host roundtrip.
+Entity-local vertex indices (`_free_verts_idx_local`/`_fixed_verts_idx_local`) are `int32` host arrays via the `_empty_verts_idx`/`_verts_idx_range`/`_concat_verts_idx` helpers, and `RigidVisGeom._init_pos_tc`/`_init_quat_tc`, `TerrainEntity._terrain_height_field` and the drone propeller tables have `HAS_TORCH` NumPy branches.
+Genuine device math raises `require_torch`: `entity visual AABB aggregation`, `entity visual vertex computation`, `entity link Jacobian at a local point`, `entity multi-link inverse kinematics`, `entity motion planning`, `entity AABB aggregation`, `entity vertex readout`, `entity total energy readout`, `entity contact queries`, `entity net contact force readout`, `entity friction ratio assignment`, `entity total mass assignment`, `entity total mass readout`, plus `RigidLink`/`RigidGeom`/`RigidVisGeom` vertex and AABB readouts.
+
 # Test Strategy
 No dedicated tests live in this subpackage; behavior is exercised through the engine's scene/rigid integration tests and example scripts.
 Focus coverage on description resolution (asset loads once, variant dispatch, align anchoring) and the get/set/control DOF round-trips against `RigidSolver` state.
