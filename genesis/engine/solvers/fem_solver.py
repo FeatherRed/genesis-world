@@ -1393,7 +1393,7 @@ class FEMSolver(GravityMixin, TimeBasedMixin, Solver):
 
     def get_state(self, f):
         if self.is_active:
-            pos, vel = self._read_data((self.elements_v.pos, self.elements_v.vel), None, None, copy=True)
+            pos, vel = self._read_state_values((self.elements_v.pos, self.elements_v.vel), None, None)
             state = FEMSolverState(self._scene, pos, vel)
         else:
             state = None

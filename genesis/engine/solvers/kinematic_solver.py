@@ -73,6 +73,7 @@ from .torch_free import (
     device_tensor_from_numpy,
     index_field,
     is_dlpack_source,
+    owned_view,
     read_view,
     to_numpy_values,
 )
@@ -945,6 +946,17 @@ class KinematicSolver(Solver):
         if HAS_TORCH:
             return qd_to_torch(field, envs_idx, idx, transpose=True, copy=True)
         return read_view(field, envs_idx, idx)
+
+    def _read_state_value(self, field, envs_idx=None, idx=None):
+        """Read one buffer in the layout of the getters as a value the caller owns (see 'Solver._read_state_values').
+
+        A torch scene reads a copy, as '_read_single' does. A torch-free scene reads a device-to-device copy of the
+        buffer instead of its zero-copy view, so that a state snapshot keeps the values it was taken from while the
+        solver steps on.
+        """
+        if HAS_TORCH:
+            return self._read_single(field, envs_idx, idx)
+        return owned_view(field, envs_idx, idx)
 
     def _read_state(self, field, envs_idx=None, idx=None):
         """Read one buffer of the state in the layout of the getters, as a getter returning by value does.

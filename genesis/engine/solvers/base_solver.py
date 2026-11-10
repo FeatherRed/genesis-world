@@ -38,6 +38,7 @@ from .torch_free import (
     envs_index_tensor,
     index_field,
     mps_synchronize,
+    owned_view,
     qd_field,
     read_view,
     sanitize_io_variables,
@@ -709,6 +710,22 @@ class Solver(RBC):
             mask = indices_to_mask(envs_idx, idx)
             tensors = [tensor[mask] for tensor in tensors]
         return tensors[0] if is_single else tensors
+
+    def _read_state_values(self, data, envs_idx, idx):
+        """
+        Read the given slots of one array of the solver, or of several, as values the caller owns.
+
+        A state snapshot is restored later on, so its values must not follow the solver as it steps: a torch scene reads
+        a copy of the arrays, and a torch-free scene reads a device-to-device copy of them into buffers of its own,
+        rather than the zero-copy views its getters return (see 'owned_view'). The layout is the one of the getters,
+        whatever the kind of the array.
+        """
+        if HAS_TORCH:
+            return self._read_data(data, envs_idx, idx, copy=True)
+        is_single = isinstance(data, (qd.Tensor, qd.Field, qd.Ndarray))
+        fields = (data,) if is_single else tuple(data)
+        views = [owned_view(field, envs_idx, idx) for field in fields]
+        return views[0] if is_single else views
 
     def add_grad_from_state(self, grads, selection) -> None:
         """

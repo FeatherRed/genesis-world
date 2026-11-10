@@ -7,8 +7,8 @@ This module holds what replaces it on the torch-free path, so that no solver rep
 - 'broadcast_values' and 'broadcast_tensor', the numpy and device counterparts of 'genesis.utils.misc.broadcast_tensor'.
 - 'sanitize_index_values' and 'sanitize_io_variables', the numpy counterpart of the index sanitizing of a getter.
 - 'device_tensor_from_numpy', 'index_field' and 'qd_field', the allocation of a kernel argument and of a solver buffer.
-- 'read_view', 'is_dlpack_source', 'stage_kernel_values' and 'DlpackStager', the device-buffer bridge of
-  'genesis.utils.device_buffer'.
+- 'read_view', 'owned_copy', 'owned_view', 'is_dlpack_source', 'stage_kernel_values' and 'DlpackStager', the
+  device-buffer bridge of 'genesis.utils.device_buffer'.
 - 'envs_selection' and 'mps_synchronize', which read the environments of a call and flush the stream after a write.
 
 Nothing here imports PyTorch except through 'torch_compat', and only 'mps_synchronize' touches it at all.
@@ -47,9 +47,12 @@ __all__ = [
     "index_field",
     "is_dlpack_source",
     "is_full_env_selection",
+    "kernel_copy_values",
     "last_occurrence",
     "mps_synchronize",
     "numpy_dtype",
+    "owned_copy",
+    "owned_view",
     "qd_field",
     "read_view",
     "sanitize_index_values",
@@ -640,6 +643,46 @@ def is_dlpack_source(value) -> bool:
     if _py_capsule_is_valid(value, _DLPACK_VERSIONED_CAPSULE_NAME):
         return True
     return hasattr(value, "__dlpack__")
+
+
+@qd.kernel
+def kernel_copy_values(dst: qd.types.ndarray(), src: qd.types.ndarray()):
+    """Copy every value of one device buffer into another of the same layout, without leaving the device."""
+    for I in qd.grouped(dst):
+        dst[I] = src[I]
+
+
+def owned_copy(buffer) -> "qd.Ndarray":
+    """Copy every value of `buffer` into a device buffer this call allocates, and return that buffer.
+
+    The copy runs in a kernel, device to device, on every backend: no value ever reaches the host, and the source may be
+    a field, a member of a struct, an ndarray or a tensor. The destination mirrors the element layout of the source, a
+    vector or a matrix element included, so that a view of it reads as a view of the source (see 'read_view').
+    """
+    raw = buffer._unwrap() if isinstance(buffer, qd.Tensor) else buffer
+    dtype = raw.dtype
+    element_shape = tuple(getattr(raw, "element_shape", ()) or ())
+    if len(element_shape) == 1:
+        dtype = qd.types.vector(element_shape[0], dtype)
+    elif len(element_shape) == 2:
+        dtype = qd.types.matrix(*element_shape, dtype)
+    elif element_shape:
+        gs.raise_exception(
+            f"A torch-free state cannot copy a buffer of elements shaped {element_shape} without PyTorch."
+        )
+    copy = qd.ndarray(dtype, shape=tuple(raw.shape))
+    kernel_copy_values(copy, raw)
+    return copy
+
+
+def owned_view(buffer, envs_idx=None, idx=None):
+    """Zero-copy view of an owned device copy of `buffer`, in the layout 'read_view' gives.
+
+    Unlike 'read_view', the view is not a window on the live buffer: it follows the copy 'owned_copy' made of it, so it
+    keeps the values it was read from while the buffer goes on changing. A state snapshot reads through it, while the
+    getters of a torch-free scene read through 'read_view', which is what its hot paths can afford.
+    """
+    return read_view(owned_copy(buffer), envs_idx, idx)
 
 
 def read_view(field, envs_idx=None, idx=None):

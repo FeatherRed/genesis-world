@@ -1726,15 +1726,14 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # refresh, so catch up here - a no-op when the pose is already current, which is the common case.
             self.update_forward_pos()
 
-            qpos, dofs_vel, links_pos, links_quat = self._read_data(
+            qpos, dofs_vel, links_pos, links_quat = self._read_state_values(
                 (self.rigid_info.qpos, self.dyn_state.dofs.vel, self.dyn_state.links.pos, self.dyn_state.links.quat),
                 None,
                 None,
-                copy=True,
             )
             # The accelerations and the friction ratios carry no gradient back
-            dofs_acc = self._read_single(self.dyn_state.dofs.acc)
-            friction_ratio = self._read_single(self.dyn_state.geoms.friction_ratio)
+            dofs_acc = self._read_state_value(self.dyn_state.dofs.acc)
+            friction_ratio = self._read_state_value(self.dyn_state.geoms.friction_ratio)
             state = RigidSolverState(
                 self._scene, self.sim.cur_step_global, qpos, dofs_vel, dofs_acc, links_pos, links_quat, friction_ratio
             )
