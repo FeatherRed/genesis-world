@@ -50,6 +50,7 @@ import sys
 import numpy as np
 import pytest
 
+from tests.device_pilot import non_cpu_device_or_skip
 from tests.torch_block import (
     EXAMPLES_DIR,
     GENESIS_DIR,
@@ -88,8 +89,9 @@ TRAINING_PATH = (
 )
 
 #: The Go2 torch-free pilot's own modules, which the scan must really reach: an empty or mistyped glob has to fail
-#: instead of passing with a reassuring empty violation list.  The drone pilot's device modules are not listed because
-#: that pilot is written in parallel and may not exist yet.
+#: instead of passing with a reassuring empty violation list.  The guard pins the Go2 files because this module's
+#: assertions are about that pilot; the drone pilot's device modules are reached by the 'hover_device_*.py' and
+#: 'hover_neat_*.py' globs above, and 'test_hover_device_parity.py' names the four files of that pilot itself.
 GO2_PILOT_FILES = (
     EXAMPLES_DIR / "locomotion" / "go2_device_kernels.py",
     EXAMPLES_DIR / "locomotion" / "go2_device_rollout.py",
@@ -497,6 +499,9 @@ def test_torch_free_and_torch_present_genesis_agree_on_the_state_boundary(tmp_pa
 def test_go2_pilot_trains_without_torch_and_keeps_results_device_resident():
     if not has_gpu():
         pytest.skip(SKIP_NO_GPU)
+    # The pilot trains on a non-CPU device, so a cpu-kind 'EVOXC_DEVICE' override skips here, naming the override,
+    # instead of starting a child that can only report that it found no usable device
+    non_cpu_device_or_skip("iree", feature="the Go2 device residency")
     result = run_python_checked(_GO2_PILOT_SCRIPT, timeout=900)
     if "GO2_TORCH_FREE_SKIP" in result.stdout:
         pytest.skip(f"No reachable non-CPU 'evoxc' device; the pilot's device residency needs one.\n{result.stdout}")
@@ -525,6 +530,8 @@ def test_go2_train_cli_runs_with_torch_import_blocked(tmp_path):
     missing = [name for name in ("evoxc", "tensorneat") if importlib.util.find_spec(name) is None]
     if missing:
         pytest.skip(f"{SKIP_NO_EVOXC} Missing: {', '.join(missing)}.")
+    # The CLI runs the pilot's device residency too, so the same non-CPU gate applies before any child starts
+    non_cpu_device_or_skip("iree", feature="the Go2 --torch-free CLI")
 
     blocker = _torch_blocker_dir(tmp_path)
     mpl_config_dir = tmp_path / "mpl"
