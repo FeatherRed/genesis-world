@@ -126,13 +126,12 @@ def kernel_set_qpos_rows_staged(
     for i_q_, i_b_ in qd.ndrange(qs_idx.shape[0], envs_idx.shape[0], axes=qd.static(eoa(rigid_info.qpos))):
         # A producer of a single dimension holds the element itself, which every selected environment takes
         if qd.static(is_row):
-            value = values[i_q_]
+            rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[i_q_]
         else:
             # The row a selected environment takes is its own row of the whole tile, row 0 of a broadcast producer, and
             # its position in the selection otherwise
             i_b_values = envs_idx[i_b_] if qd.static(is_tile) else (0 if qd.static(is_broadcast) else i_b_)
-            value = values[i_b_values, i_q_]
-        rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = value
+            rigid_info.qpos[qs_idx[i_q_], envs_idx[i_b_]] = values[i_b_values, i_q_]
 
 
 @qd.kernel(fastcache=True)

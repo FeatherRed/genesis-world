@@ -2155,14 +2155,16 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             is_staged = staged is not None
             is_broadcast = is_tile = is_row = False
             if is_staged:
-                pos, links_idx, envs_idx, is_broadcast, is_tile, is_row = staged
+                # The staged write reads the index buffers its kernel iterates over, while the caller's selection is
+                # kept for the forward kinematics and the contact clearing below, as a tensor write keeps it
+                pos, links_idx_, envs_idx_, is_broadcast, is_tile, is_row = staged
             else:
                 if not HAS_TORCH:
                     # The whole pose tile of the scene is gathered to the row of each selected environment first,
                     # the selection being read the way the sanitize below reads it, device flag masks included
                     rows = np.reshape(np.asarray(to_numpy_values(self._scene._sanitize_envs_idx(envs_idx))), (-1,))
                     pos = _link_pose_selected_rows(pos, rows, rows.size, self._B)
-                pos, links_idx, envs_idx = self._sanitize_io_variables(
+                pos, links_idx_, envs_idx_ = self._sanitize_io_variables(
                     pos, links_idx, self.n_links, "links_idx", envs_idx, (3,), skip_allocation=True
                 )
                 if HAS_TORCH:
@@ -2175,17 +2177,17 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 # Compose the body-frame offset onto the authored position, keeping the current orientation, then set
                 # the resulting world position absolutely.
                 require_torch("relative link pose with a non-identity morph offset")
-                cur_quat = self._read_data(self.dyn_state.links.quat, envs_idx, links_idx)
-                offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)
-                offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)
+                cur_quat = self._read_data(self.dyn_state.links.quat, envs_idx_, links_idx_)
+                offset_pos = _select_links_offset(self._links_offset_pos, links_idx_, envs_idx_)
+                offset_quat = _select_links_offset(self._links_offset_quat, links_idx_, envs_idx_)
                 pos = pos + _offset_world_shift(offset_pos, offset_quat, cur_quat)
                 relative = False
 
             # Raise exception for fixed links with at least one geom and non-batched fixed vertices, except if setting
             # same location for all envs at once. The guards below walk the links on the host, so a torch-free device
             # selection is read back first (see '_host_link_indices').
-            links_idx_host = _host_link_indices(links_idx)
-            set_all_envs = _is_envs_full_selection(envs_idx, self._scene._envs_idx)
+            links_idx_host = _host_link_indices(links_idx_)
+            set_all_envs = _is_envs_full_selection(envs_idx_, self._scene._envs_idx)
             has_fixed_verts = any(
                 link.is_fixed and link.geoms and not link.entity._batch_fixed_verts
                 for link in (self.links[i_l] for i_l in links_idx_host)
@@ -2201,8 +2203,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             if self._use_hibernation:
                 if not all(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.constraint_solver.constraint_state,
                         self.dyn_info,
@@ -2211,8 +2213,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     )
                 if any(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_held_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.collider.collider_state,
                         self.constraint_solver.constraint_state,
@@ -2223,8 +2225,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             if is_staged:
                 kernel_set_links_pos_staged(
-                    links_idx,
-                    envs_idx,
+                    links_idx_,
+                    envs_idx_,
                     pos,
                     self.dyn_state,
                     self.dyn_info,
@@ -2236,7 +2238,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 )
             else:
                 kernel_set_links_pos(
-                    links_idx, envs_idx, pos, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
+                    links_idx_, envs_idx_, pos, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
                 )
 
         if not skip_forward:
@@ -2334,14 +2336,16 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             is_staged = staged is not None
             is_broadcast = is_tile = is_row = False
             if is_staged:
-                quat, links_idx, envs_idx, is_broadcast, is_tile, is_row = staged
+                # The staged write reads the index buffers its kernel iterates over, while the caller's selection is
+                # kept for the forward kinematics and the contact clearing below, as a tensor write keeps it
+                quat, links_idx_, envs_idx_, is_broadcast, is_tile, is_row = staged
             else:
                 if not HAS_TORCH:
                     # The whole pose tile of the scene is gathered to the row of each selected environment first,
                     # the selection being read the way the sanitize below reads it, device flag masks included
                     rows = np.reshape(np.asarray(to_numpy_values(self._scene._sanitize_envs_idx(envs_idx))), (-1,))
                     quat = _link_pose_selected_rows(quat, rows, rows.size, self._B)
-                quat, links_idx, envs_idx = self._sanitize_io_variables(
+                quat, links_idx_, envs_idx_ = self._sanitize_io_variables(
                     quat, links_idx, self.n_links, "links_idx", envs_idx, (4,), skip_allocation=True
                 )
                 if HAS_TORCH:
@@ -2352,19 +2356,19 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             if relative:
                 require_torch("relative link pose with a non-identity morph offset")
-                offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)
+                offset_quat = _select_links_offset(self._links_offset_quat, links_idx_, envs_idx_)
                 if not relative_pos_passthrough:
                     # The offset position rotates with the orientation, so keep the authored-frame position fixed by
                     # rewriting the world position from the current authored position and the new authored orientation.
                     cur_pos, cur_quat = self._read_data(
-                        (self.dyn_state.links.pos, self.dyn_state.links.quat), envs_idx, links_idx
+                        (self.dyn_state.links.pos, self.dyn_state.links.quat), envs_idx_, links_idx_
                     )
-                    offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)
+                    offset_pos = _select_links_offset(self._links_offset_pos, links_idx_, envs_idx_)
                     authored_pos = cur_pos - _offset_world_shift(offset_pos, offset_quat, cur_quat)
                     world_pos = authored_pos + gu.transform_by_quat(offset_pos, quat)
                     kernel_set_links_pos(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         world_pos,
                         self.dyn_state,
                         self.dyn_info,
@@ -2377,8 +2381,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             # The guards below walk the links on the host, so a torch-free device selection is read back first (see
             # '_host_link_indices')
-            links_idx_host = _host_link_indices(links_idx)
-            set_all_envs = _is_envs_full_selection(envs_idx, self._scene._envs_idx)
+            links_idx_host = _host_link_indices(links_idx_)
+            set_all_envs = _is_envs_full_selection(envs_idx_, self._scene._envs_idx)
             has_fixed_verts = any(
                 link.is_fixed and link.geoms and not link.entity._batch_fixed_verts
                 for link in (self.links[i_l] for i_l in links_idx_host)
@@ -2390,8 +2394,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             if self._use_hibernation:
                 if not all(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.constraint_solver.constraint_state,
                         self.dyn_info,
@@ -2400,8 +2404,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     )
                 if any(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_held_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.collider.collider_state,
                         self.constraint_solver.constraint_state,
@@ -2412,8 +2416,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             if is_staged:
                 kernel_set_links_quat_staged(
-                    links_idx,
-                    envs_idx,
+                    links_idx_,
+                    envs_idx_,
                     quat,
                     self.dyn_state,
                     self.dyn_info,
@@ -2425,7 +2429,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 )
             else:
                 kernel_set_links_quat(
-                    links_idx, envs_idx, quat, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
+                    links_idx_, envs_idx_, quat, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
                 )
 
         if not skip_forward:
@@ -3056,16 +3060,16 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # the values are staged in a contiguous buffer, then scattered into the row of dof positions of each
             # environment, exactly as 'KinematicSolver.set_dofs_position' does. The producer holds the batch axis
             # first, so a scene without environments takes it as the single row of the one environment it has.
-            dofs_idx = index_field(dofs_idx, self.n_dofs, "dofs_idx")
-            envs_idx = index_field(envs_idx, self._B, "envs_idx")
-            self._wake_dofs(dofs_idx, envs_idx)
+            dofs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx")
+            envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
+            self._wake_dofs(dofs_idx_, envs_idx_)
             positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
             kernel_copy_dofs_pos(positions, self.dyn_state)
             kernel_set_dofs_position_staged(
-                positions, dofs_idx, envs_idx, self._stage_values(position, dofs_idx.shape[0], envs_idx)
+                positions, dofs_idx_, envs_idx_, self._stage_values(position, dofs_idx_.shape[0], envs_idx)
             )
             is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
-            is_dof_set[to_numpy_values(dofs_idx)] = 1
+            is_dof_set[to_numpy_values(dofs_idx_)] = 1
             is_dof_set = index_tensor(is_dof_set)
             write_envs_idx = index_field(None, self._B, "envs_idx")
         else:
