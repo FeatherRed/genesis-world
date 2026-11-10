@@ -7,8 +7,8 @@ politely when the pilot module or the hardware is not there yet.  This module is
 those live, so a new pilot's test module imports them instead of re-implementing them.
 
 Nothing here imports ``evoxc``, ``genesis`` or ``torch`` at module scope: the device probe imports
-``evoxc`` inside the function, so this module stays importable on a host where none of them exist and
-its import has no side effect.
+``evoxc`` inside the function and skips the calling test when it is missing, so this module stays
+importable on a host where none of them exist and its import has no side effect.
 
 Conventions
 -----------
@@ -23,6 +23,8 @@ Conventions
 * :func:`reachable_device_or_skip` never trusts an enumeration: ``evoxc.devices()`` lists every
   runtime the wheel was built with, so a ROCm-only host also enumerates ``cuda:0``.  The only honest
   reachability test is moving one float32 element there through the backend's placement provider.
+  A host without an importable ``evoxc`` skips before any enumeration: it is an optional dependency,
+  not a broken test.
 * :func:`non_cpu_device_or_skip` is the gate of a scenario that genuinely needs an accelerator (the
   zero-copy DLPack bridge, a pilot's device residency): an explicit :data:`DEVICE_ENV_VAR` request
   wins in :func:`reachable_device_or_skip`, so a ``cpu:0`` override would hand a cpu-kind device to
@@ -174,7 +176,9 @@ def reachable_device_or_skip(backend="iree"):
     An explicit :data:`DEVICE_ENV_VAR` request wins; it is still probed, so a device a test session
     was pointed at but that is unusable skips with the failure instead of crashing mid-rollout.  With
     no request, every non-CPU device ``evoxc.devices()`` enumerates is probed in order by moving one
-    float32 element there through the backend's placement provider.
+    float32 element there through the backend's placement provider.  ``evoxc`` is an optional
+    dependency, so a host without it -- or with an install that refuses to import -- skips here
+    instead of raising.
 
     The probe is cached per process: the first enumeration of the IREE devices costs several seconds.
 
@@ -190,7 +194,13 @@ def reachable_device_or_skip(backend="iree"):
     if cached is not None:
         return cached
 
-    import evoxc
+    # 'evoxc' is optional, so a missing module (or one whose import raises) skips like an unreachable
+    # device does: the probe has nothing to enumerate with, and the caller's scenario simply did not run
+    evoxc = pytest.importorskip(
+        "evoxc",
+        reason="'evoxc' is not installed; the non-CPU device probe has nothing to enumerate with",
+        exc_type=ImportError,
+    )
 
     evoxc.backends.get(backend)
     if requested:

@@ -499,6 +499,11 @@ def test_torch_free_and_torch_present_genesis_agree_on_the_state_boundary(tmp_pa
 def test_go2_pilot_trains_without_torch_and_keeps_results_device_resident():
     if not has_gpu():
         pytest.skip(SKIP_NO_GPU)
+    # The pilot itself needs the compiler stack, so its optional dependencies are probed, never imported, exactly as
+    # the CLI test below does; the skip names the missing package instead of leaving the probe to guess
+    missing = [name for name in ("evoxc", "tensorneat") if importlib.util.find_spec(name) is None]
+    if missing:
+        pytest.skip(f"{SKIP_NO_EVOXC} Missing: {', '.join(missing)}.")
     # The pilot trains on a non-CPU device, so a cpu-kind 'EVOXC_DEVICE' override skips here, naming the override,
     # instead of starting a child that can only report that it found no usable device
     non_cpu_device_or_skip("iree", feature="the Go2 device residency")
