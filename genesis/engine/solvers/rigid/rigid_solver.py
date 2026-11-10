@@ -61,6 +61,7 @@ from ..torch_free import (
     index_field,
     index_tensor,
     is_dlpack_source,
+    is_opaque_producer,
     mps_synchronize,
     read_view,
     stage_kernel_values,
@@ -237,19 +238,64 @@ def _sanitize_sol_params(
     return sol_params
 
 
+def _host_values(value) -> np.ndarray:
+    """The values of a selection on the host, which a torch tensor and a device buffer each have to leave first.
+    A torch tensor is read back with 'tensor_to_array', while a Quadrants buffer, a zero-copy device view and a NumPy
+    array are read with 'to_numpy_values'.
+    """
+    if is_torch_tensor(value):
+        return tensor_to_array(value)
+    return np.asarray(to_numpy_values(value))
+
+
 def _is_envs_full_selection(envs_idx, envs_idx_all) -> bool:
-    """Whether an environment selection covers every environment, whatever the order it names them in."""
-    if HAS_TORCH:
+    """Whether an environment selection covers every environment, whatever the order it names them in.
+    The comparison runs as tensor math only when both sides are torch tensors, which is the tensor path of the setters.
+    Otherwise it compares host values, which is what a staged write holds: its selection is the Quadrants buffer the
+    kernel reads rather than the tensor or array a caller handed over.
+    """
+    if is_torch_tensor(envs_idx) and is_torch_tensor(envs_idx_all):
         return torch.equal(torch.sort(envs_idx).values, envs_idx_all)
-    return np.array_equal(np.sort(to_numpy_values(envs_idx)), to_numpy_values(envs_idx_all))
+    return np.array_equal(np.sort(_host_values(envs_idx)), np.sort(_host_values(envs_idx_all)))
 
 
 def _is_uniform_along_envs(values) -> bool:
-    """Whether the values written to every environment are the same, as a fixed vertex of a shared morph requires."""
-    if HAS_TORCH:
+    """Whether the values written to every environment are the same, as a fixed vertex of a shared morph requires.
+    The differences run as tensor math for a torch tensor, and on host values for anything else, which is what a staged
+    write hands over. A producer of a single dimension carries no environment axis to compare, so its caller states
+    that it is uniform instead.
+    """
+    if is_torch_tensor(values):
         return (torch.diff(values, dim=0).abs() < gs.EPS).all()
-    values_ = to_numpy_values(values)
+    values_ = _host_values(values)
     return bool(np.all(np.abs(np.diff(values_, axis=0)) < gs.EPS))
+
+
+def _require_zerocopy_for_producer(value, subject: str) -> None:
+    """Refuse a DLPack producer in a non-zero-copy scene, where the state is written from a tensor or a host array.
+    An opaque producer, which is neither a torch tensor nor a NumPy array, exposes neither indexing nor a length, so the
+    rows a write selects out of it are picked by a kernel after a device-to-device staging copy.
+    """
+    if not gs.use_zerocopy and is_opaque_producer(value):
+        gs.raise_exception(
+            f"Writing the {subject} from a DLPack producer requires zero-copy, which a recording scene disables. "
+            "Pass a torch.Tensor or a NumPy array instead."
+        )
+
+
+def _require_tensor_for_relative_pose(value, subject: str) -> None:
+    """Refuse a DLPack producer a relative link-pose write on a link carrying a non-identity morph offset.
+
+    Composing the offset onto the authored pose is tensor arithmetic, which an opaque producer, exposing neither
+    indexing nor arithmetic of its own, cannot take; the absolute write of the resulting world pose takes it as it is.
+    A torch tensor and a NumPy array are left untouched, as is every write of a scene whose offsets are the identity.
+    """
+    if is_opaque_producer(value):
+        gs.raise_exception(
+            f"A relative {subject} write on a link with a non-identity morph offset takes a torch.Tensor or a NumPy "
+            "array, which the offset is composed onto. Write the resulting world pose absolutely instead, which "
+            "takes any DLPack producer."
+        )
 
 
 def _split_last_axis(tensor, size: int):
@@ -274,12 +320,13 @@ def _active_envs_mask_tensor(active_envs_mask: np.ndarray):
 
 
 def _invalid_qpos_rows_message(shape, n_envs: int) -> str:
-    """Refusal of the values of a qpos write whose leading rows match none of the three accepted forms."""
+    """Refusal of the values of a qpos write whose leading rows match none of the four accepted forms."""
     return (
         f"Invalid input shape: {tuple(shape)}. A qpos write takes (len(envs_idx), *element_shape), one row per "
         f"selected environment in the order of envs_idx, (1, *element_shape), a single row broadcast to every "
-        f"selected environment, or (n_envs, *element_shape) = ({n_envs}, *element_shape), the whole tile of the scene "
-        f"out of which only the environments named by envs_idx are written."
+        f"selected environment, (n_envs, *element_shape) = ({n_envs}, *element_shape), the whole tile of the scene "
+        f"out of which only the environments named by envs_idx are written, or a value of a single dimension, "
+        f"element_shape, which is the element itself that every selected environment takes."
     )
 
 
@@ -321,6 +368,7 @@ def _qpos_selected_rows(qpos, rows, n_selected: int, n_envs: int):
     environments, and the form is recognized from the leading size of the values alone, the whole tile being gathered on
     the device, so neither decision downloads anything.
     """
+    _require_zerocopy_for_producer(qpos, "qpos")
     shape = np.shape(qpos)
     if not n_envs or len(shape) < 2:
         # A scene without environments has no row axis, and values of a single dimension are the element itself,
@@ -348,12 +396,15 @@ def _qpos_selected_rows(qpos, rows, n_selected: int, n_envs: int):
 def _host_link_indices(links_idx):
     """The links a sanitized selection names, read on the host by the guards that walk them in Python.
 
-    A torch-free write path sanitizes its selection into a device tensor, which a Python loop cannot iterate, so the
-    selection is read back, as '_set_links_info' reads a torch-free device selection back too. A PyTorch selection is
-    handed over as it is, so no tensor living on a device is read back outside debug mode.
+    A staged write path sanitizes its selection into a device buffer, which a Python loop cannot iterate, so the
+    selection is read back, as '_set_links_info' reads a device selection back too. A DLPack producer a caller hands
+    over as the selection is staged and read back the same way, so it is never iterated as the producer it is. A
+    PyTorch selection is handed over as it is, so no tensor living on a device is read back outside debug mode.
     """
-    if not HAS_TORCH and isinstance(links_idx, (qd.Tensor, qd.Field, qd.Ndarray)):
+    if isinstance(links_idx, (qd.Tensor, qd.Field, qd.Ndarray)):
         return to_numpy_values(links_idx)
+    if is_opaque_producer(links_idx):
+        return to_numpy_values(stage_kernel_values(links_idx, gs.qd_int))
     return links_idx
 
 
@@ -365,6 +416,7 @@ def _link_pose_selected_rows(values, rows, n_selected: int, n_envs: int):
     as a qpos write does (see '_qpos_selected_rows'). Values of fewer than two dimensions carry no row axis, and the
     form is recognized from the leading size of the values alone, so nothing is downloaded to decide it.
     """
+    _require_zerocopy_for_producer(values, "link pose")
     shape = np.shape(values)
     if not n_envs or len(shape) < 2:
         return values
@@ -2039,6 +2091,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates(StateChange.GEOMETRY, links="links_idx")
     def set_base_links_pos(self, pos, links_idx=None, envs_idx=None, *, relative=False, skip_forward=False):
+        _require_zerocopy_for_producer(pos, "link position")
         if self.constraint_solver is not None:
             self.constraint_solver.reset(envs_idx)
 
@@ -2058,6 +2111,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # Composing the offset is device tensor arithmetic, which a torch-free scene never reaches since its morph
             # offsets are the identity one it strips above
             require_torch("relative link pose with a non-identity morph offset")
+            _require_tensor_for_relative_pose(pos, "link position")
             cur_quat = self.get_links_quat(links_idx, envs_idx, relative=False)[..., 0, :]
             offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)[..., 0, :]
             offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)[..., 0, :]
@@ -2066,11 +2120,17 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             )
             relative = False
 
-        # Zero-copy fast path: single base link, non-relative. Write the position buffer in place instead of
-        # launching a kernel. The kernel path below handles relative or multi-link updates, as well as waking up
-        # hibernated entities, which is required whenever hibernation is enabled.
-        if gs.use_zerocopy and HAS_TORCH and not relative and isinstance(links_idx, int) and not (
-            self._use_hibernation
+        # Zero-copy fast path: single base link, non-relative, from a tensor or a host array. Write the position
+        # buffer in place instead of launching a kernel. The kernel path below handles relative or multi-link updates,
+        # as well as waking up hibernated entities, which is required whenever hibernation is enabled.
+        # An opaque DLPack producer has no indexing to write the buffer with, so it takes the staged branch too.
+        if (
+            gs.use_zerocopy
+            and HAS_TORCH
+            and not relative
+            and isinstance(links_idx, int)
+            and not self._use_hibernation
+            and not is_opaque_producer(pos)
         ):
             link = self.links[links_idx]
             if link.is_fixed:
@@ -2108,22 +2168,25 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             mps_synchronize()
         else:
             staged = None
-            if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(pos):
+            if gs.use_zerocopy and is_opaque_producer(pos):
                 # A compiled graph hands its positions over as a DLPack producer, which the state takes device to
-                # device: the values are staged batch-first and a staged kernel of 'abd.accessor' writes them exactly
-                # as 'kernel_set_links_pos' writes a host source. Any other layout takes the host path below.
+                # device in both residencies: the values are staged batch-first and a staged kernel of 'abd.accessor'
+                # writes them exactly as 'kernel_set_links_pos' writes a host source. A non-zero-copy scene refuses
+                # the producer above instead of reading it in Python.
                 staged = self._stage_link_pose(pos, links_idx, envs_idx, 3)
             is_staged = staged is not None
-            is_broadcast = is_tile = False
+            is_broadcast = is_tile = is_row = False
             if is_staged:
-                pos, links_idx, envs_idx, is_broadcast, is_tile = staged
+                # The staged write reads the index buffers its kernel iterates over, while the caller's selection is
+                # kept for the forward kinematics and the contact clearing below, as a tensor write keeps it
+                pos, links_idx_, envs_idx_, is_broadcast, is_tile, is_row = staged
             else:
                 if not HAS_TORCH:
                     # The whole pose tile of the scene is gathered to the row of each selected environment first,
                     # the selection being read the way the sanitize below reads it, device flag masks included
                     rows = np.reshape(np.asarray(to_numpy_values(self._scene._sanitize_envs_idx(envs_idx))), (-1,))
                     pos = _link_pose_selected_rows(pos, rows, rows.size, self._B)
-                pos, links_idx, envs_idx = self._sanitize_io_variables(
+                pos, links_idx_, envs_idx_ = self._sanitize_io_variables(
                     pos, links_idx, self.n_links, "links_idx", envs_idx, (3,), skip_allocation=True
                 )
                 if HAS_TORCH:
@@ -2136,22 +2199,23 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                 # Compose the body-frame offset onto the authored position, keeping the current orientation, then set
                 # the resulting world position absolutely.
                 require_torch("relative link pose with a non-identity morph offset")
-                cur_quat = self._read_data(self.dyn_state.links.quat, envs_idx, links_idx)
-                offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)
-                offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)
+                _require_tensor_for_relative_pose(pos, "link position")
+                cur_quat = self._read_data(self.dyn_state.links.quat, envs_idx_, links_idx_)
+                offset_pos = _select_links_offset(self._links_offset_pos, links_idx_, envs_idx_)
+                offset_quat = _select_links_offset(self._links_offset_quat, links_idx_, envs_idx_)
                 pos = pos + _offset_world_shift(offset_pos, offset_quat, cur_quat)
                 relative = False
 
             # Raise exception for fixed links with at least one geom and non-batched fixed vertices, except if setting
             # same location for all envs at once. The guards below walk the links on the host, so a torch-free device
             # selection is read back first (see '_host_link_indices').
-            links_idx_host = _host_link_indices(links_idx)
-            set_all_envs = _is_envs_full_selection(envs_idx, self._scene._envs_idx)
+            links_idx_host = _host_link_indices(links_idx_)
+            set_all_envs = _is_envs_full_selection(envs_idx_, self._scene._envs_idx)
             has_fixed_verts = any(
                 link.is_fixed and link.geoms and not link.entity._batch_fixed_verts
                 for link in (self.links[i_l] for i_l in links_idx_host)
             )
-            if has_fixed_verts and not (set_all_envs and _is_uniform_along_envs(pos)):
+            if has_fixed_verts and not (set_all_envs and (is_row or _is_uniform_along_envs(pos))):
                 gs.raise_exception(
                     "Specifying env-specific pos for fixed links with at least one geometry requires setting morph "
                     "option 'batch_fixed_verts=True'."
@@ -2162,8 +2226,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             if self._use_hibernation:
                 if not all(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.constraint_solver.constraint_state,
                         self.dyn_info,
@@ -2172,8 +2236,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     )
                 if any(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_held_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.collider.collider_state,
                         self.constraint_solver.constraint_state,
@@ -2184,8 +2248,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             if is_staged:
                 kernel_set_links_pos_staged(
-                    links_idx,
-                    envs_idx,
+                    links_idx_,
+                    envs_idx_,
                     pos,
                     self.dyn_state,
                     self.dyn_info,
@@ -2193,10 +2257,11 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     self.rigid_config,
                     is_broadcast,
                     is_tile,
+                    is_row,
                 )
             else:
                 kernel_set_links_pos(
-                    links_idx, envs_idx, pos, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
+                    links_idx_, envs_idx_, pos, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
                 )
 
         if not skip_forward:
@@ -2214,6 +2279,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates(StateChange.GEOMETRY, links="links_idx")
     def set_base_links_quat(self, quat, links_idx=None, envs_idx=None, *, relative=False, skip_forward=False):
+        _require_zerocopy_for_producer(quat, "link orientation")
         if self.constraint_solver is not None:
             self.constraint_solver.reset(envs_idx)
 
@@ -2239,15 +2305,22 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             # Composing the offset is device tensor arithmetic, which a torch-free scene never reaches since its morph
             # offsets are the identity one it strips above
             require_torch("relative link pose with a non-identity morph offset")
+            _require_tensor_for_relative_pose(quat, "link orientation")
             offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)[..., 0, :]
             quat = gu.transform_quat_by_quat(offset_quat, torch.as_tensor(quat, dtype=gs.tc_float, device=gs.device))
             relative = False
 
-        # Zero-copy fast path: single base link, non-relative. Write the quaternion buffer in place instead of
-        # launching a kernel. The kernel path below handles relative or multi-link updates, as well as waking up
-        # hibernated entities, which is required whenever hibernation is enabled.
-        if gs.use_zerocopy and HAS_TORCH and not relative and isinstance(links_idx, int) and not (
-            self._use_hibernation
+        # Zero-copy fast path: single base link, non-relative, from a tensor or a host array. Write the quaternion
+        # buffer in place instead of launching a kernel. The kernel path below handles relative or multi-link updates,
+        # as well as waking up hibernated entities, which is required whenever hibernation is enabled.
+        # An opaque DLPack producer has no indexing to write the buffer with, so it takes the staged branch too.
+        if (
+            gs.use_zerocopy
+            and HAS_TORCH
+            and not relative
+            and isinstance(links_idx, int)
+            and not self._use_hibernation
+            and not is_opaque_producer(quat)
         ):
             link = self.links[links_idx]
             if link.is_fixed:
@@ -2284,22 +2357,25 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             mps_synchronize()
         else:
             staged = None
-            if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(quat):
+            if gs.use_zerocopy and is_opaque_producer(quat):
                 # A compiled graph hands its orientations over as a DLPack producer, which the state takes device to
-                # device: the values are staged batch-first and a staged kernel of 'abd.accessor' writes them exactly
-                # as 'kernel_set_links_quat' writes a host source. Any other layout takes the host path below.
+                # device in both residencies: the values are staged batch-first and a staged kernel of 'abd.accessor'
+                # writes them exactly as 'kernel_set_links_quat' writes a host source. A non-zero-copy scene refuses
+                # the producer above instead of reading it in Python.
                 staged = self._stage_link_pose(quat, links_idx, envs_idx, 4)
             is_staged = staged is not None
-            is_broadcast = is_tile = False
+            is_broadcast = is_tile = is_row = False
             if is_staged:
-                quat, links_idx, envs_idx, is_broadcast, is_tile = staged
+                # The staged write reads the index buffers its kernel iterates over, while the caller's selection is
+                # kept for the forward kinematics and the contact clearing below, as a tensor write keeps it
+                quat, links_idx_, envs_idx_, is_broadcast, is_tile, is_row = staged
             else:
                 if not HAS_TORCH:
                     # The whole pose tile of the scene is gathered to the row of each selected environment first,
                     # the selection being read the way the sanitize below reads it, device flag masks included
                     rows = np.reshape(np.asarray(to_numpy_values(self._scene._sanitize_envs_idx(envs_idx))), (-1,))
                     quat = _link_pose_selected_rows(quat, rows, rows.size, self._B)
-                quat, links_idx, envs_idx = self._sanitize_io_variables(
+                quat, links_idx_, envs_idx_ = self._sanitize_io_variables(
                     quat, links_idx, self.n_links, "links_idx", envs_idx, (4,), skip_allocation=True
                 )
                 if HAS_TORCH:
@@ -2310,19 +2386,20 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             if relative:
                 require_torch("relative link pose with a non-identity morph offset")
-                offset_quat = _select_links_offset(self._links_offset_quat, links_idx, envs_idx)
+                _require_tensor_for_relative_pose(quat, "link orientation")
+                offset_quat = _select_links_offset(self._links_offset_quat, links_idx_, envs_idx_)
                 if not relative_pos_passthrough:
                     # The offset position rotates with the orientation, so keep the authored-frame position fixed by
                     # rewriting the world position from the current authored position and the new authored orientation.
                     cur_pos, cur_quat = self._read_data(
-                        (self.dyn_state.links.pos, self.dyn_state.links.quat), envs_idx, links_idx
+                        (self.dyn_state.links.pos, self.dyn_state.links.quat), envs_idx_, links_idx_
                     )
-                    offset_pos = _select_links_offset(self._links_offset_pos, links_idx, envs_idx)
+                    offset_pos = _select_links_offset(self._links_offset_pos, links_idx_, envs_idx_)
                     authored_pos = cur_pos - _offset_world_shift(offset_pos, offset_quat, cur_quat)
                     world_pos = authored_pos + gu.transform_by_quat(offset_pos, quat)
                     kernel_set_links_pos(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         world_pos,
                         self.dyn_state,
                         self.dyn_info,
@@ -2335,21 +2412,21 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             # The guards below walk the links on the host, so a torch-free device selection is read back first (see
             # '_host_link_indices')
-            links_idx_host = _host_link_indices(links_idx)
-            set_all_envs = _is_envs_full_selection(envs_idx, self._scene._envs_idx)
+            links_idx_host = _host_link_indices(links_idx_)
+            set_all_envs = _is_envs_full_selection(envs_idx_, self._scene._envs_idx)
             has_fixed_verts = any(
                 link.is_fixed and link.geoms and not link.entity._batch_fixed_verts
                 for link in (self.links[i_l] for i_l in links_idx_host)
             )
-            if has_fixed_verts and not (set_all_envs and _is_uniform_along_envs(quat)):
+            if has_fixed_verts and not (set_all_envs and (is_row or _is_uniform_along_envs(quat))):
                 gs.raise_exception("Impossible to set env-specific quat for fixed links with at least one geometry.")
 
             # Wake up the entities of the links before rotating them (see 'set_base_links_pos')
             if self._use_hibernation:
                 if not all(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.constraint_solver.constraint_state,
                         self.dyn_info,
@@ -2358,8 +2435,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     )
                 if any(self.links[i_l].is_fixed for i_l in links_idx_host):
                     kernel_wake_up_entities_held_by_links(
-                        links_idx,
-                        envs_idx,
+                        links_idx_,
+                        envs_idx_,
                         self.dyn_state,
                         self.collider.collider_state,
                         self.constraint_solver.constraint_state,
@@ -2370,8 +2447,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
             if is_staged:
                 kernel_set_links_quat_staged(
-                    links_idx,
-                    envs_idx,
+                    links_idx_,
+                    envs_idx_,
                     quat,
                     self.dyn_state,
                     self.dyn_info,
@@ -2379,10 +2456,11 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     self.rigid_config,
                     is_broadcast,
                     is_tile,
+                    is_row,
                 )
             else:
                 kernel_set_links_quat(
-                    links_idx, envs_idx, quat, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
+                    links_idx_, envs_idx_, quat, self.dyn_state, self.dyn_info, self.rigid_info, self.rigid_config
                 )
 
         if not skip_forward:
@@ -2603,8 +2681,8 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         shape = dlpack_info(values).shape
         if shape != (self._B, num_values):
             gs.raise_exception(
-                f"The DLPack producer of shape {shape} cannot be written into the {num_values} values of the "
-                f"{self._B} environments of the scene. A torch-free setter takes a producer of shape "
+                f"The DLPack producer of shape {tuple(shape)} cannot be written into the {num_values} values of the "
+                f"{self._B} environments of the scene. A state setter takes a producer of shape "
                 f"(n_envs, n_values) = ({self._B}, {num_values}), the batch axis first, which is copied to the device "
                 f"without any host roundtrip."
             )
@@ -2616,19 +2694,30 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
         The producer holds one row per environment named by 'envs_idx', in its order, or a single row every selected
         environment takes, or the whole tile of the scene out of which each selected environment takes its own row, and
         one run of `size` components per link of the selection, in its order: (n_rows, len(links_idx) * size).
-        A producer of any other layout is left to the host path, which states the forms it accepts.
+        A producer of a single dimension is the run of components of one row itself, of shape (len(links_idx) * size,),
+        which every selected environment takes.
+        The function is only ever called on a DLPack producer, so a layout none of those forms covers is refused rather
+        than left to a host path, which a producer has none of.
         """
-        shape = dlpack_info(values).shape
-        if len(shape) != 2:
-            return None
         links_idx_ = index_field(links_idx, self.n_links, "links_idx")
         envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
         num_links, num_selected = links_idx_.shape[0], envs_idx_.shape[0]
-        n_rows = shape[0]
-        if shape[1] != num_links * size or n_rows not in (1, num_selected, self._B):
-            return None
-        is_tile = n_rows == self._B and self._B > num_selected
-        return stage_kernel_values(values, gs.qd_float), links_idx_, envs_idx_, n_rows == 1, is_tile
+        shape = dlpack_info(values).shape
+        # A producer of a single dimension holds a bare row of the values of every selected environment
+        is_row = len(shape) < 2
+        n_rows = 1 if is_row else shape[0]
+        num_values = num_links * size
+        if not shape or len(shape) > 2 or shape[-1] != num_values or n_rows not in (1, num_selected, self._B):
+            gs.raise_exception(
+                f"The DLPack producer of shape {tuple(shape)} cannot be written into the {num_values} values of the "
+                f"{num_links} links of the selection. A link pose write takes a producer of shape "
+                f"(n_rows, {num_values}), one run of {size} components per link of the selection, whose rows are one "
+                f"row per environment named by envs_idx, in its order, a single row every selected environment takes, "
+                f"or the whole tile of the {self._B} environments of the scene under a partial selection, or a bare "
+                f"row of shape ({num_values},), which every selected environment takes."
+            )
+        is_tile = not is_row and n_rows == self._B and self._B > num_selected
+        return stage_kernel_values(values, gs.qd_float), links_idx_, envs_idx_, n_rows == 1, is_tile, is_row
 
     @mutates(StateChange.GEOMETRY, links=MutatedLinks.ARTICULATED)
     def set_qpos(self, qpos, qs_idx=None, envs_idx=None, *, skip_forward=False):
@@ -2644,11 +2733,13 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             whose row 'i' is written into the environment 'envs_idx[i]', and the whole (n_envs, *element_shape) tile of
             the scene, whose row 'e' is the value of the environment 'e', out of which only the environments named by
             'envs_idx' are written and the rows of the others are ignored.
+            A value of a single dimension, of shape '*element_shape', is the element itself, which every selected
+            environment takes.
             The first form wins over the second one, and the second one wins when 'len(envs_idx) == n_envs', so a
             permuted full selection keeps its meaning, the whole tile being read only from a partial selection.
-            Both residencies apply the selection the same way: the torch path scatters the rows of the environments it
-            names, and the torch-free path stages the whole tile on the device, whose kernel then picks the row of each
-            selected environment.
+            Both residencies apply the selection the same way: the tensor path scatters the rows of the environments it
+            names, while an opaque DLPack producer, which exposes no indexing of its own, is staged on the device in
+            either residency and its kernel then picks the row of each selected environment.
         qs_idx : None | array_like, optional
             The qpos to write. None to write the whole configuration. Defaults to None.
         envs_idx : None | array_like | slice, optional
@@ -2658,19 +2749,23 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
             Whether to skip the forward kinematics and the contact clearing the new configuration would require.
             Defaults to False.
         """
+        _require_zerocopy_for_producer(qpos, "qpos")
         if self.constraint_solver is not None:
             self.constraint_solver.reset(envs_idx)
 
-        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(qpos):
+        if gs.use_zerocopy and is_opaque_producer(qpos):
             # A compiled graph hands its configuration over as a DLPack capsule, which writes the row of every
-            # environment it holds into that environment, the batch axis first, as the torch path scatters a tensor
+            # environment it holds into that environment, the batch axis first, as the tensor path scatters a tensor.
+            # The rows are picked in the kernel, a producer exposing no indexing of its own.
             qs_idx_ = index_field(qs_idx, self.n_qs, "qs_idx")
             envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
             values_shape = dlpack_info(qpos).shape
-            n_rows = values_shape[0] if values_shape else 0
+            # A producer of a single dimension is the element itself, which every selected environment takes
+            is_row = len(values_shape) < 2
+            n_rows = 1 if is_row else values_shape[0]
             n_selected = envs_idx_.shape[0]
             # The whole tile of the scene is accepted under a partial selection, each selected env taking its own row
-            is_tile = len(values_shape) > 1 and n_rows == self._B and n_selected < self._B
+            is_tile = not is_row and n_rows == self._B and n_selected < self._B
             if not (n_rows == 1 or n_rows == n_selected or is_tile):
                 gs.raise_exception(_invalid_qpos_rows_message(values_shape, self._B))
             # A selection naming no environment writes nothing at all, as the torch path scatters no row then
@@ -2696,6 +2791,7 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
                     self.rigid_config,
                     n_rows == 1,
                     is_tile,
+                    is_row,
                 )
         elif gs.use_zerocopy and HAS_TORCH:
             data = qd_to_torch(self.rigid_info.qpos, transpose=True, copy=False)
@@ -2990,20 +3086,21 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
     def set_dofs_position(self, position, dofs_idx=None, envs_idx=None):
         self.constraint_solver.reset(envs_idx)
 
-        if gs.use_zerocopy and not HAS_TORCH and self.n_envs > 0 and is_dlpack_source(position):
+        if gs.use_zerocopy and is_opaque_producer(position):
             # A compiled graph hands its positions over as a DLPack producer, which the state takes device to device:
             # the values are staged in a contiguous buffer, then scattered into the row of dof positions of each
-            # environment, exactly as 'KinematicSolver.set_dofs_position' does
-            dofs_idx = index_field(dofs_idx, self.n_dofs, "dofs_idx")
-            envs_idx = index_field(envs_idx, self._B, "envs_idx")
-            self._wake_dofs(dofs_idx, envs_idx)
+            # environment, exactly as 'KinematicSolver.set_dofs_position' does. The producer holds the batch axis
+            # first, so a scene without environments takes it as the single row of the one environment it has.
+            dofs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx")
+            envs_idx_ = index_field(envs_idx, self._B, "envs_idx")
+            self._wake_dofs(dofs_idx_, envs_idx_)
             positions = qd.ndarray(gs.qd_float, shape=(self._B, self.n_dofs_))
             kernel_copy_dofs_pos(positions, self.dyn_state)
             kernel_set_dofs_position_staged(
-                positions, dofs_idx, envs_idx, self._stage_values(position, dofs_idx.shape[0], envs_idx)
+                positions, dofs_idx_, envs_idx_, self._stage_values(position, dofs_idx_.shape[0], envs_idx)
             )
             is_dof_set = np.zeros((self.n_dofs_,), dtype=gs.np_int)
-            is_dof_set[to_numpy_values(dofs_idx)] = 1
+            is_dof_set[to_numpy_values(dofs_idx_)] = 1
             is_dof_set = index_tensor(is_dof_set)
             write_envs_idx = index_field(None, self._B, "envs_idx")
         else:
@@ -3075,8 +3172,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
     def control_dofs_force(self, force, dofs_idx=None, envs_idx=None):
         # A control target is consumed by the actuation pass of the next step, which wakes a sleeping link it actuates
         # (see func_torque_and_passive_force), so the target is written without waking anything here.
-        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(force):
-            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device
+        if gs.use_zerocopy and is_opaque_producer(force):
+            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device in
+            # either residency, an opaque producer exposing no indexing of its own
             dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
                 envs_idx, self._B, "envs_idx"
             )
@@ -3107,8 +3205,9 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates()
     def control_dofs_velocity(self, velocity, dofs_idx=None, envs_idx=None):
-        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(velocity):
-            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device
+        if gs.use_zerocopy and is_opaque_producer(velocity):
+            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device in
+            # either residency, an opaque producer exposing no indexing of its own
             dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
                 envs_idx, self._B, "envs_idx"
             )
@@ -3139,9 +3238,10 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates()
     def control_dofs_position(self, position, dofs_idx=None, envs_idx=None):
-        if gs.use_zerocopy and not HAS_TORCH and is_dlpack_source(position):
-            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device. The
-            # staged kernel clears the target velocity, as the tensor write below does.
+        if gs.use_zerocopy and is_opaque_producer(position):
+            # A compiled graph hands its target over as a DLPack capsule, which the state takes device to device in
+            # either residency, an opaque producer exposing no indexing of its own. The staged kernel clears the target
+            # velocity, as the tensor write below does.
             dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
                 envs_idx, self._B, "envs_idx"
             )
@@ -3174,10 +3274,13 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
     @mutates()
     def control_dofs_position_velocity(self, position, velocity, dofs_idx=None, envs_idx=None):
-        if gs.use_zerocopy and not HAS_TORCH and (is_dlpack_source(position) or is_dlpack_source(velocity)):
+        if gs.use_zerocopy and (is_opaque_producer(position) or is_opaque_producer(velocity)):
             # Both targets reach the state through the staged write, which copies each of them on its own
             if not (is_dlpack_source(position) and is_dlpack_source(velocity)):
-                require_torch("setting dof position and velocity controls from a single DLPack producer")
+                gs.raise_exception(
+                    "Setting dof position and velocity controls at once takes two DLPack producers, or neither value a "
+                    "producer. Pass both values as torch.Tensor or NumPy array, or both as DLPack producers."
+                )
             dofs_idx_, envs_idx_ = index_field(dofs_idx, self.n_dofs, "dofs_idx"), index_field(
                 envs_idx, self._B, "envs_idx"
             )
@@ -3928,13 +4031,17 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
     ):
         """Advance the accumulated revolutions of the propellers of a drone and apply the thrust they produce.
 
-        The counterpart of 'DroneEntity.set_propellers_rpm' for a torch-free scene, where the accumulator and the RPM
-        values both live on the device, so neither is read back to the host: the accumulator is advanced in place and
-        the thrust and moment come from 'set_drone_rpm' alone, as they do on the torch path.
-        `propellers_revs` is the accumulator of the drone, batch-last of shape (n_propellers, n_envs). `propellers_rpm`
-        takes the values the torch path sanitizes, laid out batch-first: either the whole (n_envs, n_propellers) tile of
-        the scene, or a single row of n_propellers values, bare or as a (1, n_propellers) tile, which every environment
-        takes.
+        The counterpart of 'DroneEntity.set_propellers_rpm' for a scene whose accumulator and RPM values both live on
+        the device, so neither is read back to the host: the accumulator is advanced in place and the thrust and moment
+        come from 'set_drone_rpm' alone, as they do on every path.
+
+        `propellers_revs` is the mutable accumulator of the drone, batch-last of shape (n_propellers, n_envs), which
+        this call advances in place: a torch tensor in a torch residency and a 'qd.Ndarray' without PyTorch, both on the
+        device of the scene. It is the only buffer written here, and it wraps at 60 / dt.
+        `propellers_rpm` takes the same values as the entity method, laid out batch-first: either the whole
+        (n_envs, n_propellers) tile of the scene, or a single row of n_propellers values, bare or as a (1, n_propellers)
+        tile, which every environment takes, as a DLPack producer, an already-staged Quadrants buffer, a torch tensor on
+        the device of the scene, or a host array (see '_stage_drone_rpm'). The thrust comes from 'set_drone_rpm' alone.
         """
         n_propellers = propellers_revs.shape[0]
         values = self._stage_drone_rpm(propellers_rpm, n_propellers)
@@ -3946,17 +4053,25 @@ class RigidSolver(GravityMixin, TimeBasedMixin, KinematicSolver):
 
         A whole tile of the scene is the buffer itself, while a single row is expanded to every environment of the scene
         through the buffer cached for that shape, which a scene driving its drone on every step reuses rather than
-        reallocating (see 'kernel_broadcast_drone_rpm'). The values are staged device to device when they come from a
-        compiled graph, and uploaded when they come from the host (see 'torch_free.stage_kernel_values').
+        reallocating (see 'kernel_broadcast_drone_rpm').
+        A torch tensor already on the device, and a Quadrants buffer of the device dtype, reach the kernels as the
+        buffer they read, while a DLPack producer is staged device to device and a host array is uploaded (see
+        'torch_free.stage_kernel_values'). A torch tensor living on another device, a host one included, is uploaded the
+        same way as a host array, since a kernel argument has to be a buffer of this device.
         """
-        values = stage_kernel_values(propellers_rpm, gs.qd_float)
+        if is_torch_tensor(propellers_rpm) and propellers_rpm.device == gs.device:
+            values = propellers_rpm if propellers_rpm.dtype == gs.tc_float else propellers_rpm.to(gs.tc_float)
+        elif is_torch_tensor(propellers_rpm):
+            values = stage_kernel_values(to_numpy_values(propellers_rpm), gs.qd_float)
+        else:
+            values = stage_kernel_values(propellers_rpm, gs.qd_float)
         if tuple(values.shape) == (self._B, n_propellers):
             return values
         is_row = tuple(values.shape) == (n_propellers,)
         if not is_row and tuple(values.shape) != (1, n_propellers):
             gs.raise_exception(
                 f"The propeller RPM values of shape {tuple(values.shape)} cannot be written into the {n_propellers} "
-                f"propellers of the {self._B} environments of the scene. A torch-free setter takes them as a whole "
+                f"propellers of the {self._B} environments of the scene. A drone propeller write takes them as a whole "
                 f"tile of shape (n_envs, n_propellers) = ({self._B}, {n_propellers}), the batch axis first, or as a "
                 f"single row of shape (1, {n_propellers}) or ({n_propellers},), which every environment takes."
             )
