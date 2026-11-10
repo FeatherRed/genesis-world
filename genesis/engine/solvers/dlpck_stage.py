@@ -10,7 +10,7 @@ such an argument, so that no solver repeats any of it:
 - '_HipAsyncCopies', '_hip_async_copies', '_device_copy_plan', '_copy_after_pending_work' and
   '_copy_transposed_after_pending_work', the stream-ordered device-to-device transfers those two issue, which cost the
   caller no device synchronization.
-- '_read_selection', '_contiguous_strides', '_is_copyable_on_device' and '_host_values', the read-side selection and the
+- '_read_selection', '_contiguous_strides', '_device_copy_shape' and '_host_values', the read-side selection and the
   layout queries the copies are planned from.
 
 The read and sanitize helpers these functions build on ('numpy_dtype', 'to_numpy_values', 'device_tensor_from_numpy',
@@ -29,7 +29,14 @@ import numpy as np
 import quadrants as qd
 
 import genesis as gs
-from genesis.utils.device_buffer import _index_runs, _selected_indices, copy_from_dlpack, dlpack_info, view_of
+from genesis.utils.device_buffer import (
+    _kDLCPU,
+    _index_runs,
+    _selected_indices,
+    copy_from_dlpack,
+    dlpack_info,
+    view_of,
+)
 
 __all__ = [
     "DlpackStager",
@@ -79,26 +86,41 @@ def _contiguous_strides(shape) -> tuple[int, ...]:
     return tuple(strides)
 
 
-def _is_copyable_on_device(value, dtype) -> bool:
-    """Whether the bridge can copy `value` into a device buffer of `dtype` without a host roundtrip.
+def _device_copy_shape(value, dtype) -> tuple[int, ...] | None:
+    """Shape of the device buffer the bridge copies `value` into without a host roundtrip, None when it takes the host.
 
     It writes a buffer of at most two dimensions only, which is why the third dimension of a state layout, the
     components of a vector, takes the host path ('stage_kernel_values').
-    Both sides share a dtype and no cast is performed, the source must be contiguous, and a Metal backend has no device
+    Both sides share a dtype and no cast is performed, the source must be compact, and a Metal backend has no device
     copy at all.
-    A producer exposing no layout of its own, as a raw DLPack capsule does, is left to the host path as well.
+    A producer that keeps its layout to itself, as a compiled-graph runtime hands its output over, is described by its
+    own DLPack capsule: the DLTensor of the capsule holds the dtype, the shape and the strides, a NULL 'strides' field
+    meaning the compact row-major layout of that shape, which is the reading 'dlpack_info' gives it.
+    A capsule that describes something else than the shape and dtype a device copy takes, which includes a host
+    pointer (the host path reads it whatever the backend), and an object whose layout cannot be read at all, are left
+    to the host path.
     """
     # Local import: 'torch_free' re-exports this module at module scope, so the dependency stays one-way.
     from .torch_free import numpy_dtype
 
+    if gs.backend == gs.metal:
+        return None
     shape = getattr(value, "shape", None)
     strides = getattr(value, "strides", None)
     value_dtype = getattr(value, "dtype", None)
-    if not isinstance(shape, (tuple, list)) or not isinstance(strides, (tuple, list)) or len(shape) > 2:
-        return False
-    if value_dtype is None or gs.backend == gs.metal:
-        return False
-    return numpy_dtype(value_dtype) == numpy_dtype(dtype) and tuple(strides) == _contiguous_strides(tuple(shape))
+    if isinstance(shape, (tuple, list)) and isinstance(strides, (tuple, list)) and value_dtype is not None:
+        shape = tuple(shape)
+        if len(shape) > 2 or numpy_dtype(value_dtype) != numpy_dtype(dtype):
+            return None
+        return shape if tuple(strides) == _contiguous_strides(shape) else None
+    # A producer exposing no layout of its own, as a compiled-graph output does, describes it in its capsule alone
+    try:
+        info = dlpack_info(value)
+    except gs.GenesisException:
+        return None
+    if len(info.shape) > 2 or info.dtype != numpy_dtype(dtype) or info.device_type == _kDLCPU:
+        return None
+    return info.shape if info.strides == _contiguous_strides(info.shape) else None
 
 
 def _host_values(value) -> np.ndarray:
@@ -134,7 +156,9 @@ def stage_kernel_values(value, dtype):
       field through 'read_view', its batch axis being the last one);
     - a zero-copy device view and any other DLPack producer are copied device to device when the bridge of
       'genesis.utils.device_buffer' can write them, which it does for at most two dimensions and without casting, and
-      through the host otherwise, the state layouts holding the components of a vector as a third dimension.
+      through the host otherwise, the state layouts holding the components of a vector as a third dimension. A producer
+      that exposes no layout of its own is read off its own DLPack capsule, so a compiled-graph output takes the device
+      copy as any other ('_device_copy_shape').
 
     The device-to-device copy is issued on the stream Quadrants launches its kernels on and is ordered by that stream
     after the kernels launched before it, so staging costs no device synchronization at all (see
@@ -161,8 +185,9 @@ def stage_kernel_values(value, dtype):
     if isinstance(value, qd.Field):
         return device_tensor_from_numpy(to_numpy_values(read_view(value)), dtype)
     if is_dlpack_source(value):
-        if _is_copyable_on_device(value, dtype):
-            buffer = qd.ndarray(_qd_type(dtype), shape=tuple(value.shape))
+        shape = _device_copy_shape(value, dtype)
+        if shape is not None:
+            buffer = qd.ndarray(_qd_type(dtype), shape=shape)
             if not _copy_after_pending_work(value, buffer):
                 copy_from_dlpack(buffer, value, transpose=False)
             return buffer

@@ -51,9 +51,9 @@ from .dlpck_stage import (
     _copy_after_pending_work,
     _copy_transposed_after_pending_work,
     _device_copy_plan,
+    _device_copy_shape,
     _hip_async_copies,
     _host_values,
-    _is_copyable_on_device,
     _read_selection,
     stage_kernel_values,
 )
