@@ -76,6 +76,8 @@ Other:
 `_raise_genesis_error` raises `gs.GenesisException` whenever `genesis` is importable and an `ImportError` carrying the same message otherwise, because `genesis/__init__.py` still imports PyTorch eagerly.
 `DeviceView.to_numpy()` is an explicit host copy for logging and diagnostics only; solver getters must use `DeviceView`/`view_of` on the hot path.
 `copy_from_dlpack` refuses dtype, device, shape and non-contiguous mismatches with a `gs.GenesisException` instead of converting or gathering silently.
+`dlpack_info` describes a Quadrants buffer whose own DLPack export requires PyTorch, which the C++ layer demands for every buffer at a nonzero byte offset, from the buffer itself: the base address of its SNode tree comes from the zero-offset leading node of that tree, plus the SNode byte offset, the canonical shape and strides, the dtype and the device.
+`DeviceView.to_dlpack()` builds its own v0 capsule for such a buffer, so `copy_from_dlpack`, `DeviceView.to_torch` and `np.from_dlpack` keep working torch-free, while a v1 export request is refused.
 
 # Constraints
 
