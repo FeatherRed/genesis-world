@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-import torch
+from genesis.utils.torch_compat import torch
 
 import genesis as gs
 from genesis.options.sensors import JointTorque as JointTorqueOptions
@@ -35,6 +35,9 @@ class JointTorqueSensor(SimpleSensor[JointTorqueOptions, None, JointTorqueSensor
     where ``tau_damping = -damping * vel`` is the viscous passive effort. Gravity, Coriolis and contact loads are
     captured implicitly through the constraint-solved acceleration ``qacc``.
     """
+
+    # Name of the PyTorch-backed capability reported when this sensor is created without PyTorch installed.
+    _torch_feature = "joint torque sensor"
 
     def __init__(
         self,
